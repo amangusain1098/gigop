@@ -432,6 +432,7 @@ pre {
   right: 24px;
   bottom: 88px;
   width: min(420px, calc(100vw - 32px));
+  height: min(72vh, 760px);
   max-height: min(72vh, 760px);
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr) auto;
@@ -454,6 +455,7 @@ pre {
   gap: 12px;
   min-width: 0;
   flex-wrap: wrap;
+  flex-shrink: 0;
 }
 
 .assistant-log {
@@ -463,6 +465,7 @@ pre {
   padding-right: 4px;
   min-width: 0;
   min-height: 0;
+  align-content: start;
 }
 
 .assistant-bubble {
@@ -527,6 +530,9 @@ pre {
   gap: 12px;
   min-width: 0;
   flex-shrink: 0;
+  padding-top: 10px;
+  border-top: 1px solid rgba(145, 177, 211, 0.12);
+  background: linear-gradient(180deg, rgba(8, 17, 31, 0) 0%, rgba(8, 17, 31, 0.98) 20%);
 }
 
 .assistant-compose textarea {
@@ -546,6 +552,18 @@ pre {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
+}
+
+.assistant-quick-prompts {
+  max-height: 132px;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 4px;
+  align-content: flex-start;
+}
+
+.assistant-suggestion-row {
+  margin-top: 10px;
 }
 
 .assistant-shell .pill-button {

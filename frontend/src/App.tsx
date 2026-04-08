@@ -941,7 +941,7 @@ function App() {
             </div>
             <button className="secondary" onClick={() => setAssistantOpen(false)}>Hide</button>
           </div>
-          <div className="pill-row">
+          <div className="pill-row assistant-quick-prompts">
             {assistantQuickPrompts.map((suggestion) => (
               <button
                 className="secondary pill-button"
@@ -959,7 +959,7 @@ function App() {
                 <strong>{entry.role === 'assistant' ? 'Copilot' : 'You'}</strong>
                 <p>{entry.text}</p>
                 {entry.suggestions?.length ? (
-                  <div className="pill-row">
+                  <div className="pill-row assistant-suggestion-row">
                     {entry.suggestions.map((suggestion) => (
                       <button
                         className="secondary pill-button"
