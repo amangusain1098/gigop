@@ -9,7 +9,14 @@ from sqlalchemy import delete, select
 
 from ..models import ApprovalRecord, MarketplaceGig, ValidationIssue
 from .database import DatabaseManager
-from .models import AgentRunORM, CompetitorSnapshotORM, GigStateORM, HITLItemORM
+from .models import (
+    AgentRunORM,
+    ComparisonHistoryORM,
+    CompetitorSnapshotORM,
+    GigStateORM,
+    HITLItemORM,
+    UserActionORM,
+)
 
 
 def utc_now() -> datetime:
@@ -228,6 +235,69 @@ class BlueprintRepository:
             item = session.scalar(query)
             return self._agent_run_to_dict(item) if item is not None else None
 
+    def record_user_action(
+        self,
+        *,
+        gig_id: str,
+        action: dict[str, Any],
+        approved: bool = False,
+        rejected: bool = False,
+    ) -> dict[str, Any]:
+        item_id = uuid.uuid4().hex
+        with self.database.session() as session:
+            item = UserActionORM(
+                id=item_id,
+                gig_id=gig_id,
+                action=action,
+                approved=approved,
+                rejected=rejected,
+            )
+            session.add(item)
+        return self.get_user_action(item_id) or {}
+
+    def get_user_action(self, action_id: str) -> dict[str, Any] | None:
+        with self.database.session() as session:
+            item = session.get(UserActionORM, action_id)
+            return self._user_action_to_dict(item) if item is not None else None
+
+    def list_user_actions(self, *, gig_id: str | None = None, limit: int = 30) -> list[dict[str, Any]]:
+        with self.database.session() as session:
+            query = select(UserActionORM).order_by(UserActionORM.timestamp.desc()).limit(limit)
+            if gig_id:
+                query = query.where(UserActionORM.gig_id == gig_id)
+            rows = session.scalars(query).all()
+            return [self._user_action_to_dict(item) for item in rows]
+
+    def record_comparison_history(
+        self,
+        *,
+        gig_id: str,
+        score_before: int | None,
+        score_after: int | None,
+        result_json: dict[str, Any],
+    ) -> dict[str, Any]:
+        with self.database.session() as session:
+            item = ComparisonHistoryORM(
+                gig_id=gig_id,
+                score_before=score_before,
+                score_after=score_after,
+                result_json=result_json,
+            )
+            session.add(item)
+        return self.latest_comparison_history(gig_id=gig_id) or {}
+
+    def latest_comparison_history(self, *, gig_id: str | None = None) -> dict[str, Any] | None:
+        rows = self.list_comparison_history(gig_id=gig_id, limit=1)
+        return rows[0] if rows else None
+
+    def list_comparison_history(self, *, gig_id: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
+        with self.database.session() as session:
+            query = select(ComparisonHistoryORM).order_by(ComparisonHistoryORM.created_at.desc()).limit(limit)
+            if gig_id:
+                query = query.where(ComparisonHistoryORM.gig_id == gig_id)
+            rows = session.scalars(query).all()
+            return [self._comparison_history_to_dict(item) for item in rows]
+
     def _agent_run_to_dict(self, item: AgentRunORM) -> dict[str, Any]:
         return {
             "run_id": item.run_id,
@@ -279,6 +349,26 @@ class BlueprintRepository:
             "conversion_proxy_score": item.conversion_proxy_score,
             "win_reasons": item.win_reasons or [],
             "captured_at": self._iso(item.captured_at),
+        }
+
+    def _user_action_to_dict(self, item: UserActionORM) -> dict[str, Any]:
+        return {
+            "id": item.id,
+            "gig_id": item.gig_id,
+            "action": item.action or {},
+            "approved": item.approved,
+            "rejected": item.rejected,
+            "timestamp": self._iso(item.timestamp),
+        }
+
+    def _comparison_history_to_dict(self, item: ComparisonHistoryORM) -> dict[str, Any]:
+        return {
+            "id": item.id,
+            "gig_id": item.gig_id,
+            "score_before": item.score_before,
+            "score_after": item.score_after,
+            "result_json": item.result_json or {},
+            "created_at": self._iso(item.created_at),
         }
 
     def _coerce_datetime(self, value: str | datetime | None) -> datetime | None:

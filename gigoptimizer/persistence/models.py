@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -89,3 +89,25 @@ class CompetitorSnapshotORM(Base):
     conversion_proxy_score: Mapped[float] = mapped_column(Float, default=0.0)
     win_reasons: Mapped[list] = mapped_column(JSON, default=list)
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class UserActionORM(Base):
+    __tablename__ = "user_actions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    gig_id: Mapped[str] = mapped_column(String(255), index=True)
+    action: Mapped[dict] = mapped_column(JSON, default=dict)
+    approved: Mapped[bool] = mapped_column(Boolean, default=False)
+    rejected: Mapped[bool] = mapped_column(Boolean, default=False)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+
+
+class ComparisonHistoryORM(Base):
+    __tablename__ = "comparison_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    gig_id: Mapped[str] = mapped_column(String(255), index=True)
+    score_before: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    score_after: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    result_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)

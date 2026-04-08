@@ -21,6 +21,7 @@ class WeeklyReportScheduler:
         self.dashboard_service = report_service.dashboard_service
         self.websocket_manager = websocket_manager
         self.notification_service = notification_service
+        self.slack_service = getattr(notification_service, "slack_service", None)
         self.job_service = job_service
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -129,6 +130,20 @@ class WeeklyReportScheduler:
             )
         except Exception:
             pass
+        if self.slack_service is not None:
+            latest_report = self.dashboard_service.get_state().get("latest_report") or {}
+            try:
+                self.slack_service.send_slack_message(
+                    "weekly_report",
+                    {
+                        "summary": (latest_report.get("ai_overview") or {}).get("summary", "") or f"Report {report.report_id} is ready.",
+                        "top_improvements": latest_report.get("weekly_action_plan", [])[:3],
+                        "key_insights": ((latest_report.get("competitive_gap_analysis") or {}).get("why_competitors_win", [])[:3]),
+                        "report_path": report.html_path,
+                    },
+                )
+            except Exception:
+                pass
         self._broadcast_state()
 
     def _run_market_watch_job(self, gig_url: str, search_terms: list[str]) -> None:
@@ -160,6 +175,22 @@ class WeeklyReportScheduler:
                     f"Report: {report.html_path}",
                 ],
             )
+            if self.slack_service is not None:
+                top_action = (blueprint.get("top_action") or {})
+                try:
+                    self.slack_service.send_slack_message(
+                        "comparison_complete",
+                        {
+                            "gig_url": comparison.get("gig_url", gig_url),
+                            "optimization_score": comparison.get("optimization_score", "--"),
+                            "recommended_title": blueprint.get("recommended_title", ""),
+                            "top_action": top_action.get("action_text", ""),
+                            "top_action_expected_gain": top_action.get("expected_gain"),
+                            "competitor_count": comparison.get("competitor_count", 0),
+                        },
+                    )
+                except Exception:
+                    pass
         except Exception as exc:
             try:
                 self.notification_service.notify(
@@ -169,6 +200,18 @@ class WeeklyReportScheduler:
                 )
             except Exception:
                 pass
+            if self.slack_service is not None:
+                try:
+                    self.slack_service.send_slack_message(
+                        "system_error",
+                        {
+                            "error_message": str(exc),
+                            "job_id": "market-watch-scheduler",
+                            "stack_trace": str(exc),
+                        },
+                    )
+                except Exception:
+                    pass
         finally:
             self._market_watch_running = False
             self._broadcast_state()

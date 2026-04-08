@@ -515,7 +515,7 @@ class DashboardApiTests(unittest.TestCase):
                     mock_response = MagicMock()
                     mock_response.__enter__.return_value.status = 200
                     mock_response.__exit__.return_value = False
-                    with patch("gigoptimizer.services.notification_service.urlopen", return_value=mock_response):
+                    with patch("gigoptimizer.services.slack_service.urlopen", return_value=mock_response):
                         slack_test = client.post(
                             "/api/settings/notifications/test",
                             json={"channel": "slack"},

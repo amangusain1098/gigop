@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import asdict
@@ -31,6 +32,8 @@ from ..persistence import BlueprintRepository, DatabaseManager
 from ..queue import HITLQueue
 from ..validators import HallucinationValidator
 from .ai_overview_service import AIOverviewService
+from .cache_service import CacheService
+from .slack_service import SlackService
 from .settings_service import SettingsService
 
 
@@ -50,12 +53,17 @@ AGENT_HEALTH_DEFAULTS = [
 
 
 class DashboardService:
+    COMPETITOR_CACHE_TTL_SECONDS = 20 * 60
+    COMPARISON_CACHE_TTL_SECONDS = 20 * 60
+
     def __init__(
         self,
         config: GigOptimizerConfig | None = None,
         *,
         settings_service: SettingsService | None = None,
         ai_overview_service: AIOverviewService | None = None,
+        cache_service: CacheService | None = None,
+        slack_service: SlackService | None = None,
     ) -> None:
         self.config = config or GigOptimizerConfig.from_env()
         self.settings_service = settings_service
@@ -65,8 +73,10 @@ class DashboardService:
         self.orchestrator = GigOptimizerOrchestrator(config=self.config)
         self.queue = HITLQueue(self.config.approval_queue_db_path)
         self.validator = HallucinationValidator()
+        self.cache_service = cache_service or CacheService(self.config)
+        self.slack_service = slack_service
         self.ai_overview_service = ai_overview_service or (
-            AIOverviewService(self.settings_service) if self.settings_service is not None else None
+            AIOverviewService(self.settings_service, self.cache_service) if self.settings_service is not None else None
         )
         self._initialize_files()
         self._bootstrap_repository()
@@ -103,6 +113,7 @@ class DashboardService:
         progress_callback=None,
     ) -> dict[str, Any]:
         snapshot = self._load_snapshot()
+        score_before = (self._load_dashboard_state().latest_report or {}).get("optimization_score")
         settings_marketplace = self.settings_service.get_settings().marketplace if self.settings_service else None
         if settings_marketplace is not None:
             self._apply_marketplace_runtime_settings(settings_marketplace)
@@ -110,6 +121,7 @@ class DashboardService:
         target_url = gig_url.strip() or (
             settings_marketplace.my_gig_url if settings_marketplace is not None else ""
         )
+        gig_id = self._gig_identifier(target_url)
         if not target_url:
             self._save_gig_comparison(
                 {
@@ -194,31 +206,56 @@ class DashboardService:
             scraper_event_callback,
         )
 
-        competitor_gigs, market_status = self.orchestrator.marketplace.fetch_competitor_gigs(
-            derived_terms,
-            observer=lambda event: self._record_scraper_event(event, scraper_event_callback),
-        )
-        if not competitor_gigs and market_status.status in {"warning", "skipped", "error"}:
-            competitor_gigs, market_status = self.orchestrator.serpapi.fetch_fiverr_marketplace_gigs(
+        competitor_gigs = self._load_cached_competitors(derived_terms)
+        if competitor_gigs:
+            market_status = ConnectorStatus(
+                connector="competitor_cache",
+                status="cached",
+                detail=f"Reused {len(competitor_gigs)} cached competitor gigs from the recent market scan.",
+            )
+        else:
+            competitor_gigs, market_status = self.orchestrator.marketplace.fetch_competitor_gigs(
                 derived_terms,
-                gig_page_lookup=self.orchestrator.marketplace.fetch_gig_page_overview_http,
                 observer=lambda event: self._record_scraper_event(event, scraper_event_callback),
             )
-        if not competitor_gigs:
-            competitor_gigs = self._snapshot_marketplace_gigs(snapshot, derived_terms)
-            if competitor_gigs:
-                market_status = ConnectorStatus(
-                    connector="marketplace_fallback",
-                    status="partial",
-                    detail="Live Fiverr competitor scraping was blocked, so GigOptimizer used the local benchmark set to keep the optimization plan available.",
+            if not competitor_gigs and market_status.status in {"warning", "skipped", "error"}:
+                competitor_gigs, market_status = self.orchestrator.serpapi.fetch_fiverr_marketplace_gigs(
+                    derived_terms,
+                    gig_page_lookup=self.orchestrator.marketplace.fetch_gig_page_overview_http,
+                    observer=lambda event: self._record_scraper_event(event, scraper_event_callback),
                 )
+            if not competitor_gigs:
+                competitor_gigs = self._snapshot_marketplace_gigs(snapshot, derived_terms)
+                if competitor_gigs:
+                    market_status = ConnectorStatus(
+                        connector="marketplace_fallback",
+                        status="partial",
+                        detail="Live Fiverr competitor scraping was blocked, so GigOptimizer used the local benchmark set to keep the optimization plan available.",
+                    )
+            if competitor_gigs:
+                self._cache_competitors(derived_terms, competitor_gigs)
         comparison_snapshot = self._build_snapshot_from_gig(my_gig, snapshot)
         analysis = (
             self.orchestrator.competitive_analysis.analyze(comparison_snapshot, competitor_gigs)
             if competitor_gigs
             else None
         )
-        comparison = self._build_market_comparison(
+        comparison_message = (
+            (
+                f"{comparison_message_prefix} Compared your gig against {len(competitor_gigs)} public Fiverr gigs in the same niche."
+                if comparison_message_prefix
+                else f"Compared your gig against {len(competitor_gigs)} public Fiverr gigs in the same niche."
+            )
+            if competitor_gigs
+            else (f"{comparison_message_prefix} {market_status.detail}".strip())
+        )
+        comparison_signature = self._comparison_signature(
+            gig_url=my_gig.url,
+            derived_terms=derived_terms,
+            my_gig=my_gig,
+            competitor_gigs=competitor_gigs,
+        )
+        comparison = self._load_cached_comparison(comparison_signature) or self._build_market_comparison(
             my_gig=my_gig,
             base_snapshot=snapshot,
             comparison_snapshot=comparison_snapshot,
@@ -226,18 +263,16 @@ class DashboardService:
             competitor_gigs=competitor_gigs,
             analysis=analysis,
             status=("partial" if comparison_message_prefix and market_status.status == "ok" else market_status.status),
-            message=(
-                (
-                    f"{comparison_message_prefix} Compared your gig against {len(competitor_gigs)} public Fiverr gigs in the same niche."
-                    if comparison_message_prefix
-                    else f"Compared your gig against {len(competitor_gigs)} public Fiverr gigs in the same niche."
-                )
-                if competitor_gigs
-                else (f"{comparison_message_prefix} {market_status.detail}".strip())
-            ),
+            message=comparison_message,
             comparison_source="live" if not comparison_message_prefix else "live_fallback",
             progress_callback=progress_callback,
         )
+        if comparison.get("message") != comparison_message:
+            comparison["message"] = comparison_message
+            comparison["status"] = "cached"
+            comparison["comparison_source"] = "cached"
+            comparison["last_compared_at"] = utc_now_iso()
+        self._cache_comparison(comparison_signature, comparison)
         self._save_gig_comparison(comparison)
         self._create_market_comparison_drafts(comparison_snapshot, comparison)
 
@@ -252,6 +287,13 @@ class DashboardService:
             gigs=competitor_gigs,
             message=comparison["message"],
         )
+        self.repository.record_comparison_history(
+            gig_id=str(comparison.get("gig_id") or gig_id),
+            score_before=score_before,
+            score_after=comparison.get("optimization_score"),
+            result_json=comparison,
+        )
+        self._send_comparison_alert(comparison)
         if scraper_event_callback is not None:
             scraper_event_callback(self.get_scraper_run_state())
         return self.get_state()
@@ -266,6 +308,7 @@ class DashboardService:
         progress_callback=None,
     ) -> dict[str, Any]:
         snapshot = self._load_snapshot()
+        score_before = (self._load_dashboard_state().latest_report or {}).get("optimization_score")
         settings_marketplace = self.settings_service.get_settings().marketplace if self.settings_service else None
         if settings_marketplace is not None:
             self._apply_marketplace_runtime_settings(settings_marketplace)
@@ -273,6 +316,7 @@ class DashboardService:
         target_url = gig_url.strip() or (
             settings_marketplace.my_gig_url if settings_marketplace is not None else ""
         )
+        gig_id = self._gig_identifier(target_url)
         manual_competitors = self._parse_manual_competitors(
             competitor_input,
             matched_term=(search_terms or [snapshot.niche])[0] if (search_terms or [snapshot.niche]) else "",
@@ -341,7 +385,13 @@ class DashboardService:
             comparison_snapshot,
             manual_competitors,
         )
-        comparison = self._build_market_comparison(
+        comparison_signature = self._comparison_signature(
+            gig_url=my_gig.url,
+            derived_terms=derived_terms,
+            my_gig=my_gig,
+            competitor_gigs=manual_competitors,
+        )
+        comparison = self._load_cached_comparison(comparison_signature) or self._build_market_comparison(
             my_gig=my_gig,
             base_snapshot=snapshot,
             comparison_snapshot=comparison_snapshot,
@@ -353,6 +403,12 @@ class DashboardService:
             comparison_source="manual",
             progress_callback=progress_callback,
         )
+        if comparison.get("message") != detail:
+            comparison["message"] = detail
+            comparison["status"] = "cached"
+            comparison["comparison_source"] = "manual_cached"
+            comparison["last_compared_at"] = utc_now_iso()
+        self._cache_comparison(comparison_signature, comparison)
         self._save_gig_comparison(comparison)
         self._create_market_comparison_drafts(comparison_snapshot, comparison)
 
@@ -361,6 +417,13 @@ class DashboardService:
         latest_report["competitive_gap_analysis"] = asdict(analysis) if analysis is not None else None
         state.latest_report = latest_report
         self._save_dashboard_state(state)
+        self.repository.record_comparison_history(
+            gig_id=str(comparison.get("gig_id") or gig_id),
+            score_before=score_before,
+            score_after=comparison.get("optimization_score"),
+            result_json=comparison,
+        )
+        self._send_comparison_alert(comparison)
         return self.get_state()
 
     def run_pipeline(
@@ -410,7 +473,10 @@ class DashboardService:
                 progress_callback=progress_callback,
             )
             if self.ai_overview_service is not None:
-                report.ai_overview = self.ai_overview_service.generate_overview(report=report.to_dict())
+                report.ai_overview = self.ai_overview_service.generate_overview(
+                    report=report.to_dict(),
+                    memory_context=self._memory_context(gig_id=self._gig_identifier()),
+                )
             self._append_metric_history(live_snapshot, report)
             self._update_agent_health(status="ok", last_run_at=started_at)
             self._save_latest_report(report)
@@ -532,11 +598,36 @@ class DashboardService:
         self._apply_record(record)
         self.queue.update_status(record_id, status="approved", reviewer_notes=reviewer_notes)
         self.repository.upsert_hitl_item(self._get_record_or_raise(record_id))
+        self.repository.record_user_action(
+            gig_id=self._gig_identifier(),
+            action={
+                "record_id": record_id,
+                "action_type": record.action_type,
+                "current_value": record.current_value,
+                "proposed_value": record.proposed_value,
+                "reviewer_notes": reviewer_notes,
+            },
+            approved=True,
+            rejected=False,
+        )
         return self.run_pipeline(use_live_connectors=False)
 
     def reject_record(self, record_id: str, reviewer_notes: str = "") -> dict[str, Any]:
         self.queue.update_status(record_id, status="rejected", reviewer_notes=reviewer_notes)
-        self.repository.upsert_hitl_item(self._get_record_or_raise(record_id))
+        record = self._get_record_or_raise(record_id)
+        self.repository.upsert_hitl_item(record)
+        self.repository.record_user_action(
+            gig_id=self._gig_identifier(),
+            action={
+                "record_id": record_id,
+                "action_type": record.action_type,
+                "current_value": record.current_value,
+                "proposed_value": record.proposed_value,
+                "reviewer_notes": reviewer_notes,
+            },
+            approved=False,
+            rejected=True,
+        )
         return self.get_state()
 
     def register_report(self, report_file: GeneratedReportFile) -> None:
@@ -841,12 +932,14 @@ class DashboardService:
             "status": status,
             "message": message,
             "gig_url": my_gig.url,
+            "gig_id": self._gig_identifier(my_gig.url),
             "my_gig": asdict(my_gig),
             "detected_search_terms": derived_terms,
             "top_search_titles": [gig.title for gig in (analysis.top_competitors if analysis else competitor_gigs[:5])],
             "title_patterns": analysis.title_patterns if analysis else [],
             "market_anchor_price": self._market_anchor_price(competitor_gigs),
             "competitor_count": len(competitor_gigs),
+            "optimization_score": optimization_report.optimization_score,
             "what_to_implement": analysis.what_to_implement if analysis else [],
             "why_competitors_win": analysis.why_competitors_win if analysis else [],
             "my_advantages": analysis.my_advantages if analysis else [],
@@ -854,6 +947,8 @@ class DashboardService:
             "comparison_source": comparison_source,
             "implementation_blueprint": implementation_blueprint,
             "implementation_summary": self._implementation_summary(implementation_blueprint),
+            "do_this_first": implementation_blueprint.get("do_this_first", []),
+            "top_action": implementation_blueprint.get("top_action"),
             "last_compared_at": utc_now_iso(),
         }
 
@@ -910,6 +1005,15 @@ class DashboardService:
             derived_terms=derived_terms,
             title_patterns=title_patterns,
         )
+        prioritized_actions = self._prioritized_actions(
+            my_gig=my_gig,
+            recommended_title=recommended_title,
+            recommended_tags=recommended_tags,
+            description_pack=description_pack,
+            analysis=analysis,
+            market_anchor_price=self._market_anchor_price(competitor_gigs),
+            optimization_report=optimization_report,
+        )
         return {
             "recommended_title": recommended_title,
             "title_variants": optimization_report.title_variants[:5],
@@ -934,6 +1038,9 @@ class DashboardService:
             "review_actions": optimization_report.review_actions[:4],
             "review_follow_up_template": optimization_report.review_follow_up_template,
             "external_traffic_actions": optimization_report.external_traffic_actions[:4],
+            "prioritized_actions": prioritized_actions,
+            "do_this_first": [item["action_text"] for item in prioritized_actions[:3]],
+            "top_action": prioritized_actions[0] if prioritized_actions else None,
             "persona_focus": [
                 {
                     "persona": insight.persona,
@@ -1250,13 +1357,235 @@ class DashboardService:
         items.extend(optimization_report.review_actions[:2])
         return self._dedupe_strings(items)[:5]
 
+    def _prioritized_actions(
+        self,
+        *,
+        my_gig: GigPageOverview,
+        recommended_title: str,
+        recommended_tags: list[str],
+        description_pack: dict[str, Any],
+        analysis,
+        market_anchor_price: float | None,
+        optimization_report: OptimizationReport,
+    ) -> list[dict[str, Any]]:
+        action_specs: list[dict[str, Any]] = []
+        current_price = my_gig.starting_price
+        review_count = int(my_gig.reviews_count or 0)
+
+        action_specs.append(
+            self._scored_action(
+                action_type="title_update",
+                action_text=f"Update the gig title to '{recommended_title}'.",
+                proposed_value=recommended_title,
+                base_gain=12,
+                confidence_base=88,
+                rationale="Title phrasing is the strongest direct search-match lever in this niche.",
+                triggers=[
+                    bool(recommended_title and recommended_title.lower() != my_gig.title.lower()),
+                    bool(analysis and analysis.title_patterns),
+                ],
+            )
+        )
+        action_specs.append(
+            self._scored_action(
+                action_type="keyword_tag_update",
+                action_text=f"Refresh tags toward {', '.join(recommended_tags[:3]) or 'current market phrases'}.",
+                proposed_value=recommended_tags,
+                base_gain=8,
+                confidence_base=84,
+                rationale="Tag alignment improves keyword coverage when buyers search exact tool phrases.",
+                triggers=[bool(recommended_tags), len(recommended_tags) >= 3],
+            )
+        )
+        action_specs.append(
+            self._scored_action(
+                action_type="description_update",
+                action_text="Rewrite the first paragraph around business impact, PageSpeed Insights, and exact deliverables.",
+                proposed_value=description_pack.get("full_text", ""),
+                base_gain=9,
+                confidence_base=81,
+                rationale="A clearer opening lifts conversion after the click.",
+                triggers=[bool(description_pack.get("full_text")), bool(analysis and analysis.what_to_implement)],
+            )
+        )
+        if market_anchor_price is not None and current_price is not None:
+            price_gap_ratio = abs(current_price - market_anchor_price) / max(market_anchor_price, 1.0)
+            action_specs.append(
+                self._scored_action(
+                    action_type="pricing_update",
+                    action_text=(
+                        f"Reposition the visible starting price around the market anchor of ${market_anchor_price:.0f} "
+                        "or strengthen premium justification."
+                    ),
+                    proposed_value={"market_anchor_price": market_anchor_price},
+                    base_gain=11 if price_gap_ratio >= 0.35 else 6,
+                    confidence_base=76,
+                    rationale="Price mismatch can suppress clicks and orders even when title relevance is strong.",
+                    triggers=[price_gap_ratio >= 0.15],
+                )
+            )
+        action_specs.append(
+            self._scored_action(
+                action_type="trust_booster",
+                action_text="Add before-and-after proof, tool names, and clearer deliverables near the top of the gig.",
+                proposed_value=optimization_report.review_actions[:3],
+                base_gain=13 if review_count <= 5 else 7,
+                confidence_base=79,
+                rationale="Low-review gigs need extra trust scaffolding to compete with stronger proof-heavy listings.",
+                triggers=[review_count <= 5, bool(analysis and analysis.why_competitors_win)],
+            )
+        )
+        ranked = sorted(action_specs, key=lambda item: (item["expected_gain"], item["confidence_score"]), reverse=True)
+        return ranked[:5]
+
+    def _scored_action(
+        self,
+        *,
+        action_type: str,
+        action_text: str,
+        proposed_value: Any,
+        base_gain: int,
+        confidence_base: int,
+        rationale: str,
+        triggers: list[bool],
+    ) -> dict[str, Any]:
+        trigger_bonus = sum(1 for item in triggers if item)
+        expected_gain = min(25, max(3, base_gain + (trigger_bonus * 2)))
+        confidence_score = min(97, max(55, confidence_base + trigger_bonus))
+        if expected_gain >= 12:
+            impact_score = "high"
+        elif expected_gain >= 7:
+            impact_score = "medium"
+        else:
+            impact_score = "low"
+        return {
+            "action_type": action_type,
+            "action_text": action_text,
+            "proposed_value": proposed_value,
+            "impact_score": impact_score,
+            "confidence_score": confidence_score,
+            "expected_gain": expected_gain,
+            "rationale": rationale,
+        }
+
     def _implementation_summary(self, implementation_blueprint: dict[str, Any]) -> str:
         title = implementation_blueprint.get("recommended_title", "")
         tags = implementation_blueprint.get("recommended_tags", [])
-        return (
+        top_action = implementation_blueprint.get("top_action") or {}
+        top_text = top_action.get("action_text", "")
+        top_gain = top_action.get("expected_gain")
+        summary = (
             f"Update the gig title to '{title}', align the first paragraph around speed + business impact, "
             f"and rotate tags toward {', '.join(tags[:3]) or 'market-intent keywords'}."
         )
+        if top_text and top_gain is not None:
+            summary += f" Do this first: {top_text} Expected gain: {top_gain}%."
+        return summary
+
+    def _gig_identifier(self, gig_url: str | None = None) -> str:
+        target = str(gig_url or "").strip()
+        if target:
+            return target
+        state = self._load_dashboard_state()
+        comparison = state.gig_comparison or {}
+        if comparison.get("gig_url"):
+            return str(comparison["gig_url"])
+        snapshot = self._load_snapshot()
+        return self._normalize_query(snapshot.title) or "primary"
+
+    def _memory_context(self, *, gig_id: str) -> dict[str, Any]:
+        return {
+            "user_actions": self.repository.list_user_actions(gig_id=gig_id, limit=8),
+            "comparison_history": self.repository.list_comparison_history(gig_id=gig_id, limit=6),
+        }
+
+    def _comparison_signature(
+        self,
+        *,
+        gig_url: str,
+        derived_terms: list[str],
+        my_gig: GigPageOverview,
+        competitor_gigs: list[MarketplaceGig],
+    ) -> str:
+        payload = {
+            "gig_url": gig_url,
+            "derived_terms": derived_terms,
+            "my_gig": {
+                "title": my_gig.title,
+                "price": my_gig.starting_price,
+                "rating": my_gig.rating,
+                "reviews_count": my_gig.reviews_count,
+                "tags": my_gig.tags,
+            },
+            "competitors": [
+                {
+                    "title": gig.title,
+                    "price": gig.starting_price,
+                    "rating": gig.rating,
+                    "reviews_count": gig.reviews_count,
+                    "matched_term": gig.matched_term,
+                }
+                for gig in competitor_gigs[:20]
+            ],
+        }
+        digest = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+        return f"gigoptimizer:comparison:{digest}"
+
+    def _load_cached_competitors(self, search_terms: list[str]) -> list[MarketplaceGig]:
+        key_terms = [self._normalize_query(term) for term in search_terms if self._normalize_query(term)]
+        if not key_terms:
+            return []
+        key = f"gigoptimizer:competitors:{'|'.join(sorted(key_terms))}"
+        cached = self.cache_service.get_json(key)
+        if not isinstance(cached, list):
+            return []
+        competitors: list[MarketplaceGig] = []
+        for item in cached:
+            if not isinstance(item, dict):
+                continue
+            try:
+                competitors.append(MarketplaceGig(**item))
+            except TypeError:
+                continue
+        return competitors
+
+    def _cache_competitors(self, search_terms: list[str], competitor_gigs: list[MarketplaceGig]) -> None:
+        key_terms = [self._normalize_query(term) for term in search_terms if self._normalize_query(term)]
+        if not key_terms:
+            return
+        key = f"gigoptimizer:competitors:{'|'.join(sorted(key_terms))}"
+        self.cache_service.set_json(
+            key,
+            [asdict(gig) for gig in competitor_gigs[:30]],
+            ttl_seconds=self.COMPETITOR_CACHE_TTL_SECONDS,
+        )
+
+    def _load_cached_comparison(self, signature: str) -> dict[str, Any] | None:
+        cached = self.cache_service.get_json(signature)
+        return cached if isinstance(cached, dict) else None
+
+    def _cache_comparison(self, signature: str, comparison: dict[str, Any]) -> None:
+        self.cache_service.set_json(signature, comparison, ttl_seconds=self.COMPARISON_CACHE_TTL_SECONDS)
+
+    def _send_comparison_alert(self, comparison: dict[str, Any]) -> None:
+        if self.slack_service is None:
+            return
+        implementation = comparison.get("implementation_blueprint") or {}
+        top_action = implementation.get("top_action") or {}
+        try:
+            self.slack_service.send_slack_message(
+                "comparison_complete",
+                {
+                    "gig_url": comparison.get("gig_url", ""),
+                    "optimization_score": comparison.get("optimization_score", "--"),
+                    "recommended_title": implementation.get("recommended_title", ""),
+                    "top_action": top_action.get("action_text", ""),
+                    "top_action_expected_gain": top_action.get("expected_gain"),
+                    "competitor_count": comparison.get("competitor_count", 0),
+                },
+            )
+        except Exception:
+            return
 
     def _create_market_comparison_drafts(
         self,

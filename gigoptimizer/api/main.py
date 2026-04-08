@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
 import threading
+import traceback
 from urllib.parse import urlsplit, urlunsplit
 
 import logging
@@ -23,9 +24,11 @@ from ..persistence import BlueprintRepository, DatabaseManager
 from ..services import (
     AIOverviewService,
     AuthService,
+    CacheService,
     DashboardService,
     HostingerService,
     NotificationService,
+    SlackService,
     SettingsService,
     WeeklyReportService,
 )
@@ -106,11 +109,15 @@ def create_app() -> FastAPI:
         except Exception as exc:
             logging.warning("GigOptimizer Pro could not initialize Sentry: %s", exc)
     settings_service = SettingsService(config)
-    ai_overview_service = AIOverviewService(settings_service)
+    cache_service = CacheService(config)
+    slack_service = SlackService(settings_service)
+    ai_overview_service = AIOverviewService(settings_service, cache_service)
     dashboard_service = DashboardService(
         config,
         settings_service=settings_service,
         ai_overview_service=ai_overview_service,
+        cache_service=cache_service,
+        slack_service=slack_service,
     )
     report_service = WeeklyReportService(dashboard_service)
     database_manager = dashboard_service.database_manager
@@ -125,6 +132,7 @@ def create_app() -> FastAPI:
     for warning in validation_warnings:
         logging.warning("GigOptimizer Pro security warning: %s", warning)
     notification_service = NotificationService(settings_service)
+    notification_service.slack_service = slack_service
     websocket_manager = DashboardWebSocketManager()
     scheduler = WeeklyReportScheduler(
         report_service,
@@ -163,6 +171,7 @@ def create_app() -> FastAPI:
         app.state.auth_service = auth_service
         app.state.settings_service = settings_service
         app.state.notification_service = notification_service
+        app.state.slack_service = slack_service
         app.state.hostinger_service = hostinger_service
         app.state.websocket_manager = websocket_manager
         event_bus.subscribe(relay_bus_event)
@@ -183,6 +192,21 @@ def create_app() -> FastAPI:
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     if frontend_assets_dir.exists():
         app.mount("/dashboard/assets", StaticFiles(directory=str(frontend_assets_dir)), name="dashboard-assets")
+
+    @app.exception_handler(Exception)
+    async def unhandled_exception_handler(request: Request, exc: Exception):
+        send_slack_event(
+            "system_error",
+            {
+                "error_message": str(exc),
+                "job_id": "api-request",
+                "stack_trace": traceback.format_exc(limit=6),
+                "path": request.url.path,
+            },
+        )
+        if request.url.path.startswith("/api/"):
+            return JSONResponse(status_code=500, content={"detail": "Internal server error."})
+        return HTMLResponse("Internal server error.", status_code=500)
 
     def build_state(
         *,
@@ -210,11 +234,14 @@ def create_app() -> FastAPI:
         session=None,
     ) -> dict:
         state = build_state(request=request, authenticated=authenticated, session=session)
+        comparison = state.get("gig_comparison") or {}
+        gig_id = comparison.get("gig_id") or comparison.get("gig_url") or dashboard_service._gig_identifier()  # noqa: SLF001
         return {
             "state": state,
             "job_runs": job_service.list_runs(limit=25),
             "queue": repository.list_hitl_items(limit=50),
             "competitors": repository.list_competitor_snapshots(limit=30),
+            "memory": dashboard_service._memory_context(gig_id=gig_id),  # noqa: SLF001
             "hostinger": hostinger_service.get_public_status(),
             "workers": job_service.worker_snapshot(),
             "health": build_health_payload(),
@@ -224,6 +251,8 @@ def create_app() -> FastAPI:
         state = dashboard_service.get_state()
         comparison = state.get("gig_comparison") or {}
         implementation = comparison.get("implementation_blueprint") or {}
+        gig_id = comparison.get("gig_id") or comparison.get("gig_url") or dashboard_service._gig_identifier()  # noqa: SLF001
+        memory_context = dashboard_service._memory_context(gig_id=gig_id)  # noqa: SLF001
         latest_report = state.get("latest_report") or {}
         return {
             "optimization_score": latest_report.get("optimization_score"),
@@ -233,6 +262,8 @@ def create_app() -> FastAPI:
             "competitor_count": comparison.get("competitor_count", 0),
             "why_competitors_win": comparison.get("why_competitors_win", []),
             "what_to_implement": comparison.get("what_to_implement", []),
+            "do_this_first": implementation.get("do_this_first", []),
+            "prioritized_actions": implementation.get("prioritized_actions", []),
             "pricing_strategy": implementation.get("pricing_strategy", []),
             "trust_boosters": implementation.get("trust_boosters", []),
             "faq_recommendations": implementation.get("faq_recommendations", []),
@@ -240,6 +271,8 @@ def create_app() -> FastAPI:
             "scraper_status": (state.get("scraper_run") or {}).get("status", "idle"),
             "scraper_message": (state.get("scraper_run") or {}).get("last_status_message", ""),
             "hostinger": hostinger_service.get_public_status(),
+            "user_actions": memory_context.get("user_actions", []),
+            "comparison_history": memory_context.get("comparison_history", []),
         }
 
     def build_health_payload() -> dict:
@@ -287,6 +320,15 @@ def create_app() -> FastAPI:
             notification_service.notify(event=event, title=title, lines=lines)
         except Exception:
             return
+
+    def send_slack_event(event_type: str, payload: dict) -> None:
+        def worker() -> None:
+            try:
+                slack_service.send_slack_message(event_type, payload)
+            except Exception:
+                return
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def scraper_broadcast_factory(loop: asyncio.AbstractEventLoop):
         def _push(scraper_state: dict) -> None:
@@ -541,6 +583,14 @@ def create_app() -> FastAPI:
                 scraper_event_callback=scraper_broadcast_factory(asyncio.get_running_loop()),
             )
         except Exception as exc:
+            send_slack_event(
+                "system_error",
+                {
+                    "error_message": str(exc),
+                    "job_id": "api-run-pipeline",
+                    "stack_trace": traceback.format_exc(limit=6),
+                },
+            )
             notify_event(
                 "error",
                 "GigOptimizer pipeline failed",
@@ -565,6 +615,20 @@ def create_app() -> FastAPI:
                 ),
             ],
         )
+        top_action = (
+            ((response_state.get("gig_comparison") or {}).get("implementation_blueprint") or {}).get("top_action")
+            or {}
+        )
+        if top_action:
+            send_slack_event(
+                "high_impact_action",
+                {
+                    "action_text": top_action.get("action_text", ""),
+                    "expected_gain": top_action.get("expected_gain"),
+                    "confidence_score": top_action.get("confidence_score"),
+                    "impact_score": top_action.get("impact_score"),
+                },
+            )
         await websocket_manager.broadcast_json({"type": "state", "payload": response_state})
         return response_state
 
@@ -584,6 +648,14 @@ def create_app() -> FastAPI:
                 scraper_event_callback=scraper_broadcast_factory(asyncio.get_running_loop()),
             )
         except Exception as exc:
+            send_slack_event(
+                "system_error",
+                {
+                    "error_message": str(exc),
+                    "job_id": "api-marketplace-scrape",
+                    "stack_trace": traceback.format_exc(limit=6),
+                },
+            )
             notify_event(
                 "error",
                 "Marketplace scraper failed",
@@ -855,6 +927,7 @@ def create_app() -> FastAPI:
             use_live_connectors=bool(payload.get("use_live_connectors", False))
         )
         response_state = build_state(request=request)
+        latest_report = response_state.get("latest_report") or {}
         notify_event(
             "report_generated",
             "GigOptimizer weekly report generated",
@@ -862,6 +935,15 @@ def create_app() -> FastAPI:
                 f"Report ID: {report.report_id}",
                 f"HTML report: {Path(report.html_path).name}",
             ],
+        )
+        send_slack_event(
+            "weekly_report",
+            {
+                "summary": (latest_report.get("ai_overview") or {}).get("summary", "") or f"Report {report.report_id} is ready.",
+                "top_improvements": latest_report.get("weekly_action_plan", [])[:3],
+                "key_insights": ((latest_report.get("competitive_gap_analysis") or {}).get("why_competitors_win", [])[:3]),
+                "report_path": report.html_path,
+            },
         )
         await websocket_manager.broadcast_json({"type": "state", "payload": response_state})
         return {"report": asdict(report), "state": response_state}

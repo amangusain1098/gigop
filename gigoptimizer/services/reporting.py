@@ -122,6 +122,7 @@ class WeeklyReportService:
                 "market_anchor_price": current_state.gig_comparison.get("market_anchor_price"),
                 "recommended_title": blueprint.get("recommended_title", ""),
                 "recommended_tags": blueprint.get("recommended_tags", []),
+                "do_this_first": blueprint.get("do_this_first", [])[:3],
                 "implementation_summary": current_state.gig_comparison.get("implementation_summary", ""),
                 "report_html_path": str(html_path),
             }
@@ -182,6 +183,7 @@ class WeeklyReportService:
             "recommended_title": blueprint.get("recommended_title", ""),
             "recommended_tags": blueprint.get("recommended_tags", []),
             "top_actions": blueprint.get("weekly_actions", [])[:3] or comparison.get("what_to_implement", [])[:3],
+            "do_this_first": blueprint.get("do_this_first", [])[:3],
             "competitors_compared": comparison.get("competitor_count", 0),
         }
 
@@ -261,6 +263,9 @@ class WeeklyReportService:
             *[f"- {item}" for item in blueprint.get("pricing_strategy", [])],
             "",
             "## What To Implement Next",
+            *[f"- {item}" for item in blueprint.get("do_this_first", [])[:3]],
+            "",
+            "## Weekly Actions",
             *[f"- {item}" for item in blueprint.get("weekly_actions", [])],
             "",
             "## Why Competitors Win",
@@ -391,6 +396,10 @@ class WeeklyReportService:
     </div>
     <div class="card">
       <h2>What To Implement Next</h2>
+      <ul>{list_html(blueprint.get('do_this_first', []))}</ul>
+    </div>
+    <div class="card">
+      <h2>Weekly Actions</h2>
       <ul>{list_html(blueprint.get('weekly_actions', []))}</ul>
     </div>
     <div class="card">

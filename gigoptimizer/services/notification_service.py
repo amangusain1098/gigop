@@ -8,12 +8,14 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from ..models import NotificationDeliveryResult
+from .slack_service import SlackService
 from .settings_service import SettingsService
 
 
 class NotificationService:
     def __init__(self, settings_service: SettingsService) -> None:
         self.settings_service = settings_service
+        self.slack_service = SlackService(settings_service)
 
     def notify(
         self,
@@ -44,7 +46,7 @@ class NotificationService:
                 )
             )
         if settings.slack.enabled:
-            results.append(self._send_slack(message, settings.slack.webhook_url))
+            results.append(self.slack_service.send_plain_text(title, lines))
         if settings.whatsapp.enabled:
             results.append(
                 self._send_whatsapp(
@@ -67,7 +69,10 @@ class NotificationService:
             ],
         )
         if channel == "slack":
-            return self._send_slack(message, settings.slack.webhook_url)
+            return self.slack_service.send_plain_text("GigOptimizer Pro test notification", [
+                "The Slack channel is configured and reachable.",
+                "Structured alerts can now flow from comparison, jobs, and reports.",
+            ])
         if channel == "email":
             return self._send_email(
                 subject="GigOptimizer Pro test email",
@@ -93,17 +98,6 @@ class NotificationService:
     def _build_message(self, *, title: str, lines: list[str]) -> str:
         body = "\n".join(f"- {line}" for line in lines if line)
         return f"{title}\n{body}" if body else title
-
-    def _send_slack(self, message: str, webhook_url: str) -> NotificationDeliveryResult:
-        if not webhook_url:
-            return NotificationDeliveryResult(channel="slack", ok=False, detail="Slack webhook URL is not configured.")
-        payload = {"text": message}
-        return self._post_json(
-            channel="slack",
-            url=webhook_url,
-            payload=payload,
-            headers={},
-        )
 
     def _send_email(
         self,

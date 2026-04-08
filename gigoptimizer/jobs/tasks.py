@@ -4,7 +4,7 @@ from dataclasses import asdict
 from typing import Any
 
 from ..config import GigOptimizerConfig
-from ..services import AIOverviewService, DashboardService, SettingsService, WeeklyReportService
+from ..services import AIOverviewService, CacheService, DashboardService, SettingsService, SlackService, WeeklyReportService
 from .bus import JobEventBus
 
 
@@ -127,11 +127,15 @@ def run_weekly_report_job(run_id: str, *, use_live_connectors: bool = False) -> 
 def _build_runtime() -> dict[str, Any]:
     config = GigOptimizerConfig.from_env()
     settings_service = SettingsService(config)
-    ai_overview_service = AIOverviewService(settings_service)
+    cache_service = CacheService(config)
+    slack_service = SlackService(settings_service)
+    ai_overview_service = AIOverviewService(settings_service, cache_service)
     dashboard_service = DashboardService(
         config,
         settings_service=settings_service,
         ai_overview_service=ai_overview_service,
+        cache_service=cache_service,
+        slack_service=slack_service,
     )
     report_service = WeeklyReportService(dashboard_service)
     database_manager = dashboard_service.database_manager
@@ -140,6 +144,8 @@ def _build_runtime() -> dict[str, Any]:
     return {
         "config": config,
         "settings_service": settings_service,
+        "cache_service": cache_service,
+        "slack_service": slack_service,
         "database_manager": database_manager,
         "dashboard_service": dashboard_service,
         "report_service": report_service,
@@ -177,6 +183,7 @@ def _execute_job(
         )
         return _finish_success(
             run_id=run_id,
+            runtime=runtime,
             repository=repository,
             event_bus=event_bus,
             state=state,
@@ -192,6 +199,7 @@ def _execute_job(
         )
         failed = repository.get_agent_run(run_id) or {}
         event_bus.publish("job_failed", failed)
+        _send_job_failure_alert(runtime=runtime, run_id=run_id, run_type=run_type, error=exc)
         raise
     finally:
         _cleanup_runtime(runtime)
@@ -207,6 +215,7 @@ def _generate_weekly_report_state(runtime: dict[str, Any], use_live_connectors: 
 def _finish_success(
     *,
     run_id: str,
+    runtime: dict[str, Any],
     repository: BlueprintRepository,
     event_bus: JobEventBus,
     state: dict[str, Any],
@@ -232,7 +241,86 @@ def _finish_success(
     completed = repository.get_agent_run(run_id) or {}
     event_bus.publish("state", state)
     event_bus.publish("job_completed", completed)
+    _send_job_success_alert(runtime=runtime, run_id=run_id, state=state, completed=completed)
     return completed
+
+
+def _send_job_success_alert(*, runtime: dict[str, Any], run_id: str, state: dict[str, Any], completed: dict[str, Any]) -> None:
+    slack_service = runtime.get("slack_service")
+    if slack_service is None:
+        return
+    comparison = state.get("gig_comparison") or {}
+    blueprint = comparison.get("implementation_blueprint") or {}
+    top_action = blueprint.get("top_action") or {}
+    generated_report = state.get("generated_report") or {}
+    run_type = completed.get("run_type")
+    latest_report = state.get("latest_report") or {}
+    try:
+        if run_type in {"marketplace_compare", "manual_compare"}:
+            slack_service.send_slack_message(
+                "comparison_complete",
+                {
+                    "gig_url": comparison.get("gig_url", ""),
+                    "optimization_score": comparison.get("optimization_score", "--"),
+                    "recommended_title": blueprint.get("recommended_title", ""),
+                    "top_action": top_action.get("action_text", ""),
+                    "top_action_expected_gain": top_action.get("expected_gain"),
+                    "competitor_count": comparison.get("competitor_count", 0),
+                },
+            )
+            return
+        if run_type == "weekly_report":
+            slack_service.send_slack_message(
+                "weekly_report",
+                {
+                    "summary": (latest_report.get("ai_overview") or {}).get("summary", "") or completed.get("output_summary", ""),
+                    "top_improvements": latest_report.get("weekly_action_plan", [])[:3],
+                    "key_insights": ((latest_report.get("competitive_gap_analysis") or {}).get("why_competitors_win", [])[:3]),
+                    "report_path": generated_report.get("html_path", ""),
+                },
+            )
+            return
+        if top_action:
+            slack_service.send_slack_message(
+                "high_impact_action",
+                {
+                    "action_text": top_action.get("action_text", ""),
+                    "expected_gain": top_action.get("expected_gain"),
+                    "confidence_score": top_action.get("confidence_score"),
+                    "impact_score": top_action.get("impact_score"),
+                },
+            )
+            return
+        weekly_actions = latest_report.get("weekly_action_plan", []) or []
+        if weekly_actions:
+            slack_service.send_slack_message(
+                "high_impact_action",
+                {
+                    "action_text": weekly_actions[0],
+                    "expected_gain": 8,
+                    "confidence_score": 78,
+                    "impact_score": "medium",
+                },
+            )
+    except Exception:
+        return
+
+
+def _send_job_failure_alert(*, runtime: dict[str, Any], run_id: str, run_type: str, error: Exception) -> None:
+    slack_service = runtime.get("slack_service")
+    if slack_service is None:
+        return
+    try:
+        slack_service.send_slack_message(
+            "system_error",
+            {
+                "error_message": str(error),
+                "job_id": run_id,
+                "stack_trace": f"{run_type}: {error}",
+            },
+        )
+    except Exception:
+        return
 
 
 def _publish_progress(
