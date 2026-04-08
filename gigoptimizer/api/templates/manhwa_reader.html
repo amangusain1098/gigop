@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ seo.title }}</title>
+  <meta name="description" content="{{ seo.description }}">
+  <link rel="canonical" href="{{ canonical_url }}">
+  <meta property="og:title" content="{{ seo.title }}">
+  <meta property="og:description" content="{{ seo.description }}">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="{{ canonical_url }}">
+  {% if entry.image_url %}<meta property="og:image" content="{{ entry.image_url }}">{% endif %}
+  <link rel="stylesheet" href="/static/manhwa.css">
+  <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "Article",
+      "headline": "{{ entry.title|replace('"', '\\"') }}",
+      "datePublished": "{{ entry.published_at or entry.fetched_at }}",
+      "author": "{{ entry.author or entry.source_slug }}",
+      "mainEntityOfPage": "{{ canonical_url }}"
+    }
+  </script>
+</head>
+<body class="manhwa-body">
+  <main class="manhwa-reader-shell">
+    <nav class="manhwa-nav">
+      <div>
+        <div class="brand">Animha Reader</div>
+        <strong>{{ entry.category|title }} update page</strong>
+      </div>
+      <div class="nav-links">
+        <a class="nav-pill" href="/manhwa">Back to feed</a>
+        <a class="nav-pill" href="{{ entry.canonical_url }}">Original source</a>
+      </div>
+    </nav>
+
+    <div class="reader-layout">
+      <article class="reader-card">
+        {% if entry.image_url %}
+        <img class="reader-cover" src="{{ entry.image_url }}" alt="{{ entry.title }}">
+        {% endif %}
+        <div class="tag-row">
+          <span class="tag">{{ entry.category }}</span>
+          <span class="tag">{{ entry.source_slug }}</span>
+          {% for tag in entry.tags[:4] %}
+          <span class="tag">{{ tag }}</span>
+          {% endfor %}
+        </div>
+        <h1>{{ entry.title }}</h1>
+        <p class="reader-meta">
+          Published {{ entry.published_at or entry.fetched_at }}
+          {% if entry.author %} | {{ entry.author }}{% endif %}
+        </p>
+        <div class="sync-card">
+          <strong>Ad slot</strong>
+          <p class="small-note">Reserve this mid-content block for AdSense or a sponsorship unit once traffic starts growing.</p>
+        </div>
+        <div class="reader-body">
+          {{ body_html | safe }}
+        </div>
+      </article>
+
+      <aside class="panel">
+        <h2>More updates</h2>
+        {% for item in related_entries %}
+        <div class="sync-card">
+          <strong><a class="entry-link" href="/manhwa/read/{{ item.slug }}">{{ item.title }}</a></strong>
+          <p class="small-note">{{ item.category }} | {{ item.published_at or item.fetched_at }}</p>
+        </div>
+        {% endfor %}
+      </aside>
+    </div>
+  </main>
+</body>
+</html>

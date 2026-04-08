@@ -142,6 +142,9 @@ class GigOptimizerConfig:
     marketplace_enabled: bool = False
     marketplace_search_terms: str = ""
     marketplace_my_gig_url: str = ""
+    manhwa_enabled: bool = True
+    manhwa_auto_sync_enabled: bool = True
+    manhwa_sync_interval_minutes: int = 30
     knowledge_max_upload_bytes: int = 5 * 1024 * 1024
     knowledge_chunk_chars: int = 900
     knowledge_chunk_overlap_chars: int = 150
@@ -345,6 +348,9 @@ class GigOptimizerConfig:
             marketplace_enabled=_get_bool("MARKETPLACE_ENABLED", False),
             marketplace_search_terms=os.getenv("MARKETPLACE_SEARCH_TERMS", "").strip(),
             marketplace_my_gig_url=os.getenv("MARKETPLACE_MY_GIG_URL", "").strip(),
+            manhwa_enabled=_get_bool("MANHWA_ENABLED", True),
+            manhwa_auto_sync_enabled=_get_bool("MANHWA_AUTO_SYNC_ENABLED", True),
+            manhwa_sync_interval_minutes=_get_int("MANHWA_SYNC_INTERVAL_MINUTES", 30),
             knowledge_max_upload_bytes=_get_int("KNOWLEDGE_MAX_UPLOAD_BYTES", 5 * 1024 * 1024),
             knowledge_chunk_chars=_get_int("KNOWLEDGE_CHUNK_CHARS", 900),
             knowledge_chunk_overlap_chars=_get_int("KNOWLEDGE_CHUNK_OVERLAP_CHARS", 150),
@@ -376,6 +382,7 @@ class GigOptimizerConfig:
             self._validate_marketplace_reader(),
             self._validate_browserless(),
             self._validate_fiverr(),
+            self._validate_manhwa(),
         ]
 
     def _validate_database(self) -> ConnectorStatus:
@@ -585,6 +592,25 @@ class GigOptimizerConfig:
             connector="fiverr",
             status="skipped",
             detail="skipped (FIVERR_EMAIL not set and no saved storage state found)",
+        )
+
+    def _validate_manhwa(self) -> ConnectorStatus:
+        if not self.manhwa_enabled:
+            return ConnectorStatus(
+                connector="manhwa_portal",
+                status="skipped",
+                detail="skipped (MANHWA_ENABLED is false)",
+            )
+        if not self.manhwa_auto_sync_enabled:
+            return ConnectorStatus(
+                connector="manhwa_portal",
+                status="warning",
+                detail="warning (MANHWA_AUTO_SYNC_ENABLED is false, manual sync only)",
+            )
+        return ConnectorStatus(
+            connector="manhwa_portal",
+            status="active",
+            detail=f"active (auto sync every {max(5, self.manhwa_sync_interval_minutes)} minutes)",
         )
 
     def _module_available(self, module_name: str) -> bool:

@@ -1,0 +1,282 @@
+body.manhwa-body {
+  margin: 0;
+  font-family: "Segoe UI", "Trebuchet MS", sans-serif;
+  background:
+    radial-gradient(circle at top left, rgba(85, 164, 255, 0.12), transparent 30%),
+    radial-gradient(circle at top right, rgba(255, 140, 90, 0.12), transparent 25%),
+    linear-gradient(180deg, #07111d 0%, #0e1b2d 55%, #14253c 100%);
+  color: #eaf2ff;
+}
+
+.manhwa-shell,
+.manhwa-reader-shell {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 32px 20px 80px;
+}
+
+.manhwa-nav {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 28px;
+  flex-wrap: wrap;
+}
+
+.brand {
+  color: #7bc5ff;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.nav-links,
+.category-nav {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.nav-links a,
+.category-nav a,
+.source-link,
+.entry-link {
+  color: #f4f8ff;
+  text-decoration: none;
+}
+
+.nav-pill,
+.category-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: rgba(148, 178, 214, 0.13);
+  border: 1px solid rgba(148, 178, 214, 0.18);
+}
+
+.category-pill--active {
+  background: linear-gradient(135deg, #48b1ff 0%, #2066ff 100%);
+}
+
+.hero-card,
+.panel,
+.reader-card,
+.entry-card,
+.source-card,
+.sync-card {
+  border: 1px solid rgba(145, 177, 211, 0.16);
+  border-radius: 24px;
+  background: rgba(7, 17, 29, 0.78);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(14px);
+}
+
+.hero-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(280px, 1fr);
+  gap: 24px;
+  padding: 28px;
+  margin-bottom: 24px;
+}
+
+.hero-card h1,
+.panel h2,
+.reader-card h1 {
+  margin: 0;
+}
+
+.hero-copy p,
+.reader-meta,
+.entry-meta,
+.panel-subtitle {
+  color: #aab8ca;
+}
+
+.stat-grid,
+.dashboard-grid,
+.source-grid,
+.entry-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.stat-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.dashboard-grid {
+  grid-template-columns: 1.1fr 0.9fr;
+  margin-bottom: 22px;
+}
+
+.source-grid,
+.entry-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.stat-card,
+.metric-chip {
+  padding: 18px;
+  border-radius: 18px;
+  background: rgba(15, 27, 45, 0.82);
+  border: 1px solid rgba(148, 178, 214, 0.12);
+}
+
+.stat-card span,
+.metric-chip span {
+  display: block;
+  color: #a9b8cb;
+  font-size: 0.82rem;
+  margin-bottom: 8px;
+}
+
+.stat-card strong,
+.metric-chip strong {
+  font-size: 1.6rem;
+}
+
+.panel,
+.sync-card,
+.reader-card {
+  padding: 24px;
+}
+
+.entry-grid {
+  margin-top: 16px;
+}
+
+.entry-card,
+.source-card {
+  overflow: hidden;
+}
+
+.entry-card img,
+.reader-cover {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  background: rgba(20, 37, 60, 0.7);
+}
+
+.entry-card-content,
+.source-card-content {
+  padding: 18px;
+}
+
+.entry-card h3,
+.source-card h3 {
+  margin: 0 0 10px;
+  line-height: 1.25;
+}
+
+.entry-card p,
+.source-card p,
+.reader-body p {
+  margin: 0 0 12px;
+  line-height: 1.7;
+  color: #dce6f3;
+}
+
+.entry-meta,
+.reader-meta,
+.source-meta,
+.small-note {
+  font-size: 0.92rem;
+}
+
+.tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.tag {
+  display: inline-flex;
+  padding: 7px 11px;
+  border-radius: 999px;
+  background: rgba(148, 178, 214, 0.13);
+  color: #edf5ff;
+  font-size: 0.82rem;
+}
+
+.reader-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) 320px;
+  gap: 24px;
+}
+
+.reader-body {
+  margin-top: 20px;
+}
+
+.source-form {
+  display: grid;
+  gap: 12px;
+}
+
+.source-form input,
+.source-form select {
+  width: 100%;
+  border: 1px solid rgba(148, 178, 214, 0.18);
+  border-radius: 14px;
+  background: rgba(15, 27, 45, 0.88);
+  color: #eef5ff;
+  padding: 13px 14px;
+  box-sizing: border-box;
+}
+
+.reader-body p + p {
+  margin-top: 16px;
+}
+
+.button,
+.sync-button {
+  border: none;
+  border-radius: 999px;
+  padding: 12px 18px;
+  background: linear-gradient(135deg, #48b1ff 0%, #2066ff 100%);
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+}
+
+.sync-button[disabled] {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.sync-status {
+  margin-top: 12px;
+  color: #9fc4e8;
+  min-height: 22px;
+}
+
+.source-toggle {
+  margin-top: 8px;
+}
+
+.footer-note {
+  margin-top: 22px;
+  color: #8ea5c1;
+  font-size: 0.9rem;
+}
+
+@media (max-width: 1024px) {
+  .hero-card,
+  .dashboard-grid,
+  .reader-layout,
+  .source-grid,
+  .entry-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .stat-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}

@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Animha Studio</title>
+  <meta name="description" content="Private studio dashboard for the Animha content engine.">
+  <meta name="robots" content="noindex,nofollow,noarchive">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <link rel="canonical" href="{{ canonical_url }}">
+  <link rel="stylesheet" href="/static/manhwa.css">
+</head>
+<body class="manhwa-body">
+  <main class="manhwa-shell">
+    <nav class="manhwa-nav">
+      <div>
+        <div class="brand">Animha Studio</div>
+        <strong>Private feed ingestion and publishing control</strong>
+      </div>
+      <div class="nav-links">
+        <a class="nav-pill" href="/manhwa">Public portal</a>
+      </div>
+    </nav>
+
+    <section class="hero-card">
+      <div class="hero-copy">
+        <div class="brand">Automation control</div>
+        <h1>Manage feeds, freshness, and public publishing without exposing your Fiverr workspace.</h1>
+        <p>Use this private page to refresh the public catalog, add trusted legal sources, and keep the SEO surface growing automatically.</p>
+        <button class="sync-button" id="manhwa-sync-button" type="button">Sync feeds now</button>
+        <p class="sync-status" id="manhwa-sync-status">Ready.</p>
+      </div>
+      <div class="stat-grid">
+        <div class="stat-card"><span>Total fetched</span><strong>{{ overview.counts.all }}</strong></div>
+        <div class="stat-card"><span>Tracked sources</span><strong>{{ overview.sources|length }}</strong></div>
+        <div class="stat-card"><span>Last run new entries</span><strong>{{ overview.latest_sync.total_new_entries or 0 }}</strong></div>
+        <div class="stat-card"><span>Errors last run</span><strong>{{ overview.latest_sync.error_count or 0 }}</strong></div>
+      </div>
+    </section>
+
+    <section class="dashboard-grid">
+      <article class="panel">
+        <h2>Recent sync runs</h2>
+        {% for run in overview.recent_sync_runs %}
+        <div class="sync-card">
+          <strong>{{ run.status|upper }}</strong>
+          <p class="small-note">Started {{ run.started_at }} | Finished {{ run.finished_at }}</p>
+          <p>{{ run.total_entries }} entries fetched | {{ run.total_new_entries }} new | {{ run.error_count }} errors</p>
+        </div>
+        {% endfor %}
+      </article>
+
+      <article class="panel">
+        <h2>Monetization direction</h2>
+        {% for item in overview.monetization_notes %}
+        <div class="sync-card"><p>{{ item }}</p></div>
+        {% endfor %}
+      </article>
+    </section>
+
+    <section class="dashboard-grid">
+      <article class="panel">
+        <h2>Add a custom source</h2>
+        <p class="panel-subtitle">Use RSS or Atom feeds from legal news, review, or update sites to grow the portal automatically.</p>
+        <form id="manhwa-source-form" class="source-form">
+          <input name="title" type="text" placeholder="Source title" required>
+          <input name="feed_url" type="url" placeholder="https://example.com/feed.xml" required>
+          <input name="site_url" type="url" placeholder="https://example.com">
+          <select name="category">
+            <option value="manhwa">Manhwa</option>
+            <option value="manga" selected>Manga</option>
+            <option value="comics">Comics</option>
+          </select>
+          <input name="kind" type="text" placeholder="news, reviews, blog" value="news">
+          <input name="focus" type="text" placeholder="focus tags, comma separated">
+          <button class="sync-button" type="submit">Save source</button>
+        </form>
+        <p class="sync-status" id="manhwa-source-status">Add trusted feeds here so the site updates automatically.</p>
+      </article>
+
+      <article class="panel">
+        <h2>Source coverage</h2>
+        {% for source in overview.sources %}
+        <div class="source-card">
+          <div class="source-card-content">
+            <strong>{{ source.title }}</strong>
+            <p class="small-note">{{ source.category }} | every {{ source.fetch_interval_minutes }} min</p>
+            <p>{{ source.entry_count }} stored updates</p>
+            <p class="small-note">Last success: {{ source.last_success_at or 'Never' }}</p>
+            {% if source.last_error %}<p class="small-note">Last error: {{ source.last_error }}</p>{% endif %}
+            <div class="tag-row">
+              <span class="tag">{{ 'active' if source.active else 'paused' }}</span>
+              <button
+                class="sync-button source-toggle"
+                data-source-slug="{{ source.slug }}"
+                data-next-active="{{ 'false' if source.active else 'true' }}"
+                type="button"
+              >
+                {{ 'Disable source' if source.active else 'Enable source' }}
+              </button>
+            </div>
+          </div>
+        </div>
+        {% endfor %}
+      </article>
+    </section>
+  </main>
+  <script src="/static/manhwa-dashboard.js"></script>
+</body>
+</html>

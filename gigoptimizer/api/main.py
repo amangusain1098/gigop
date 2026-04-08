@@ -13,7 +13,7 @@ import logging
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.wsgi import WSGIMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -29,6 +29,7 @@ from ..services import (
     DashboardService,
     HostingerService,
     KnowledgeService,
+    ManhwaFeedService,
     NotificationService,
     SlackService,
     SettingsService,
@@ -122,6 +123,7 @@ def create_app() -> FastAPI:
         slack_service=slack_service,
     )
     knowledge_service = KnowledgeService(config, dashboard_service.repository, cache_service)
+    manhwa_service = ManhwaFeedService(config, dashboard_service.repository, cache_service)
     report_service = WeeklyReportService(dashboard_service)
     database_manager = dashboard_service.database_manager
     repository = dashboard_service.repository
@@ -142,6 +144,8 @@ def create_app() -> FastAPI:
         websocket_manager,
         notification_service,
         job_service=job_service,
+        config=config,
+        manhwa_service=manhwa_service,
     )
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     frontend_dist_dir = Path(config.frontend_dist_dir).resolve()
@@ -177,6 +181,7 @@ def create_app() -> FastAPI:
         app.state.slack_service = slack_service
         app.state.hostinger_service = hostinger_service
         app.state.knowledge_service = knowledge_service
+        app.state.manhwa_service = manhwa_service
         app.state.websocket_manager = websocket_manager
         event_bus.subscribe(relay_bus_event)
         event_bus.start()
@@ -384,12 +389,132 @@ def create_app() -> FastAPI:
             status_code=200,
         )
 
+    async def ensure_manhwa_content() -> dict:
+        overview = manhwa_service.build_overview()
+        if (
+            config.manhwa_enabled
+            and config.manhwa_auto_sync_enabled
+            and not overview["latest_entries"]
+        ):
+            await asyncio.to_thread(manhwa_service.sync_all_sources, force=True)
+            overview = manhwa_service.build_overview()
+        return overview
+
+    def absolute_url(request: Request, path: str) -> str:
+        base = str(request.base_url).rstrip("/")
+        return f"{base}{path}"
+
+    def render_manhwa_feed_xml(request: Request, entries: list[dict]) -> str:
+        site_url = absolute_url(request, "/manhwa")
+        items = []
+        for entry in entries[:40]:
+            title = str(entry.get("title", "")).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            link = absolute_url(request, f"/manhwa/read/{entry.get('slug', '')}")
+            source_link = str(entry.get("canonical_url", "")).replace("&", "&amp;")
+            description = str(entry.get("summary_text", "") or entry.get("content_text", ""))[:280]
+            description = description.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            pub_date = str(entry.get("published_at") or entry.get("fetched_at") or "")
+            items.append(
+                "<item>"
+                f"<title>{title}</title>"
+                f"<link>{link}</link>"
+                f"<guid>{source_link or link}</guid>"
+                f"<description>{description}</description>"
+                f"<pubDate>{pub_date}</pubDate>"
+                "</item>"
+            )
+        return (
+            "<?xml version='1.0' encoding='UTF-8'?>"
+            "<rss version='2.0'><channel>"
+            "<title>Animha Manhwa Feed</title>"
+            f"<link>{site_url}</link>"
+            "<description>Latest fetched manhwa, manga, and comics updates tracked by Animha.</description>"
+            + "".join(items)
+            + "</channel></rss>"
+        )
+
+    def render_manhwa_sitemap_xml(request: Request, entries: list[dict]) -> str:
+        urls = [
+            absolute_url(request, "/manhwa"),
+            absolute_url(request, "/manhwa/feed.xml"),
+        ]
+        urls.extend(absolute_url(request, f"/manhwa/read/{entry.get('slug', '')}") for entry in entries[:200])
+        body = "".join(f"<url><loc>{url}</loc></url>" for url in urls if url)
+        return (
+            "<?xml version='1.0' encoding='UTF-8'?>"
+            "<urlset xmlns='http://www.sitemaps.org/schemas/sitemap/0.9'>"
+            f"{body}</urlset>"
+        )
+
     @app.get("/", response_class=HTMLResponse)
     async def root(request: Request) -> HTMLResponse:
         session = auth_service.get_request_session(request)
         if auth_service.auth_enabled and session is None:
             return RedirectResponse(url="/login", status_code=303)
         return RedirectResponse(url="/dashboard", status_code=303)
+
+    @app.get("/manhwa", response_class=HTMLResponse)
+    async def manhwa_home(request: Request, category: str | None = None) -> HTMLResponse:
+        if not config.manhwa_enabled:
+            raise HTTPException(status_code=404, detail="Animha Manhwa portal is disabled.")
+        overview = await ensure_manhwa_content()
+        entries = manhwa_service.list_entries(category=category, limit=36) if category else overview["latest_entries"]
+        session = auth_service.get_request_session(request)
+        return templates.TemplateResponse(
+            request,
+            "manhwa_home.html",
+            {
+                "overview": overview,
+                "entries": entries,
+                "active_category": category or "all",
+                "auth_state": auth_service.get_auth_state(session),
+                "canonical_url": absolute_url(request, "/manhwa"),
+            },
+        )
+
+    @app.get("/studio/manhwa", response_class=HTMLResponse)
+    async def manhwa_dashboard(request: Request) -> HTMLResponse:
+        session = auth_service.get_request_session(request)
+        if auth_service.auth_enabled and session is None:
+            return RedirectResponse(url="/login", status_code=303)
+        overview = await ensure_manhwa_content()
+        return templates.TemplateResponse(
+            request,
+            "manhwa_dashboard.html",
+            {
+                "overview": overview,
+                "csrf_token": session.csrf_token if session else "",
+                "auth_state": auth_service.get_auth_state(session),
+                "canonical_url": absolute_url(request, "/studio/manhwa"),
+            },
+        )
+
+    @app.get("/manhwa/dashboard", response_class=HTMLResponse)
+    async def hidden_public_dashboard_path(request: Request) -> HTMLResponse:
+        session = auth_service.get_request_session(request)
+        if session is None:
+            raise HTTPException(status_code=404, detail="Page not found.")
+        return RedirectResponse(url="/studio/manhwa", status_code=303)
+
+    @app.get("/manhwa/read/{entry_slug}", response_class=HTMLResponse)
+    async def manhwa_reader(request: Request, entry_slug: str) -> HTMLResponse:
+        if not config.manhwa_enabled:
+            raise HTTPException(status_code=404, detail="Animha Manhwa portal is disabled.")
+        context = manhwa_service.build_reader_context(entry_slug)
+        if context is None:
+            raise HTTPException(status_code=404, detail="Entry not found.")
+        context["canonical_url"] = absolute_url(request, f"/manhwa/read/{entry_slug}")
+        return templates.TemplateResponse(request, "manhwa_reader.html", context)
+
+    @app.get("/manhwa/feed.xml")
+    async def manhwa_feed_xml(request: Request) -> Response:
+        entries = manhwa_service.list_entries(limit=40)
+        return Response(render_manhwa_feed_xml(request, entries), media_type="application/rss+xml")
+
+    @app.get("/manhwa/sitemap.xml")
+    async def manhwa_sitemap_xml(request: Request) -> Response:
+        entries = manhwa_service.build_sitemap_entries(limit=200)
+        return Response(render_manhwa_sitemap_xml(request, entries), media_type="application/xml")
 
     @app.get("/dashboard", response_class=HTMLResponse)
     async def dashboard_blueprint(request: Request) -> HTMLResponse:
@@ -444,6 +569,90 @@ def create_app() -> FastAPI:
     @app.get("/api/health")
     async def health() -> dict:
         return build_health_payload()
+
+    @app.get("/api/manhwa/overview")
+    async def manhwa_overview_api() -> dict:
+        if not config.manhwa_enabled:
+            raise HTTPException(status_code=404, detail="Animha Manhwa portal is disabled.")
+        overview = await ensure_manhwa_content()
+        return {"overview": overview}
+
+    @app.post("/api/manhwa/sync")
+    async def manhwa_sync_api(
+        request: Request,
+        payload: dict = Body(default={}),
+        _: None = Depends(require_auth),
+        __: None = Depends(require_csrf),
+    ) -> dict:
+        if not config.manhwa_enabled:
+            raise HTTPException(status_code=404, detail="Animha Manhwa portal is disabled.")
+        result = await asyncio.to_thread(
+            manhwa_service.sync_all_sources,
+            force=bool(payload.get("force", True)),
+        )
+        overview = manhwa_service.build_overview()
+        notify_event(
+            "pipeline_run",
+            "Animha content sync completed",
+            [
+                f"Sources checked: {result.get('total_sources', 0)}",
+                f"Entries fetched: {result.get('total_entries', 0)}",
+                f"New entries: {result.get('total_new_entries', 0)}",
+                f"Errors: {result.get('error_count', 0)}",
+            ],
+        )
+        return {"result": result, "overview": overview, "auth": build_state(request=request).get("auth", {})}
+
+    @app.get("/api/manhwa/sources")
+    async def manhwa_sources_api(_: None = Depends(require_auth)) -> dict:
+        if not config.manhwa_enabled:
+            raise HTTPException(status_code=404, detail="Animha Manhwa portal is disabled.")
+        return {"sources": manhwa_service.build_overview()["sources"]}
+
+    @app.post("/api/manhwa/sources")
+    async def manhwa_save_source_api(
+        request: Request,
+        payload: dict = Body(...),
+        _: None = Depends(require_auth),
+        __: None = Depends(require_csrf),
+    ) -> dict:
+        if not config.manhwa_enabled:
+            raise HTTPException(status_code=404, detail="Animha Manhwa portal is disabled.")
+        try:
+            source = manhwa_service.save_source(payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        overview = manhwa_service.build_overview()
+        notify_event(
+            "queue_pending",
+            "Animha source saved",
+            [
+                f"Source: {source['title']}",
+                f"Category: {source['category']}",
+                f"Feed URL: {source['feed_url']}",
+            ],
+        )
+        return {"source": source, "overview": overview, "auth": build_state(request=request).get("auth", {})}
+
+    @app.post("/api/manhwa/sources/{source_slug}/toggle")
+    async def manhwa_toggle_source_api(
+        request: Request,
+        source_slug: str,
+        payload: dict = Body(default={}),
+        _: None = Depends(require_auth),
+        __: None = Depends(require_csrf),
+    ) -> dict:
+        if not config.manhwa_enabled:
+            raise HTTPException(status_code=404, detail="Animha Manhwa portal is disabled.")
+        try:
+            source = manhwa_service.set_source_active(
+                slug=source_slug,
+                active=bool(payload.get("active", True)),
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Source not found.") from exc
+        overview = manhwa_service.build_overview()
+        return {"source": source, "overview": overview, "auth": build_state(request=request).get("auth", {})}
 
     @app.get("/rq", response_class=HTMLResponse)
     async def rq_overview(request: Request, _: None = Depends(require_auth)) -> HTMLResponse:

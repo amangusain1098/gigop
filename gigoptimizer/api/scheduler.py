@@ -16,6 +16,8 @@ class WeeklyReportScheduler:
         websocket_manager: DashboardWebSocketManager,
         notification_service: NotificationService,
         job_service=None,
+        config=None,
+        manhwa_service=None,
     ) -> None:
         self.report_service = report_service
         self.dashboard_service = report_service.dashboard_service
@@ -23,12 +25,16 @@ class WeeklyReportScheduler:
         self.notification_service = notification_service
         self.slack_service = getattr(notification_service, "slack_service", None)
         self.job_service = job_service
+        self.config = config
+        self.manhwa_service = manhwa_service
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._weekly_schedule_available = False
         self._market_watch_running = False
         self._next_market_watch_run = 0.0
         self._market_watch_signature: tuple | None = None
+        self._manhwa_sync_running = False
+        self._next_manhwa_sync_run = 0.0
 
     def start(self) -> str:
         self._weekly_schedule_available = self._configure_weekly_schedule()
@@ -78,6 +84,7 @@ class WeeklyReportScheduler:
                 except Exception:
                     pass
             self._maybe_run_market_watch()
+            self._maybe_run_manhwa_sync()
             time.sleep(1)
 
     def _maybe_run_market_watch(self) -> None:
@@ -215,6 +222,48 @@ class WeeklyReportScheduler:
         finally:
             self._market_watch_running = False
             self._broadcast_state()
+
+    def _maybe_run_manhwa_sync(self) -> None:
+        if self.config is None or self.manhwa_service is None:
+            return
+        if not getattr(self.config, "manhwa_enabled", False):
+            return
+        if not getattr(self.config, "manhwa_auto_sync_enabled", False):
+            return
+        if self._manhwa_sync_running:
+            return
+        if self._next_manhwa_sync_run and time.time() < self._next_manhwa_sync_run:
+            return
+
+        interval_minutes = max(5, int(getattr(self.config, "manhwa_sync_interval_minutes", 30) or 30))
+        self._next_manhwa_sync_run = time.time() + (interval_minutes * 60)
+        self._manhwa_sync_running = True
+        threading.Thread(target=self._run_manhwa_sync_job, daemon=True).start()
+
+    def _run_manhwa_sync_job(self) -> None:
+        try:
+            result = self.manhwa_service.sync_all_sources(force=False)
+            self.notification_service.notify(
+                event="pipeline_run",
+                title="Animha content sync completed",
+                lines=[
+                    f"Sources checked: {result.get('total_sources', 0)}",
+                    f"Entries fetched: {result.get('total_entries', 0)}",
+                    f"New entries: {result.get('total_new_entries', 0)}",
+                    f"Errors: {result.get('error_count', 0)}",
+                ],
+            )
+        except Exception as exc:
+            try:
+                self.notification_service.notify(
+                    event="error",
+                    title="Animha content sync failed",
+                    lines=[str(exc)],
+                )
+            except Exception:
+                pass
+        finally:
+            self._manhwa_sync_running = False
 
     def _broadcast_state(self) -> None:
         try:

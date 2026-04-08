@@ -15,6 +15,9 @@ from .models import (
     AssistantMessageORM,
     ComparisonHistoryORM,
     CompetitorSnapshotORM,
+    FeedEntryORM,
+    FeedSourceORM,
+    FeedSyncRunORM,
     GigStateORM,
     HITLItemORM,
     KnowledgeChunkORM,
@@ -451,6 +454,178 @@ class BlueprintRepository:
             )
         return existing
 
+    def ensure_feed_sources(self, sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        normalized_sources: list[dict[str, Any]] = []
+        with self.database.session() as session:
+            existing_map = {
+                item.slug: item
+                for item in session.scalars(select(FeedSourceORM)).all()
+            }
+            for source in sources:
+                slug = str(source.get("slug", "")).strip()
+                if not slug:
+                    continue
+                item = existing_map.get(slug)
+                if item is None:
+                    item = FeedSourceORM(slug=slug)
+                    session.add(item)
+                item.title = str(source.get("title", slug)).strip() or slug
+                item.category = str(source.get("category", "manga")).strip() or "manga"
+                item.feed_url = str(source.get("feed_url", "")).strip()
+                item.site_url = str(source.get("site_url", "")).strip() or None
+                item.language = str(source.get("language", "en")).strip() or "en"
+                item.active = bool(source.get("active", True))
+                item.fetch_interval_minutes = max(5, int(source.get("fetch_interval_minutes", 30) or 30))
+                item.metadata_json = source.get("metadata") or {}
+                item.updated_at = utc_now()
+            session.flush()
+            rows = session.scalars(select(FeedSourceORM).order_by(FeedSourceORM.title.asc())).all()
+            normalized_sources = [self._feed_source_to_dict(item) for item in rows]
+        return normalized_sources
+
+    def list_feed_sources(self, *, active_only: bool = False, limit: int = 50) -> list[dict[str, Any]]:
+        with self.database.session() as session:
+            query = select(FeedSourceORM).order_by(FeedSourceORM.title.asc()).limit(limit)
+            if active_only:
+                query = query.where(FeedSourceORM.active.is_(True))
+            rows = session.scalars(query).all()
+            return [self._feed_source_to_dict(item) for item in rows]
+
+    def update_feed_source_status(
+        self,
+        slug: str,
+        *,
+        last_error: str | None = None,
+        success: bool = False,
+        checked_at: datetime | None = None,
+    ) -> dict[str, Any] | None:
+        checked_time = checked_at or utc_now()
+        with self.database.session() as session:
+            item = session.scalar(select(FeedSourceORM).where(FeedSourceORM.slug == slug))
+            if item is None:
+                return None
+            item.last_checked_at = checked_time
+            item.last_error = (last_error or "").strip() or None
+            if success:
+                item.last_success_at = checked_time
+            item.updated_at = checked_time
+        with self.database.session() as session:
+            item = session.scalar(select(FeedSourceORM).where(FeedSourceORM.slug == slug))
+            return self._feed_source_to_dict(item) if item is not None else None
+
+    def upsert_feed_entry(
+        self,
+        *,
+        source_slug: str,
+        category: str,
+        external_id: str,
+        slug: str,
+        title: str,
+        canonical_url: str,
+        author: str = "",
+        summary_html: str = "",
+        summary_text: str = "",
+        content_html: str = "",
+        content_text: str = "",
+        image_url: str = "",
+        tags: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        published_at: datetime | None = None,
+    ) -> tuple[dict[str, Any], bool]:
+        created = False
+        with self.database.session() as session:
+            item = session.scalar(
+                select(FeedEntryORM).where(FeedEntryORM.external_id == external_id)
+            )
+            if item is None:
+                item = FeedEntryORM(external_id=external_id)
+                session.add(item)
+                created = True
+            item.source_slug = source_slug
+            item.category = category
+            item.slug = slug
+            item.title = title
+            item.canonical_url = canonical_url
+            item.author = author or None
+            item.summary_html = summary_html
+            item.summary_text = summary_text
+            item.content_html = content_html
+            item.content_text = content_text
+            item.image_url = image_url or None
+            item.tags = tags or []
+            item.metadata_json = metadata or {}
+            item.published_at = published_at
+            item.updated_at = utc_now()
+            session.flush()
+            item_id = item.id
+        with self.database.session() as session:
+            refreshed = session.get(FeedEntryORM, item_id)
+            return self._feed_entry_to_dict(refreshed), created
+
+    def list_feed_entries(
+        self,
+        *,
+        category: str | None = None,
+        source_slug: str | None = None,
+        limit: int = 60,
+    ) -> list[dict[str, Any]]:
+        with self.database.session() as session:
+            query = (
+                select(FeedEntryORM)
+                .order_by(FeedEntryORM.published_at.desc(), FeedEntryORM.id.desc())
+                .limit(limit)
+            )
+            if category:
+                query = query.where(FeedEntryORM.category == category)
+            if source_slug:
+                query = query.where(FeedEntryORM.source_slug == source_slug)
+            rows = session.scalars(query).all()
+            return [self._feed_entry_to_dict(item) for item in rows]
+
+    def get_feed_entry(self, slug: str) -> dict[str, Any] | None:
+        with self.database.session() as session:
+            item = session.scalar(select(FeedEntryORM).where(FeedEntryORM.slug == slug))
+            return self._feed_entry_to_dict(item) if item is not None else None
+
+    def record_feed_sync_run(
+        self,
+        *,
+        scope: str,
+        status: str,
+        total_sources: int,
+        total_entries: int,
+        total_new_entries: int,
+        error_count: int,
+        result_json: dict[str, Any] | None = None,
+        started_at: datetime | None = None,
+        finished_at: datetime | None = None,
+    ) -> dict[str, Any]:
+        with self.database.session() as session:
+            item = FeedSyncRunORM(
+                scope=scope,
+                status=status,
+                total_sources=total_sources,
+                total_entries=total_entries,
+                total_new_entries=total_new_entries,
+                error_count=error_count,
+                result_json=result_json or {},
+                started_at=started_at or utc_now(),
+                finished_at=finished_at or utc_now(),
+            )
+            session.add(item)
+            session.flush()
+            item_id = item.id
+        with self.database.session() as session:
+            item = session.get(FeedSyncRunORM, item_id)
+            return self._feed_sync_run_to_dict(item)
+
+    def list_feed_sync_runs(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        with self.database.session() as session:
+            rows = session.scalars(
+                select(FeedSyncRunORM).order_by(FeedSyncRunORM.started_at.desc()).limit(limit)
+            ).all()
+            return [self._feed_sync_run_to_dict(item) for item in rows]
+
     def _agent_run_to_dict(self, item: AgentRunORM) -> dict[str, Any]:
         return {
             "run_id": item.run_id,
@@ -562,6 +737,61 @@ class BlueprintRepository:
             "char_count": item.char_count,
             "metadata": item.metadata_json or {},
             "created_at": self._iso(item.created_at),
+        }
+
+    def _feed_source_to_dict(self, item: FeedSourceORM) -> dict[str, Any]:
+        return {
+            "id": item.id,
+            "slug": item.slug,
+            "title": item.title,
+            "category": item.category,
+            "feed_url": item.feed_url,
+            "site_url": item.site_url or "",
+            "language": item.language,
+            "active": item.active,
+            "fetch_interval_minutes": item.fetch_interval_minutes,
+            "last_checked_at": self._iso(item.last_checked_at),
+            "last_success_at": self._iso(item.last_success_at),
+            "last_error": item.last_error or "",
+            "metadata": item.metadata_json or {},
+            "created_at": self._iso(item.created_at),
+            "updated_at": self._iso(item.updated_at),
+        }
+
+    def _feed_entry_to_dict(self, item: FeedEntryORM) -> dict[str, Any]:
+        return {
+            "id": item.id,
+            "source_slug": item.source_slug,
+            "category": item.category,
+            "external_id": item.external_id,
+            "slug": item.slug,
+            "title": item.title,
+            "canonical_url": item.canonical_url,
+            "author": item.author or "",
+            "summary_html": item.summary_html,
+            "summary_text": item.summary_text,
+            "content_html": item.content_html,
+            "content_text": item.content_text,
+            "image_url": item.image_url or "",
+            "tags": item.tags or [],
+            "metadata": item.metadata_json or {},
+            "published_at": self._iso(item.published_at),
+            "fetched_at": self._iso(item.fetched_at),
+            "updated_at": self._iso(item.updated_at),
+        }
+
+    def _feed_sync_run_to_dict(self, item: FeedSyncRunORM) -> dict[str, Any]:
+        return {
+            "id": item.id,
+            "scope": item.scope,
+            "status": item.status,
+            "total_sources": item.total_sources,
+            "total_entries": item.total_entries,
+            "total_new_entries": item.total_new_entries,
+            "error_count": item.error_count,
+            "result_json": item.result_json or {},
+            "started_at": self._iso(item.started_at),
+            "finished_at": self._iso(item.finished_at),
         }
 
     def _coerce_datetime(self, value: str | datetime | None) -> datetime | None:

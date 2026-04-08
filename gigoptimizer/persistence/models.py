@@ -156,3 +156,66 @@ class KnowledgeChunkORM(Base):
     char_count: Mapped[int] = mapped_column(Integer, default=0)
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+
+
+class FeedSourceORM(Base):
+    __tablename__ = "content_feed_sources"
+    __table_args__ = (UniqueConstraint("slug", name="uq_content_feed_sources_slug"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    slug: Mapped[str] = mapped_column(String(120), index=True)
+    title: Mapped[str] = mapped_column(Text)
+    category: Mapped[str] = mapped_column(String(40), default="manga", index=True)
+    feed_url: Mapped[str] = mapped_column(Text)
+    site_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    language: Mapped[str] = mapped_column(String(24), default="en")
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    fetch_interval_minutes: Mapped[int] = mapped_column(Integer, default=30)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+
+class FeedEntryORM(Base):
+    __tablename__ = "content_feed_entries"
+    __table_args__ = (
+        UniqueConstraint("external_id", name="uq_content_feed_entries_external_id"),
+        UniqueConstraint("slug", name="uq_content_feed_entries_slug"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_slug: Mapped[str] = mapped_column(String(120), index=True)
+    category: Mapped[str] = mapped_column(String(40), default="manga", index=True)
+    external_id: Mapped[str] = mapped_column(String(255), index=True)
+    slug: Mapped[str] = mapped_column(String(180), index=True)
+    title: Mapped[str] = mapped_column(Text)
+    canonical_url: Mapped[str] = mapped_column(Text)
+    author: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary_html: Mapped[str] = mapped_column(Text, default="")
+    summary_text: Mapped[str] = mapped_column(Text, default="")
+    content_html: Mapped[str] = mapped_column(Text, default="")
+    content_text: Mapped[str] = mapped_column(Text, default="")
+    image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tags: Mapped[list] = mapped_column(JSON, default=list)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+
+class FeedSyncRunORM(Base):
+    __tablename__ = "content_feed_sync_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scope: Mapped[str] = mapped_column(String(120), default="all", index=True)
+    status: Mapped[str] = mapped_column(String(32), default="completed", index=True)
+    total_sources: Mapped[int] = mapped_column(Integer, default=0)
+    total_entries: Mapped[int] = mapped_column(Integer, default=0)
+    total_new_entries: Mapped[int] = mapped_column(Integer, default=0)
+    error_count: Mapped[int] = mapped_column(Integer, default=0)
+    result_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
