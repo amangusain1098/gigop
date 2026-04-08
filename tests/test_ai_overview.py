@@ -172,6 +172,68 @@ class AIOverviewFallbackTests(unittest.TestCase):
         self.assertEqual(overview["summary"], "Watch the pricing gap first.")
         self.assertTrue(overview["next_steps"])
 
+    def test_n8n_chat_falls_back_to_grounded_local_answer_when_reply_is_generic(self) -> None:
+        with TemporaryDirectory() as tmp:
+            temp_root = Path(tmp)
+            with patch.dict(
+                os.environ,
+                {
+                    "DATA_DIR": str(temp_root / "data"),
+                    "INTEGRATION_SETTINGS_PATH": str(temp_root / "data" / "integrations.json"),
+                    "AI_PROVIDER": "n8n",
+                    "AI_MODEL": "webhook",
+                    "AI_API_BASE_URL": "https://n8n.example/webhook/gigoptimizer-assistant",
+                },
+                clear=False,
+            ):
+                config = GigOptimizerConfig.from_env()
+                settings = SettingsService(config)
+                settings.update_settings(
+                    {
+                        "ai": {
+                            "enabled": True,
+                            "provider": "n8n",
+                            "model": "webhook",
+                            "api_base_url": "https://n8n.example/webhook/gigoptimizer-assistant",
+                        }
+                    }
+                )
+                service = AIOverviewService(settings)
+
+                mock_response = MagicMock()
+                mock_response.read.return_value = (
+                    b'{"reply":"Competitors show more visible review volume than your current proof set, which can lift trust and click-through.","suggestions":[]}'
+                )
+                mock_response.__enter__.return_value = mock_response
+                mock_response.__exit__.return_value = False
+
+                with patch("gigoptimizer.services.ai_overview_service.urlopen", return_value=mock_response):
+                    chat = service.chat(
+                        message="Why is the top gig ranking first on Fiverr right now?",
+                        context={
+                            "primary_search_term": "wordpress speed optimization",
+                            "top_ranked_gig": {
+                                "title": "I will do wordpress speed optimization for google pagespeed insight",
+                                "why_on_page_one": [
+                                    "Fiverr is currently surfacing this gig first for the primary search term on page one."
+                                ],
+                            },
+                            "one_by_one_recommendations": [
+                                {
+                                    "rank_position": 1,
+                                    "primary_recommendation": "Use the exact search phrase in your title and first line.",
+                                    "what_to_change": [
+                                        "Use the exact search phrase in your title and first line."
+                                    ],
+                                }
+                            ],
+                        },
+                    )
+
+        self.assertEqual(chat["provider"], "n8n+grounded")
+        self.assertIn("ranking", chat["reply"].lower())
+        self.assertTrue(chat["suggestions"])
+
     def test_public_settings_marks_n8n_webhook_as_configured(self) -> None:
         with TemporaryDirectory() as tmp:
             temp_root = Path(tmp)

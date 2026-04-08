@@ -350,12 +350,24 @@ class AIOverviewService:
                 model="webhook",
                 reason="n8n assistant returned no reply, so the app answered from local market analysis.",
             )
+        if self._should_prefer_local_chat(message, reply, context):
+            grounded = self._local_chat(
+                message,
+                context,
+                provider="n8n",
+                model="webhook",
+                reason="The app answered from its live grounded market context because the webhook reply was too generic for this question.",
+            )
+            grounded["status"] = "ok"
+            grounded["provider"] = "n8n+grounded"
+            grounded["model"] = "webhook+local"
+            return grounded
         return {
             "status": "ok",
             "provider": "n8n",
             "model": "webhook",
             "reply": reply,
-            "suggestions": suggestions[:3],
+            "suggestions": suggestions[:4],
         }
 
     def _n8n_overview(self, report: dict, webhook_url: str, *, memory_context: dict | None = None) -> dict:
@@ -695,6 +707,46 @@ class AIOverviewService:
             seen.add(cleaned)
             output.append(cleaned)
         return output
+
+    def _should_prefer_local_chat(self, message: str, reply: str, context: dict) -> bool:
+        question = str(message or "").lower()
+        answer = str(reply or "").lower()
+        primary_term = str(context.get("primary_search_term", "")).lower()
+        top_ranked_title = str((context.get("top_ranked_gig") or {}).get("title", "")).lower()
+        recommended_title = str(context.get("recommended_title", "")).lower()
+        recommended_tags = [str(item).lower() for item in (context.get("recommended_tags") or [])[:5]]
+        generic_markers = [
+            "competitors show more visible review volume",
+            "current market gap",
+            "market analysis",
+        ]
+
+        if any(marker in answer for marker in generic_markers) and len(answer) < 220:
+            if any(word in question for word in ["#1", "top gig", "rank", "page one", "first page", "compare", "change first"]):
+                return True
+
+        if any(word in question for word in ["#1", "top gig", "rank", "page one", "first page", "compare"]):
+            grounded_terms = ["page one", "ranking", "rank", "first"] + [primary_term] if primary_term else ["page one", "ranking", "rank", "first"]
+            if top_ranked_title and top_ranked_title not in answer and not any(term in answer for term in grounded_terms):
+                return True
+
+        if any(word in question for word in ["title", "headline"]):
+            if recommended_title and recommended_title not in answer and "title" not in answer:
+                return True
+
+        if any(word in question for word in ["tag", "keyword"]):
+            if recommended_tags and not any(tag in answer for tag in recommended_tags[:3]):
+                return True
+
+        if any(word in question for word in ["price", "pricing", "package"]):
+            if "price" not in answer and "package" not in answer and "$" not in answer:
+                return True
+
+        if any(word in question for word in ["change first", "do first", "first step"]):
+            if "do this" not in answer and "first" not in answer and "change" not in answer:
+                return True
+
+        return False
 
     def _cache_key(self, prefix: str, payload: dict[str, object]) -> str:
         digest = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
