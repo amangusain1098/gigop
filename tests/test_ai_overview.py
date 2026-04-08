@@ -170,6 +170,41 @@ class AIOverviewFallbackTests(unittest.TestCase):
         self.assertIn("wordpress speed optimization", response["reply"].lower())
         self.assertTrue(response["suggestions"])
 
+    def test_local_chat_answers_from_uploaded_knowledge(self) -> None:
+        with TemporaryDirectory() as tmp:
+            temp_root = Path(tmp)
+            with patch.dict(
+                os.environ,
+                {
+                    "DATA_DIR": str(temp_root / "data"),
+                    "INTEGRATION_SETTINGS_PATH": str(temp_root / "data" / "integrations.json"),
+                    "AI_PROVIDER": "n8n",
+                    "AI_API_KEY": "",
+                },
+                clear=False,
+            ):
+                config = GigOptimizerConfig.from_env()
+                settings = SettingsService(config)
+                settings.update_settings({"ai": {"enabled": True, "provider": "n8n", "api_base_url": ""}})
+                service = AIOverviewService(settings)
+                response = service.chat(
+                    message="What does my uploaded dataset say about GTmetrix?",
+                    context={
+                        "knowledge_documents": [
+                            {"filename": "notes.md", "preview": "Use GTmetrix and PageSpeed Insights in the hero copy."}
+                        ],
+                        "retrieved_knowledge": [
+                            {
+                                "filename": "notes.md",
+                                "snippet": "Use GTmetrix and PageSpeed Insights in the hero copy.",
+                            }
+                        ],
+                    },
+                )
+
+        self.assertIn("uploaded knowledge", response["reply"].lower())
+        self.assertTrue(response["suggestions"])
+
     def test_n8n_overview_uses_webhook_response(self) -> None:
         with TemporaryDirectory() as tmp:
             temp_root = Path(tmp)

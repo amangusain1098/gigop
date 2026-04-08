@@ -1,4 +1,4 @@
-import { startTransition, useEffect, useState, type KeyboardEvent } from 'react'
+import { startTransition, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import {
   CartesianGrid,
   Line,
@@ -13,7 +13,7 @@ import {
   YAxis,
 } from 'recharts'
 import { createDashboardSocket, fetchJson, loadBootstrap } from './api'
-import type { BootstrapPayload, CompetitorRecord, DashboardEvent, JobRun, LegacyState, QueueRecord } from './types'
+import type { BootstrapPayload, CompetitorRecord, DashboardEvent, DatasetRecord, JobRun, LegacyState, QueueRecord } from './types'
 import './App.css'
 
 type TitleOption = { label: string; title: string; rationale: string }
@@ -55,6 +55,8 @@ function App() {
   const [assistantBusy, setAssistantBusy] = useState(false)
   const [assistantMessages, setAssistantMessages] = useState<Array<{ role: 'user' | 'assistant'; text: string; suggestions?: string[] }>>([])
   const [assistantInitialized, setAssistantInitialized] = useState(false)
+  const [knowledgeFile, setKnowledgeFile] = useState<File | null>(null)
+  const datasetInputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     let active = true
@@ -90,7 +92,11 @@ function App() {
     setMaxResults(Number(marketplace.max_results ?? 10))
     setAutoCompareEnabled(Boolean(marketplace.auto_compare_enabled ?? false))
     setAutoCompareMinutes(Number(marketplace.auto_compare_interval_minutes ?? 5))
-    if (!assistantInitialized) {
+    const nextAssistantMessages = buildAssistantMessages(payload)
+    if (nextAssistantMessages.length) {
+      setAssistantMessages(nextAssistantMessages)
+      setAssistantInitialized(true)
+    } else if (!assistantInitialized) {
       setAssistantMessages(buildAssistantMessages(payload))
       setAssistantInitialized(true)
     }
@@ -99,9 +105,11 @@ function App() {
   function applyEvent(event: DashboardEvent) {
     if (!data) return
     if (event.type === 'state') {
+      const nextState = event.payload as LegacyState
       setData({
         ...data,
-        state: { ...data.state, ...(event.payload as LegacyState) },
+        state: { ...data.state, ...nextState },
+        queue: nextState.queue ?? data.queue,
       })
       return
     }
@@ -346,6 +354,65 @@ function App() {
     }
   }
 
+  async function uploadDataset() {
+    if (!data || !knowledgeFile) return
+    setBusy('upload-dataset')
+    setError('')
+    setMessage('')
+    try {
+      const contentBase64 = await fileToBase64(knowledgeFile)
+      const response = await withCsrfRetry((csrfToken) =>
+        fetchJson<BootstrapPayload>(
+          '/api/v2/datasets/upload',
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              filename: knowledgeFile.name,
+              content_type: knowledgeFile.type || 'application/octet-stream',
+              content_base64: contentBase64,
+              gig_url: gigUrl,
+            }),
+          },
+          csrfToken,
+        ),
+      )
+      applyBootstrap(response)
+      setKnowledgeFile(null)
+      if (datasetInputRef.current) {
+        datasetInputRef.current.value = ''
+      }
+      setMessage(`Uploaded ${knowledgeFile.name} to the copilot knowledge base.`)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Dataset upload failed.')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function deleteDataset(documentId: string) {
+    if (!data) return
+    setBusy(`delete-dataset-${documentId}`)
+    setError('')
+    setMessage('')
+    try {
+      const response = await withCsrfRetry((csrfToken) =>
+        fetchJson<BootstrapPayload>(
+          `/api/v2/datasets/${documentId}`,
+          {
+            method: 'DELETE',
+          },
+          csrfToken,
+        ),
+      )
+      applyBootstrap(response)
+      setMessage('Dataset removed from the copilot knowledge base.')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Dataset deletion failed.')
+    } finally {
+      setBusy('')
+    }
+  }
+
   function handleAssistantKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
@@ -362,6 +429,7 @@ function App() {
   const blueprint = comparison.implementation_blueprint ?? {}
   const scraperRun = data.state.scraper_run ?? {}
   const hostinger = data.hostinger ?? {}
+  const datasets = data.datasets ?? []
   const aiSettings = (data.state.notifications?.ai ?? {}) as Record<string, any>
   const slackSettings = (data.state.notifications?.slack ?? {}) as Record<string, any>
   const myGig = (comparison.my_gig ?? {}) as Record<string, any>
@@ -384,7 +452,7 @@ function App() {
     const right = Number(b[sortKey] ?? 0)
     return sortKey === 'starting_price' ? left - right : right - left
   })
-  const queue: QueueRecord[] = data.queue.length ? data.queue : data.state.queue
+  const queue: QueueRecord[] = (data.state.queue?.length ? data.state.queue : data.queue) as QueueRecord[]
   const selectedQueue = queue[0]
   const radar = [
     { name: 'Discovery', value: clamp((data.state.metrics_history.at(-1)?.ctr ?? 0) * 12) },
@@ -478,6 +546,67 @@ function App() {
           <ul className="bullet-list">
             {((comparison.why_competitors_win ?? report.competitive_gap_analysis?.why_competitors_win ?? []) as string[]).map((item: string) => <li key={item}>{item}</li>)}
           </ul>
+        </article>
+      </section>
+
+      <section className="content-grid">
+        <article className="card">
+          <div className="card-head"><h2>Knowledge base</h2><span>{datasets.length} file(s)</span></div>
+          <p className="inline-note">
+            Upload CSV, JSON, Markdown, HTML, TXT, or DOCX files. The copilot will retrieve from these files when you ask
+            questions about your gig, competitors, reviews, package strategy, or niche history.
+          </p>
+          <div className="form-grid">
+            <input
+              ref={datasetInputRef}
+              type="file"
+              accept=".txt,.md,.markdown,.json,.csv,.html,.htm,.docx"
+              onChange={(event) => setKnowledgeFile(event.target.files?.[0] ?? null)}
+            />
+            <button onClick={() => void uploadDataset()} disabled={busy === 'upload-dataset' || !knowledgeFile}>
+              {busy === 'upload-dataset' ? 'Uploading...' : 'Upload dataset'}
+            </button>
+          </div>
+          <div className="table">
+            {datasets.length ? datasets.map((item: DatasetRecord) => (
+              <div className="row row--stacked" key={item.id}>
+                <div className="row-topline">
+                  <strong>{item.filename}</strong>
+                  <span className={`status status--${item.status === 'ready' ? 'ok' : 'queued'}`}>{item.status}</span>
+                </div>
+                <p>{item.preview || 'No preview extracted yet.'}</p>
+                <div className="row-metrics">
+                  <span>{Math.max(1, Math.round((item.size_bytes || 0) / 1024))} KB</span>
+                  <span>{item.metadata?.chunk_count ?? 0} chunks</span>
+                  <span>{item.created_at ? shortDate(item.created_at) : '--'}</span>
+                </div>
+                <div className="button-row button-row--two">
+                  <button className="secondary" onClick={() => void sendAssistantMessage(`What can I use from ${item.filename} for my Fiverr gig right now?`)}>
+                    Ask copilot
+                  </button>
+                  <button
+                    className="secondary"
+                    onClick={() => void deleteDataset(item.id)}
+                    disabled={busy === `delete-dataset-${item.id}`}
+                  >
+                    {busy === `delete-dataset-${item.id}` ? 'Removing...' : 'Delete'}
+                  </button>
+                </div>
+              </div>
+            )) : <p>No datasets uploaded yet.</p>}
+          </div>
+        </article>
+
+        <article className="card">
+          <div className="card-head"><h2>Copilot memory</h2><span>{(data.memory?.knowledge_documents ?? []).length} linked docs</span></div>
+          <ul className="bullet-list">
+            {((data.memory?.knowledge_documents ?? []) as Array<Record<string, any>>).map((item) => (
+              <li key={String(item.id)}>{String(item.filename ?? 'dataset')} - {String(item.preview ?? '').slice(0, 140)}</li>
+            ))}
+          </ul>
+          {!((data.memory?.knowledge_documents ?? []) as Array<Record<string, any>>).length ? (
+            <p className="inline-note">Once you upload data, the copilot will pull relevant snippets into each answer.</p>
+          ) : null}
         </article>
       </section>
 
@@ -807,6 +936,7 @@ function App() {
                 <span className="pill">{String(comparison.primary_search_term ?? 'no primary term')}</span>
                 <span className="pill">{topRankedGig.title ? `#1 ${topRankedGig.seller_name || 'leader'}` : 'no live leader yet'}</span>
                 <span className="pill">{scraperRun.status ?? 'idle'} feed</span>
+                <span className="pill">{datasets.length} knowledge file(s)</span>
               </div>
             </div>
             <button className="secondary" onClick={() => setAssistantOpen(false)}>Hide</button>
@@ -928,7 +1058,6 @@ function mapAssistantHistory(items: Array<Record<string, any>>, payload: Bootstr
     ? buildAssistantQuickPrompts(payload.state.gig_comparison ?? {}, (payload.state.gig_comparison ?? {}).implementation_blueprint ?? {}, payload.state.scraper_run ?? {})
     : []
   const mapped = [...items]
-    .reverse()
     .map((item) => ({
       role: (item.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
       text: String(item.content ?? '').trim(),
@@ -956,6 +1085,19 @@ function buildAssistantQuickPrompts(comparison: Record<string, any>, blueprint: 
     'How should I price my packages now?',
   ]
   return Array.from(new Set(prompts.filter(Boolean))).slice(0, 5)
+}
+
+function fileToBase64(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = String(reader.result ?? '')
+      const commaIndex = result.indexOf(',')
+      resolve(commaIndex >= 0 ? result.slice(commaIndex + 1) : result)
+    }
+    reader.onerror = () => reject(reader.error ?? new Error('Unable to read file.'))
+    reader.readAsDataURL(file)
+  })
 }
 
 export default App

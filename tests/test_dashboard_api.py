@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import os
 import unittest
 from pathlib import Path
@@ -636,6 +637,73 @@ class DashboardApiTests(unittest.TestCase):
                     self.assertTrue(assistant.json()["assistant_history"])
                     self.assertEqual(assistant.json()["assistant_history"][0]["role"], "user")
                     self.assertEqual(assistant.json()["assistant_history"][-1]["role"], "assistant")
+
+    def test_dataset_upload_and_delete_routes_work(self) -> None:
+        root = Path(__file__).resolve().parent.parent
+        example_snapshot = root / "examples" / "wordpress_speed_snapshot.json"
+
+        with TemporaryDirectory() as tmp:
+            temp_root = Path(tmp)
+            with patch.dict(
+                os.environ,
+                {
+                    "DATA_DIR": str(temp_root / "data"),
+                    "UPLOADS_DIR": str(temp_root / "data" / "uploads"),
+                    "REPORTS_DIR": str(temp_root / "reports"),
+                    "DASHBOARD_STATE_PATH": str(temp_root / "data" / "dashboard_state.json"),
+                    "METRICS_HISTORY_PATH": str(temp_root / "data" / "metrics_history.json"),
+                    "AGENT_HEALTH_PATH": str(temp_root / "data" / "agent_health.json"),
+                    "APPROVAL_QUEUE_DB_PATH": str(temp_root / "data" / "approval_queue.db"),
+                    "INTEGRATION_SETTINGS_PATH": str(temp_root / "data" / "integrations.json"),
+                    "DEFAULT_SNAPSHOT_PATH": str(example_snapshot),
+                    "APP_AUTH_ENABLED": "true",
+                    "APP_ADMIN_USERNAME": "admin",
+                    "APP_ADMIN_PASSWORD": "super-secret-password",
+                    "APP_ADMIN_PASSWORD_HASH": "",
+                    "APP_SESSION_SECRET": "test-session-secret",
+                },
+                clear=False,
+            ):
+                from gigoptimizer.api.main import create_app
+
+                with TestClient(create_app()) as client:
+                    login = client.post(
+                        "/api/auth/login",
+                        json={"username": "admin", "password": "super-secret-password"},
+                    )
+                    csrf_token = login.json()["auth"]["csrf_token"]
+                    payload = base64.b64encode(
+                        b"Use PageSpeed Insights near the top of the title and mention GTmetrix proof."
+                    ).decode("ascii")
+
+                    uploaded = client.post(
+                        "/api/v2/datasets/upload",
+                        json={
+                            "filename": "market-notes.txt",
+                            "content_type": "text/plain",
+                            "content_base64": payload,
+                        },
+                        headers={"X-CSRF-Token": csrf_token},
+                    )
+                    self.assertEqual(uploaded.status_code, 200)
+                    datasets = uploaded.json()["datasets"]
+                    self.assertTrue(datasets)
+                    document_id = datasets[0]["id"]
+
+                    assistant = client.post(
+                        "/api/assistant/chat",
+                        json={"message": "What does the uploaded dataset say about PageSpeed Insights?"},
+                        headers={"X-CSRF-Token": csrf_token},
+                    )
+                    self.assertEqual(assistant.status_code, 200)
+                    self.assertIn("uploaded knowledge", assistant.json()["assistant"]["reply"].lower())
+
+                    deleted = client.delete(
+                        f"/api/v2/datasets/{document_id}",
+                        headers={"X-CSRF-Token": csrf_token},
+                    )
+                    self.assertEqual(deleted.status_code, 200)
+                    self.assertFalse(deleted.json()["datasets"])
 
     def test_health_endpoint_redacts_database_url_and_summarizes_last_run(self) -> None:
         root = Path(__file__).resolve().parent.parent

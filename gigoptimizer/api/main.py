@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
@@ -27,6 +28,7 @@ from ..services import (
     CacheService,
     DashboardService,
     HostingerService,
+    KnowledgeService,
     NotificationService,
     SlackService,
     SettingsService,
@@ -119,6 +121,7 @@ def create_app() -> FastAPI:
         cache_service=cache_service,
         slack_service=slack_service,
     )
+    knowledge_service = KnowledgeService(config, dashboard_service.repository, cache_service)
     report_service = WeeklyReportService(dashboard_service)
     database_manager = dashboard_service.database_manager
     repository = dashboard_service.repository
@@ -173,6 +176,7 @@ def create_app() -> FastAPI:
         app.state.notification_service = notification_service
         app.state.slack_service = slack_service
         app.state.hostinger_service = hostinger_service
+        app.state.knowledge_service = knowledge_service
         app.state.websocket_manager = websocket_manager
         event_bus.subscribe(relay_bus_event)
         event_bus.start()
@@ -243,6 +247,7 @@ def create_app() -> FastAPI:
             "competitors": repository.list_competitor_snapshots(limit=30),
             "memory": dashboard_service._memory_context(gig_id=gig_id),  # noqa: SLF001
             "assistant_history": list(reversed(repository.list_assistant_messages(gig_id=gig_id, limit=12))),
+            "datasets": knowledge_service.list_documents(gig_id=gig_id, limit=20),
             "hostinger": hostinger_service.get_public_status(),
             "workers": job_service.worker_snapshot(),
             "health": build_health_payload(),
@@ -298,6 +303,7 @@ def create_app() -> FastAPI:
             "user_actions": memory_context.get("user_actions", []),
             "comparison_history": memory_context.get("comparison_history", []),
             "assistant_history": memory_context.get("assistant_history", []),
+            "knowledge_documents": knowledge_service.summarize_documents(gig_id=gig_id, limit=8),
         }
 
     def build_health_payload() -> dict:
@@ -567,6 +573,75 @@ def create_app() -> FastAPI:
     async def list_hitl(_: None = Depends(require_auth)) -> dict:
         return {"records": repository.list_hitl_items(limit=50)}
 
+    @app.get("/api/v2/datasets")
+    async def list_datasets(request: Request, _: None = Depends(require_auth)) -> dict:
+        gig_id = dashboard_service._gig_identifier()  # noqa: SLF001
+        return {
+            "gig_id": gig_id,
+            "datasets": knowledge_service.list_documents(gig_id=gig_id, limit=20),
+        }
+
+    @app.post("/api/v2/datasets/upload")
+    async def upload_dataset(
+        request: Request,
+        payload: dict = Body(...),
+        _: None = Depends(require_auth),
+        __: None = Depends(require_csrf),
+    ) -> dict:
+        filename = str(payload.get("filename", "")).strip()
+        content_type = str(payload.get("content_type", "application/octet-stream")).strip() or "application/octet-stream"
+        content_base64 = str(payload.get("content_base64", "")).strip()
+        gig_url = str(payload.get("gig_url", "")).strip()
+        if not filename or not content_base64:
+            raise HTTPException(status_code=400, detail="filename and content_base64 are required.")
+        try:
+            raw_bytes = base64.b64decode(content_base64, validate=True)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="Dataset payload is not valid base64.") from exc
+
+        gig_id = dashboard_service._gig_identifier(gig_url or None)  # noqa: SLF001
+        try:
+            document = knowledge_service.ingest_document(
+                gig_id=gig_id,
+                filename=filename,
+                content_type=content_type,
+                raw_bytes=raw_bytes,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        response = build_blueprint_state(request=request)
+        response["uploaded_document"] = document
+        await websocket_manager.broadcast_json(
+            {
+                "type": "state",
+                "payload": build_state(request=request),
+            }
+        )
+        return response
+
+    @app.delete("/api/v2/datasets/{document_id}")
+    async def delete_dataset(
+        request: Request,
+        document_id: str,
+        _: None = Depends(require_auth),
+        __: None = Depends(require_csrf),
+    ) -> dict:
+        gig_id = dashboard_service._gig_identifier()  # noqa: SLF001
+        try:
+            deleted = knowledge_service.delete_document(gig_id=gig_id, document_id=document_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Dataset not found.") from exc
+        response = build_blueprint_state(request=request)
+        response["deleted_document"] = deleted
+        await websocket_manager.broadcast_json(
+            {
+                "type": "state",
+                "payload": build_state(request=request),
+            }
+        )
+        return response
+
     @app.get("/api/settings")
     async def get_settings(_: None = Depends(require_auth)) -> dict:
         return settings_service.get_public_settings()
@@ -584,6 +659,11 @@ def create_app() -> FastAPI:
         context = build_assistant_context()
         gig_id = str(context.get("gig_id") or dashboard_service._gig_identifier())  # noqa: SLF001
         message = str(payload.get("message", ""))
+        context["retrieved_knowledge"] = knowledge_service.retrieve_context(
+            gig_id=gig_id,
+            query=message,
+            limit=6,
+        )
         repository.record_assistant_message(
             gig_id=gig_id,
             role="user",

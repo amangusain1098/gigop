@@ -17,6 +17,8 @@ from .models import (
     CompetitorSnapshotORM,
     GigStateORM,
     HITLItemORM,
+    KnowledgeChunkORM,
+    KnowledgeDocumentORM,
     UserActionORM,
 )
 
@@ -335,6 +337,120 @@ class BlueprintRepository:
             rows = session.scalars(query).all()
             return [self._assistant_message_to_dict(item) for item in rows]
 
+    def find_knowledge_document_by_checksum(self, *, gig_id: str, checksum: str) -> dict[str, Any] | None:
+        normalized_gig_id = build_gig_key(gig_id)
+        with self.database.session() as session:
+            query = (
+                select(KnowledgeDocumentORM)
+                .where(KnowledgeDocumentORM.gig_id == normalized_gig_id)
+                .where(KnowledgeDocumentORM.checksum == checksum)
+            )
+            item = session.scalar(query)
+            return self._knowledge_document_to_dict(item) if item is not None else None
+
+    def upsert_knowledge_document(
+        self,
+        *,
+        document_id: str,
+        gig_id: str,
+        filename: str,
+        stored_path: str,
+        content_type: str,
+        size_bytes: int,
+        checksum: str,
+        preview: str,
+        metadata: dict[str, Any] | None = None,
+        source: str = "upload",
+        status: str = "ready",
+    ) -> dict[str, Any]:
+        normalized_gig_id = build_gig_key(gig_id)
+        with self.database.session() as session:
+            item = session.get(KnowledgeDocumentORM, document_id)
+            if item is None:
+                item = KnowledgeDocumentORM(id=document_id)
+                session.add(item)
+            item.gig_id = normalized_gig_id
+            item.filename = filename
+            item.stored_path = stored_path
+            item.content_type = content_type
+            item.size_bytes = size_bytes
+            item.checksum = checksum
+            item.preview = preview
+            item.metadata_json = metadata or {}
+            item.source = source
+            item.status = status
+            item.updated_at = utc_now()
+        return self.get_knowledge_document(document_id) or {}
+
+    def replace_knowledge_chunks(
+        self,
+        *,
+        document_id: str,
+        gig_id: str,
+        chunks: list[dict[str, Any]],
+    ) -> None:
+        normalized_gig_id = build_gig_key(gig_id)
+        with self.database.session() as session:
+            session.execute(
+                delete(KnowledgeChunkORM).where(KnowledgeChunkORM.document_id == document_id)
+            )
+            for index, chunk in enumerate(chunks):
+                content = str(chunk.get("content", "")).strip()
+                if not content:
+                    continue
+                session.add(
+                    KnowledgeChunkORM(
+                        document_id=document_id,
+                        gig_id=normalized_gig_id,
+                        chunk_index=int(chunk.get("chunk_index", index)),
+                        content=content,
+                        char_count=int(chunk.get("char_count", len(content))),
+                        metadata_json=chunk.get("metadata") or {},
+                    )
+                )
+
+    def get_knowledge_document(self, document_id: str) -> dict[str, Any] | None:
+        with self.database.session() as session:
+            item = session.get(KnowledgeDocumentORM, document_id)
+            return self._knowledge_document_to_dict(item) if item is not None else None
+
+    def list_knowledge_documents(self, *, gig_id: str | None = None, limit: int = 25) -> list[dict[str, Any]]:
+        with self.database.session() as session:
+            query = select(KnowledgeDocumentORM).order_by(KnowledgeDocumentORM.created_at.desc()).limit(limit)
+            if gig_id:
+                query = query.where(KnowledgeDocumentORM.gig_id == build_gig_key(gig_id))
+            rows = session.scalars(query).all()
+            return [self._knowledge_document_to_dict(item) for item in rows]
+
+    def list_knowledge_chunks(
+        self,
+        *,
+        gig_id: str | None = None,
+        document_id: str | None = None,
+        limit: int = 250,
+    ) -> list[dict[str, Any]]:
+        with self.database.session() as session:
+            query = select(KnowledgeChunkORM).order_by(KnowledgeChunkORM.created_at.desc()).limit(limit)
+            if gig_id:
+                query = query.where(KnowledgeChunkORM.gig_id == build_gig_key(gig_id))
+            if document_id:
+                query = query.where(KnowledgeChunkORM.document_id == document_id)
+            rows = session.scalars(query).all()
+            return [self._knowledge_chunk_to_dict(item) for item in rows]
+
+    def delete_knowledge_document(self, document_id: str) -> dict[str, Any] | None:
+        existing = self.get_knowledge_document(document_id)
+        if existing is None:
+            return None
+        with self.database.session() as session:
+            session.execute(
+                delete(KnowledgeChunkORM).where(KnowledgeChunkORM.document_id == document_id)
+            )
+            session.execute(
+                delete(KnowledgeDocumentORM).where(KnowledgeDocumentORM.id == document_id)
+            )
+        return existing
+
     def _agent_run_to_dict(self, item: AgentRunORM) -> dict[str, Any]:
         return {
             "run_id": item.run_id,
@@ -415,6 +531,35 @@ class BlueprintRepository:
             "role": item.role,
             "content": item.content,
             "source": item.source,
+            "metadata": item.metadata_json or {},
+            "created_at": self._iso(item.created_at),
+        }
+
+    def _knowledge_document_to_dict(self, item: KnowledgeDocumentORM) -> dict[str, Any]:
+        return {
+            "id": item.id,
+            "gig_id": item.gig_id,
+            "filename": item.filename,
+            "stored_path": item.stored_path,
+            "content_type": item.content_type,
+            "size_bytes": item.size_bytes,
+            "checksum": item.checksum,
+            "source": item.source,
+            "status": item.status,
+            "preview": item.preview,
+            "metadata": item.metadata_json or {},
+            "created_at": self._iso(item.created_at),
+            "updated_at": self._iso(item.updated_at),
+        }
+
+    def _knowledge_chunk_to_dict(self, item: KnowledgeChunkORM) -> dict[str, Any]:
+        return {
+            "id": item.id,
+            "document_id": item.document_id,
+            "gig_id": item.gig_id,
+            "chunk_index": item.chunk_index,
+            "content": item.content,
+            "char_count": item.char_count,
             "metadata": item.metadata_json or {},
             "created_at": self._iso(item.created_at),
         }

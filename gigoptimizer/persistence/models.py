@@ -123,3 +123,36 @@ class AssistantMessageORM(Base):
     source: Mapped[str] = mapped_column(String(48), default="assistant")
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+
+
+class KnowledgeDocumentORM(Base):
+    __tablename__ = "knowledge_documents"
+    __table_args__ = (UniqueConstraint("gig_id", "checksum", name="uq_knowledge_documents_gig_checksum"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    gig_id: Mapped[str] = mapped_column(String(255), index=True)
+    filename: Mapped[str] = mapped_column(Text)
+    stored_path: Mapped[str] = mapped_column(Text)
+    content_type: Mapped[str] = mapped_column(String(128), default="application/octet-stream")
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    checksum: Mapped[str] = mapped_column(String(64), index=True)
+    source: Mapped[str] = mapped_column(String(48), default="upload")
+    status: Mapped[str] = mapped_column(String(32), default="ready", index=True)
+    preview: Mapped[str] = mapped_column(Text, default="")
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+
+class KnowledgeChunkORM(Base):
+    __tablename__ = "knowledge_chunks"
+    __table_args__ = (UniqueConstraint("document_id", "chunk_index", name="uq_knowledge_chunks_document_index"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    document_id: Mapped[str] = mapped_column(String(64), index=True)
+    gig_id: Mapped[str] = mapped_column(String(255), index=True)
+    chunk_index: Mapped[int] = mapped_column(Integer)
+    content: Mapped[str] = mapped_column(Text)
+    char_count: Mapped[int] = mapped_column(Integer, default=0)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)

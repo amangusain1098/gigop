@@ -1659,6 +1659,7 @@ class DashboardService:
             "user_actions": self.repository.list_user_actions(gig_id=gig_id, limit=8),
             "comparison_history": self.repository.list_comparison_history(gig_id=gig_id, limit=6),
             "assistant_history": self.repository.list_assistant_messages(gig_id=gig_id, limit=10),
+            "knowledge_documents": self.repository.list_knowledge_documents(gig_id=gig_id, limit=8),
         }
 
     def _comparison_signature(

@@ -1,8 +1,10 @@
 import type { BootstrapPayload, DashboardEvent } from './types'
 
-function buildHeaders(csrfToken?: string) {
+function buildHeaders(body?: BodyInit | null, csrfToken?: string) {
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
+  }
+  if (!(body instanceof FormData)) {
+    headers['Content-Type'] = 'application/json'
   }
   if (csrfToken) {
     headers['X-CSRF-Token'] = csrfToken
@@ -15,7 +17,7 @@ export async function fetchJson<T>(url: string, options: RequestInit = {}, csrfT
     credentials: 'same-origin',
     ...options,
     headers: {
-      ...buildHeaders(csrfToken),
+      ...buildHeaders(options.body ?? null, csrfToken),
       ...(options.headers ?? {}),
     },
   })

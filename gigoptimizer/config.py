@@ -38,6 +38,7 @@ def _get_int(name: str, default: int) -> int:
 class GigOptimizerConfig:
     data_dir: Path = Path("data")
     reports_dir: Path = Path("reports")
+    uploads_dir: Path = Path("data/uploads")
     frontend_dist_dir: Path = Path("frontend/dist")
     default_snapshot_path: Path = Path("examples/wordpress_speed_snapshot.json")
     dashboard_state_path: Path = Path("data/dashboard_state.json")
@@ -141,6 +142,9 @@ class GigOptimizerConfig:
     marketplace_enabled: bool = False
     marketplace_search_terms: str = ""
     marketplace_my_gig_url: str = ""
+    knowledge_max_upload_bytes: int = 5 * 1024 * 1024
+    knowledge_chunk_chars: int = 900
+    knowledge_chunk_overlap_chars: int = 150
 
     @classmethod
     def from_env(cls) -> "GigOptimizerConfig":
@@ -149,6 +153,7 @@ class GigOptimizerConfig:
         return cls(
             data_dir=data_dir,
             reports_dir=reports_dir,
+            uploads_dir=Path(os.getenv("UPLOADS_DIR", str(data_dir / "uploads"))),
             frontend_dist_dir=Path(os.getenv("FRONTEND_DIST_DIR", "frontend/dist")),
             default_snapshot_path=Path(
                 os.getenv("DEFAULT_SNAPSHOT_PATH", "examples/wordpress_speed_snapshot.json")
@@ -340,6 +345,9 @@ class GigOptimizerConfig:
             marketplace_enabled=_get_bool("MARKETPLACE_ENABLED", False),
             marketplace_search_terms=os.getenv("MARKETPLACE_SEARCH_TERMS", "").strip(),
             marketplace_my_gig_url=os.getenv("MARKETPLACE_MY_GIG_URL", "").strip(),
+            knowledge_max_upload_bytes=_get_int("KNOWLEDGE_MAX_UPLOAD_BYTES", 5 * 1024 * 1024),
+            knowledge_chunk_chars=_get_int("KNOWLEDGE_CHUNK_CHARS", 900),
+            knowledge_chunk_overlap_chars=_get_int("KNOWLEDGE_CHUNK_OVERLAP_CHARS", 150),
         )
 
     @property

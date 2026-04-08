@@ -270,6 +270,8 @@ class AIOverviewService:
             "user_actions": context.get("user_actions", []),
             "comparison_history": context.get("comparison_history", []),
             "assistant_history": context.get("assistant_history", []),
+            "knowledge_documents": context.get("knowledge_documents", []),
+            "retrieved_knowledge": context.get("retrieved_knowledge", []),
         }
         return (
             "You are the in-app GigOptimizer Pro copilot. "
@@ -484,6 +486,8 @@ class AIOverviewService:
         user_actions = list(context.get("user_actions", []) or [])
         history = list(context.get("comparison_history", []) or [])
         assistant_history = list(context.get("assistant_history", []) or [])
+        knowledge_documents = list(context.get("knowledge_documents", []) or [])
+        retrieved_knowledge = list(context.get("retrieved_knowledge", []) or [])
         top_ranked_gig = context.get("top_ranked_gig") or {}
         top_ten = list(context.get("first_page_top_10", []) or [])
         one_by_one = list(context.get("one_by_one_recommendations", []) or [])
@@ -567,6 +571,27 @@ class AIOverviewService:
             else:
                 reply = "The app needs a fresh market scan to answer from the live Fiverr feed."
             suggestions = [f"Explain why #{item.get('rank_position', '?')} is winning" for item in top_ten[:3]]
+        elif any(word in lower_message for word in ["dataset", "knowledge", "document", "upload", "train"]):
+            if retrieved_knowledge:
+                best = retrieved_knowledge[0]
+                reply = (
+                    f"The most relevant uploaded knowledge right now is from '{best.get('filename', 'dataset')}'. "
+                    f"{best.get('snippet', '')}"
+                ).strip()
+                suggestions = [
+                    f"Use the {best.get('filename', 'dataset')} findings in the title and description rewrite.",
+                    "Upload more review exports or competitor notes if you want the copilot to answer from them too.",
+                ]
+            elif knowledge_documents:
+                reply = (
+                    f"You have {len(knowledge_documents)} uploaded knowledge file(s), but none matched this question strongly yet."
+                )
+                suggestions = [
+                    "Ask about a phrase that exists in your uploaded dataset.",
+                    "Upload CSV, JSON, DOCX, or Markdown reports for stronger retrieval coverage.",
+                ]
+            else:
+                reply = "No uploaded knowledge is available yet. Add a CSV, JSON, DOCX, or Markdown file from the dashboard first."
         else:
             relevant = self._relevant_context_lines(message, context)
             if relevant:
@@ -693,6 +718,28 @@ class AIOverviewService:
                 snippets.append({"text": f"Recent Fiverr feed event [{stage}]: {message}", "actions": [], "priority": 55})
         for keyword in (context.get("keyword_pulse") or [])[:5]:
             snippets.append({"text": f"Live keyword pulse still includes '{str(keyword).strip()}'.", "actions": [], "priority": 58})
+        for item in (context.get("retrieved_knowledge") or [])[:5]:
+            filename = str(item.get("filename", "dataset")).strip()
+            snippet = str(item.get("snippet", "")).strip()
+            if snippet:
+                snippets.append(
+                    {
+                        "text": f"Uploaded dataset '{filename}' says: {snippet}",
+                        "actions": [],
+                        "priority": 88,
+                    }
+                )
+        for item in (context.get("knowledge_documents") or [])[:4]:
+            filename = str(item.get("filename", "")).strip()
+            preview = str(item.get("preview", "")).strip()
+            if filename and preview:
+                snippets.append(
+                    {
+                        "text": f"Knowledge file '{filename}' is available with content like: {preview}",
+                        "actions": [],
+                        "priority": 50,
+                    }
+                )
         return snippets
 
     def _query_tokens(self, value: str) -> set[str]:

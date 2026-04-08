@@ -101,6 +101,22 @@ export interface WorkerSnapshot {
   local_threads: number
 }
 
+export interface DatasetRecord {
+  id: string
+  gig_id: string
+  filename: string
+  stored_path: string
+  content_type: string
+  size_bytes: number
+  checksum: string
+  source: string
+  status: string
+  preview: string
+  metadata?: Record<string, any>
+  created_at?: string
+  updated_at?: string
+}
+
 export interface HealthPayload {
   status: string
   app: string
@@ -115,6 +131,7 @@ export interface BootstrapPayload {
   job_runs: JobRun[]
   queue: QueueRecord[]
   competitors: CompetitorRecord[]
+  datasets?: DatasetRecord[]
   memory?: Record<string, any>
   assistant_history?: Array<Record<string, any>>
   hostinger?: Record<string, any>
