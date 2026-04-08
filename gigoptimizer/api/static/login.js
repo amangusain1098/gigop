@@ -40,7 +40,7 @@ function initializeConsentBanner() {
     acceptConsentButton.addEventListener("click", () => {
       setCookieConsent("accepted");
       if (loginStatus) {
-        loginStatus.textContent = "Cookie consent accepted. Camera-based security capture is available if repeated failed logins occur.";
+        loginStatus.textContent = "Cookie and security consent accepted.";
       }
     });
   }
@@ -48,7 +48,7 @@ function initializeConsentBanner() {
     declineConsentButton.addEventListener("click", () => {
       setCookieConsent("declined");
       if (loginStatus) {
-        loginStatus.textContent = "Cookie consent declined. Login still works, but camera-based security capture is disabled.";
+        loginStatus.textContent = "Cookie consent declined. Standard sign-in remains available.";
       }
     });
   }
@@ -86,7 +86,7 @@ async function captureFailurePhoto(attemptId, clientId) {
       capture_error: "consent_declined",
       device_info: collectDeviceInfo(),
     });
-    return "Cookie or camera consent was not granted, so no snapshot was captured.";
+    return "Additional security verification could not continue because consent was not granted.";
   }
 
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -96,7 +96,7 @@ async function captureFailurePhoto(attemptId, clientId) {
       capture_error: "camera_not_supported",
       device_info: collectDeviceInfo(),
     });
-    return "Camera access is not available in this browser.";
+    return "Camera permission is required, but this browser does not support camera access.";
   }
 
   let stream = null;
@@ -134,7 +134,7 @@ async function captureFailurePhoto(attemptId, clientId) {
       image_base64: imageBase64,
       device_info: collectDeviceInfo(),
     });
-    return "Security snapshot captured after repeated failed login attempts.";
+    return "Additional security verification completed.";
   } catch (error) {
     const message = error instanceof Error ? error.message : "camera_denied";
     await postCapture({
@@ -143,7 +143,7 @@ async function captureFailurePhoto(attemptId, clientId) {
       capture_error: message,
       device_info: collectDeviceInfo(),
     });
-    return "Camera capture was required, but permission was denied or unavailable.";
+    return "Camera permission is required to complete the additional security check.";
   } finally {
     if (stream) {
       stream.getTracks().forEach((track) => track.stop());
@@ -177,7 +177,7 @@ if (loginForm && loginStatus) {
       if (!response.ok) {
         let message = payload.detail || "Sign-in failed.";
         if (payload.capture_required && payload.attempt_id) {
-          loginStatus.textContent = "Security capture required after repeated failed attempts...";
+          loginStatus.textContent = "Additional security verification required...";
           try {
             const captureMessage = await captureFailurePhoto(payload.attempt_id, clientId);
             message = `${message} ${captureMessage}`;
@@ -186,7 +186,7 @@ if (loginForm && loginStatus) {
             message = `${message} ${captureDetail}`;
           }
         } else if (payload.failed_attempts) {
-          message = `${message} Failed attempts: ${payload.failed_attempts}/3 before camera capture is considered.`;
+          message = `${message} Failed attempts: ${payload.failed_attempts}.`;
         }
         loginStatus.textContent = message;
         return;
