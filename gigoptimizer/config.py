@@ -151,6 +151,8 @@ class GigOptimizerConfig:
     knowledge_max_upload_bytes: int = 5 * 1024 * 1024
     knowledge_chunk_chars: int = 900
     knowledge_chunk_overlap_chars: int = 150
+    copilot_learning_enabled: bool = True
+    copilot_learning_interval_minutes: int = 30
     extension_enabled: bool = True
     extension_api_token: str = ""
     extension_max_gigs_per_import: int = 25
@@ -368,6 +370,8 @@ class GigOptimizerConfig:
             knowledge_max_upload_bytes=_get_int("KNOWLEDGE_MAX_UPLOAD_BYTES", 5 * 1024 * 1024),
             knowledge_chunk_chars=_get_int("KNOWLEDGE_CHUNK_CHARS", 900),
             knowledge_chunk_overlap_chars=_get_int("KNOWLEDGE_CHUNK_OVERLAP_CHARS", 150),
+            copilot_learning_enabled=_get_bool("COPILOT_LEARNING_ENABLED", True),
+            copilot_learning_interval_minutes=_get_int("COPILOT_LEARNING_INTERVAL_MINUTES", 30),
             extension_enabled=_get_bool("EXTENSION_ENABLED", True),
             extension_api_token=os.getenv("EXTENSION_API_TOKEN", "").strip(),
             extension_max_gigs_per_import=_get_int("EXTENSION_MAX_GIGS_PER_IMPORT", 25),
@@ -406,6 +410,7 @@ class GigOptimizerConfig:
             self._validate_fiverr(),
             self._validate_extension_ingest(),
             self._validate_manhwa(),
+            self._validate_copilot_learning(),
         ]
 
     def _validate_database(self) -> ConnectorStatus:
@@ -659,6 +664,19 @@ class GigOptimizerConfig:
             connector="manhwa_portal",
             status="active",
             detail=f"active (auto sync every {max(5, self.manhwa_sync_interval_minutes)} minutes)",
+        )
+
+    def _validate_copilot_learning(self) -> ConnectorStatus:
+        if not self.copilot_learning_enabled:
+            return ConnectorStatus(
+                connector="copilot_learning",
+                status="skipped",
+                detail="skipped (COPILOT_LEARNING_ENABLED is false)",
+            )
+        return ConnectorStatus(
+            connector="copilot_learning",
+            status="active",
+            detail=f"active (educational feed sync every {max(5, self.copilot_learning_interval_minutes)} minutes)",
         )
 
     def _module_available(self, module_name: str) -> bool:

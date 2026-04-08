@@ -377,6 +377,66 @@ class AIOverviewFallbackTests(unittest.TestCase):
         self.assertTrue(public_settings["ai"]["configured"])
         self.assertEqual(public_settings["ai"]["provider"], "n8n")
 
+    def test_local_chat_handles_greeting_with_live_context(self) -> None:
+        with TemporaryDirectory() as tmp:
+            temp_root = Path(tmp)
+            with patch.dict(
+                os.environ,
+                {
+                    "DATA_DIR": str(temp_root / "data"),
+                    "INTEGRATION_SETTINGS_PATH": str(temp_root / "data" / "integrations.json"),
+                    "AI_PROVIDER": "n8n",
+                },
+                clear=False,
+            ):
+                config = GigOptimizerConfig.from_env()
+                settings = SettingsService(config)
+                settings.update_settings({"ai": {"enabled": True, "provider": "n8n", "api_base_url": ""}})
+                service = AIOverviewService(settings)
+                response = service.chat(
+                    message="hello",
+                    context={
+                        "copilot_learning": {
+                            "latest_topics": ["mdn-blog-http-caching.txt", "cloudflare-blog-firewall-rules.txt"],
+                        },
+                        "recommended_title": "I will optimize WordPress speed",
+                    },
+                )
+
+        self.assertEqual(response["status"], "fallback")
+        self.assertIn("watching your live gig data", response["reply"].lower())
+        self.assertTrue(response["suggestions"])
+
+    def test_local_chat_handles_firewall_code_prompt(self) -> None:
+        with TemporaryDirectory() as tmp:
+            temp_root = Path(tmp)
+            with patch.dict(
+                os.environ,
+                {
+                    "DATA_DIR": str(temp_root / "data"),
+                    "INTEGRATION_SETTINGS_PATH": str(temp_root / "data" / "integrations.json"),
+                    "AI_PROVIDER": "n8n",
+                },
+                clear=False,
+            ):
+                config = GigOptimizerConfig.from_env()
+                settings = SettingsService(config)
+                settings.update_settings({"ai": {"enabled": True, "provider": "n8n", "api_base_url": ""}})
+                service = AIOverviewService(settings)
+                response = service.chat(
+                    message="code this firewall for my VPS",
+                    context={
+                        "retrieved_knowledge": [
+                            {"filename": "cloudflare-firewall.txt", "snippet": "Keep only SSH, HTTP, and HTTPS exposed."}
+                        ]
+                    },
+                )
+
+        self.assertEqual(response["status"], "fallback")
+        self.assertIn("ufw", response["reply"].lower())
+        self.assertIn("allow 443/tcp", response["reply"].lower())
+        self.assertTrue(response["suggestions"])
+
 
 if __name__ == "__main__":
     unittest.main()

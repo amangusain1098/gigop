@@ -1,6 +1,7 @@
 from .ai_overview_service import AIOverviewService
 from .auth_service import AuthService
 from .cache_service import CacheService
+from .copilot_learning_service import CopilotLearningService
 from .dashboard_service import DashboardService
 from .hostinger_service import HostingerService
 from .knowledge_service import KnowledgeService
@@ -19,6 +20,7 @@ __all__ = [
     "ManhwaFeedService",
     "NotificationService",
     "CacheService",
+    "CopilotLearningService",
     "SlackService",
     "SettingsService",
     "WeeklyReportService",

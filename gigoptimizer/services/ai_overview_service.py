@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -494,12 +495,61 @@ class AIOverviewService:
         one_by_one = list(context.get("one_by_one_recommendations", []) or [])
         recent_events = list(context.get("recent_scraper_events", []) or [])
         keyword_pulse = list(context.get("keyword_pulse", []) or [])
+        copilot_learning = context.get("copilot_learning") or {}
         grounded_knowledge = self._grounded_knowledge_context(retrieved_knowledge)
 
         reply = f"The app recommends updating your gig around the current market gap. {reason}".strip()
         suggestions: list[str] = []
 
-        if any(word in lower_message for word in ["dataset", "knowledge", "document", "upload", "train"]):
+        if self._is_greeting(lower_message):
+            topics = [str(item).strip() for item in (copilot_learning.get("latest_topics") or [])[:3] if str(item).strip()]
+            topic_text = f" I’m also tracking fresh learning topics like: {', '.join(topics)}." if topics else ""
+            reply = (
+                "I’m watching your live gig data, page-one competitors, uploaded files, and the background educational feed."
+                f"{topic_text} Ask me about titles, tags, pricing, why #1 is ranking, or ask for a code/config draft."
+            )
+            suggestions = [
+                "Why is the top gig ranking first right now?",
+                "Rewrite my title for the current market.",
+                "Draft a firewall plan for this VPS.",
+            ]
+        elif any(word in lower_message for word in ["firewall", "ufw", "iptables", "security group"]):
+            reply = (
+                "For this VPS, start with UFW and allow only SSH, HTTP, and HTTPS. Use:\n"
+                "```bash\n"
+                "ufw default deny incoming\n"
+                "ufw default allow outgoing\n"
+                "ufw allow OpenSSH\n"
+                "ufw allow 80/tcp\n"
+                "ufw allow 443/tcp\n"
+                "ufw enable\n"
+                "ufw status verbose\n"
+                "```\n"
+                "If Docker is exposing extra ports, also verify only Nginx/Traefik is public and Postgres/Redis stay internal."
+            )
+            if grounded_knowledge:
+                reply += f" The learning feed also surfaced this useful context: {grounded_knowledge}"
+            suggestions = [
+                "Show me the Docker firewall checks I should run next.",
+                "Write a production UFW hardening checklist.",
+                "Explain how to keep Postgres and Redis private.",
+            ]
+        elif any(word in lower_message for word in ["code", "implement", "build", "write", "generate", "create"]) and any(
+            word in lower_message for word in ["api", "fastapi", "docker", "firewall", "worker", "redis", "postgres", "extension"]
+        ):
+            reply = (
+                "I can draft the implementation directly from the app context. Tell me the target clearly, like "
+                "'write a FastAPI health endpoint', 'build a Chrome extension popup', or 'generate a UFW firewall setup', "
+                "and I’ll answer with concrete code or commands instead of a generic summary."
+            )
+            if grounded_knowledge:
+                reply += f" Right now the most relevant learned context is: {grounded_knowledge}"
+            suggestions = [
+                "Write a UFW firewall script for this VPS.",
+                "Generate a FastAPI endpoint for copilot sync status.",
+                "Build a Redis worker health check function.",
+            ]
+        elif any(word in lower_message for word in ["dataset", "knowledge", "document", "upload", "train"]):
             if retrieved_knowledge:
                 best = retrieved_knowledge[0]
                 reply = (
@@ -652,6 +702,14 @@ class AIOverviewService:
             "reply": reply,
             "suggestions": self._dedupe_strings(suggestions)[:4],
         }
+
+    def _is_greeting(self, lower_message: str) -> bool:
+        cleaned = re.sub(r"[^a-z\s]", " ", lower_message).strip()
+        if not cleaned:
+            return False
+        greeting_tokens = {"hi", "hello", "hey", "yo", "hola", "namaste"}
+        tokens = [item for item in cleaned.split() if item]
+        return bool(tokens) and len(tokens) <= 4 and all(token in greeting_tokens or token == "there" for token in tokens)
 
     def _grounded_knowledge_context(self, retrieved_knowledge: list[dict]) -> str:
         if not retrieved_knowledge:

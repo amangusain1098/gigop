@@ -30,6 +30,7 @@ from ..services import (
     AIOverviewService,
     AuthService,
     CacheService,
+    CopilotLearningService,
     DashboardService,
     HostingerService,
     KnowledgeService,
@@ -138,6 +139,12 @@ def create_app() -> FastAPI:
         slack_service=slack_service,
     )
     knowledge_service = KnowledgeService(config, dashboard_service.repository, cache_service)
+    copilot_learning_service = CopilotLearningService(
+        config,
+        dashboard_service.repository,
+        knowledge_service,
+        cache_service,
+    )
     manhwa_service = ManhwaFeedService(config, dashboard_service.repository, cache_service)
     report_service = WeeklyReportService(dashboard_service)
     database_manager = dashboard_service.database_manager
@@ -161,6 +168,7 @@ def create_app() -> FastAPI:
         job_service=job_service,
         config=config,
         manhwa_service=manhwa_service,
+        copilot_learning_service=copilot_learning_service,
     )
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     frontend_dist_dir = Path(config.frontend_dist_dir).resolve()
@@ -198,6 +206,7 @@ def create_app() -> FastAPI:
         app.state.slack_service = slack_service
         app.state.hostinger_service = hostinger_service
         app.state.knowledge_service = knowledge_service
+        app.state.copilot_learning_service = copilot_learning_service
         app.state.manhwa_service = manhwa_service
         app.state.websocket_manager = websocket_manager
         event_bus.subscribe(relay_bus_event)
@@ -302,6 +311,7 @@ def create_app() -> FastAPI:
             "memory": dashboard_service._memory_context(gig_id=gig_id),  # noqa: SLF001
             "assistant_history": list(reversed(repository.list_assistant_messages(gig_id=gig_id, limit=12))),
             "datasets": knowledge_service.list_documents(gig_id=gig_id, limit=20),
+            "copilot_learning": copilot_learning_service.status(),
             "hostinger": hostinger_service.get_public_status(),
             "security": build_login_security_payload(),
             "workers": job_service.worker_snapshot(),
@@ -366,7 +376,33 @@ def create_app() -> FastAPI:
             "comparison_history": memory_context.get("comparison_history", []),
             "assistant_history": memory_context.get("assistant_history", []),
             "knowledge_documents": knowledge_service.summarize_documents(gig_id=gig_id, limit=8),
+            "copilot_learning": copilot_learning_service.status(),
+            "global_knowledge_documents": copilot_learning_service.summarize_documents(limit=8),
         }
+
+    def merge_knowledge_results(*knowledge_sets: list[dict[str, object]], limit: int = 8) -> list[dict[str, object]]:
+        merged: list[dict[str, object]] = []
+        seen: set[tuple[str, str]] = set()
+        for group in knowledge_sets:
+            for item in group:
+                document_key = (
+                    str(item.get("document_id", ""))
+                    or str(item.get("id", ""))
+                    or str(item.get("filename", ""))
+                )
+                snippet_key = (
+                    str(item.get("snippet", ""))
+                    or str(item.get("preview", ""))
+                    or str(item.get("content", ""))[:180]
+                )
+                key = (document_key, snippet_key)
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(item)
+                if len(merged) >= limit:
+                    return merged
+        return merged
 
     def sync_marketplace_context(*, gig_url: str = "", search_terms: list[str] | None = None) -> None:
         cleaned_gig_url = str(gig_url or "").strip()
@@ -1243,6 +1279,27 @@ def create_app() -> FastAPI:
     async def hostinger_status(_: None = Depends(require_auth)) -> dict:
         return {"hostinger": hostinger_service.get_public_status()}
 
+    @app.get("/api/copilot/status")
+    async def copilot_status(_: None = Depends(require_auth)) -> dict:
+        return {
+            "copilot_learning": copilot_learning_service.status(),
+            "datasets": copilot_learning_service.summarize_documents(limit=8),
+        }
+
+    @app.post("/api/copilot/sync")
+    async def copilot_sync(_: None = Depends(require_auth), __: None = Depends(require_csrf)) -> dict:
+        result = await asyncio.to_thread(copilot_learning_service.sync_sources, force=True)
+        await websocket_manager.broadcast_json(
+            {
+                "type": "state",
+                "payload": build_state(),
+            }
+        )
+        return {
+            "copilot_learning": result,
+            "datasets": copilot_learning_service.summarize_documents(limit=8),
+        }
+
     @app.post("/api/assistant/chat")
     async def assistant_chat(
         payload: dict = Body(...),
@@ -1260,13 +1317,22 @@ def create_app() -> FastAPI:
             " ".join(str(item).strip() for item in (context.get("do_this_first") or [])[:2] if str(item).strip()),
         ]
         retrieval_query = " ".join(part for part in retrieval_query_parts if part).strip()
-        retrieved_knowledge = knowledge_service.retrieve_context(
+        local_knowledge = knowledge_service.retrieve_context(
             gig_id=gig_id,
             query=retrieval_query or message,
             limit=6,
         )
+        global_knowledge = copilot_learning_service.retrieve_context(
+            query=retrieval_query or message,
+            limit=4,
+        )
+        retrieved_knowledge = merge_knowledge_results(
+            local_knowledge,
+            global_knowledge,
+            limit=8,
+        )
         if not retrieved_knowledge:
-            retrieved_knowledge = [
+            local_previews = [
                 {
                     "document_id": item.get("id"),
                     "filename": item.get("filename", ""),
@@ -1279,7 +1345,27 @@ def create_app() -> FastAPI:
                 for item in knowledge_service.summarize_documents(gig_id=gig_id, limit=3)
                 if str(item.get("preview", "")).strip()
             ]
+            global_previews = [
+                {
+                    "document_id": item.get("id"),
+                    "filename": item.get("filename", ""),
+                    "score": 1,
+                    "snippet": str(item.get("preview", "")).strip(),
+                    "content": str(item.get("preview", "")).strip(),
+                    "metadata": {"source": "copilot_feed_preview"},
+                    "created_at": item.get("created_at"),
+                }
+                for item in copilot_learning_service.summarize_documents(limit=3)
+                if str(item.get("preview", "")).strip()
+            ]
+            retrieved_knowledge = merge_knowledge_results(local_previews, global_previews, limit=8)
+        context["knowledge_documents"] = merge_knowledge_results(
+            knowledge_service.summarize_documents(gig_id=gig_id, limit=8),
+            copilot_learning_service.summarize_documents(limit=8),
+            limit=12,
+        )
         context["retrieved_knowledge"] = retrieved_knowledge
+        context["copilot_learning"] = copilot_learning_service.status()
         repository.record_assistant_message(
             gig_id=gig_id,
             role="user",
