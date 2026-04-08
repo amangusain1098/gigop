@@ -500,6 +500,7 @@ class ManhwaFeedService:
             text=" ".join([summary_text, content_text, " ".join(categories)]),
         )
         slug = self._slugify_entry(title=title, external_id=external_id)
+        normalized_tags = self._dedupe_tags(categories)
         return {
             "source_slug": str(source.get("slug", "")).strip(),
             "category": category,
@@ -513,7 +514,7 @@ class ManhwaFeedService:
             "content_html": content_html,
             "content_text": content_text,
             "image_url": image_url,
-            "tags": categories,
+            "tags": normalized_tags,
             "metadata": {
                 "source_title": source.get("title", ""),
                 "source_site_url": source.get("site_url", ""),
@@ -584,7 +585,8 @@ class ManhwaFeedService:
         return [item for item in parts if item]
 
     def _clean_text(self, value: str) -> str:
-        return re.sub(r"\s+", " ", unescape(str(value or ""))).strip()
+        text = re.sub(r"\s+", " ", unescape(str(value or ""))).strip()
+        return self._fix_mojibake(text)
 
     def _clean_html(self, value: str) -> str:
         text = str(value or "").strip()
@@ -600,7 +602,7 @@ class ManhwaFeedService:
         text = unescape(text)
         text = re.sub(r"[ \t]+", " ", text)
         text = re.sub(r"\n{3,}", "\n\n", text)
-        return text.strip()
+        return self._fix_mojibake(text.strip())
 
     def _should_skip_source(self, source: dict[str, Any]) -> bool:
         last_success = str(source.get("last_success_at", "")).strip()
@@ -628,6 +630,7 @@ class ManhwaFeedService:
         enriched["summary_preview"] = summary[:220].strip() + ("..." if len(summary) > 220 else "")
         enriched["source_title"] = source_title_map.get(entry.get("source_slug", ""), entry.get("source_slug", ""))
         enriched["display_time"] = self._relative_timestamp(entry.get("published_at") or entry.get("fetched_at"))
+        enriched["published_display"] = self._format_timestamp(entry.get("published_at") or entry.get("fetched_at"))
         enriched["eyebrow"] = self.CATEGORY_COPY.get(entry.get("category", ""), {}).get("title", "News desk")
         return enriched
 
@@ -687,6 +690,45 @@ class ManhwaFeedService:
         if days < 7:
             return f"{days}d ago"
         return parsed.strftime("%d %b %Y")
+
+    def _format_timestamp(self, value: str | None) -> str:
+        cleaned = str(value or "").strip()
+        if not cleaned:
+            return "Recently published"
+        try:
+            parsed = datetime.fromisoformat(cleaned)
+        except ValueError:
+            return cleaned
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).strftime("%d %b %Y, %I:%M %p UTC")
+
+    def _dedupe_tags(self, tags: list[str]) -> list[str]:
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for tag in tags:
+            cleaned = self._clean_text(tag)
+            lowered = cleaned.lower()
+            if not cleaned or lowered in seen:
+                continue
+            seen.add(lowered)
+            ordered.append(cleaned)
+        return ordered[:8]
+
+    def _fix_mojibake(self, value: str) -> str:
+        text = str(value or "")
+        replacements = {
+            "â": "-",
+            "â": "-",
+            "â": "'",
+            "â": "'",
+            "â": '"',
+            "â": '"',
+            "Â": "",
+        }
+        for bad, good in replacements.items():
+            text = text.replace(bad, good)
+        return text
 
     def _clear_cached_views(self) -> None:
         if self.cache_service is None:

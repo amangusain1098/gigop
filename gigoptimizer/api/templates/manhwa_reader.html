@@ -43,16 +43,20 @@
         {% endif %}
         <div class="tag-row">
           <span class="tag">{{ entry.category }}</span>
-          <span class="tag">{{ entry.source_slug }}</span>
+          <span class="tag">{{ entry.source_title or entry.source_slug }}</span>
           {% for tag in entry.tags[:4] %}
           <span class="tag">{{ tag }}</span>
           {% endfor %}
         </div>
         <h1>{{ entry.title }}</h1>
         <p class="reader-meta">
-          Published {{ entry.published_at or entry.fetched_at }}
+          Published {{ entry.published_display or entry.published_at or entry.fetched_at }}
           {% if entry.author %} | {{ entry.author }}{% endif %}
         </p>
+        <div class="sync-card">
+          <strong>Story brief</strong>
+          <p class="small-note">This page publishes the headline and summary on Animha. Use the source link for the complete original story.</p>
+        </div>
         <div class="sync-card">
           <strong>Ad slot</strong>
           <p class="small-note">Reserve this mid-content block for AdSense or a sponsorship unit once traffic starts growing.</p>
