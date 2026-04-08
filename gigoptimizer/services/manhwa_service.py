@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import re
-from datetime import datetime, timezone
+from collections import Counter
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from html import escape, unescape
 from typing import Any
@@ -77,6 +78,55 @@ class ManhwaFeedService:
         "manhwa": {"manhwa", "webtoon", "naver", "kakao", "toon", "solo leveling"},
         "manga": {"manga", "shonen", "shoujo", "kodansha", "jump", "viz", "seinen"},
         "comics": {"comic", "comics", "marvel", "dc", "graphic novel", "batman", "spider-man"},
+    }
+    CATEGORY_COPY = {
+        "manhwa": {
+            "title": "Manhwa desk",
+            "description": "Fresh headlines, webtoon buzz, and Korean comics coverage aimed at readers hunting what is moving right now.",
+        },
+        "manga": {
+            "title": "Manga desk",
+            "description": "New release chatter, industry updates, and manga-focused coverage pulled into one searchable stream.",
+        },
+        "comics": {
+            "title": "Comics desk",
+            "description": "Comics headlines, graphic novel coverage, and crossover stories that broaden discovery traffic.",
+        },
+    }
+    TOPIC_STOPWORDS = {
+        "news",
+        "update",
+        "updates",
+        "chapter",
+        "chapters",
+        "episode",
+        "episodes",
+        "season",
+        "movie",
+        "film",
+        "anime",
+        "manga",
+        "manhwa",
+        "comics",
+        "comic",
+        "the",
+        "and",
+        "for",
+        "with",
+        "from",
+        "into",
+        "after",
+        "about",
+        "your",
+        "their",
+        "this",
+        "that",
+        "will",
+        "gets",
+        "more",
+        "have",
+        "has",
+        "new",
     }
 
     def __init__(
@@ -234,7 +284,8 @@ class ManhwaFeedService:
                 return cached
 
         sources = self.repository.list_feed_sources(limit=50)
-        entries = self.repository.list_feed_entries(limit=120)
+        source_title_map = {item["slug"]: item["title"] for item in sources}
+        entries = [self._decorate_entry(item, source_title_map) for item in self.repository.list_feed_entries(limit=120)]
         latest_entries = entries[:24]
         counts = {
             "all": len(entries),
@@ -254,19 +305,35 @@ class ManhwaFeedService:
                 }
             )
 
+        lead_entry = latest_entries[0] if latest_entries else None
+        headline_entries = latest_entries[1:6]
+        feature_entries = latest_entries[6:12]
+        news_briefs = latest_entries[12:20]
         overview = {
             "counts": counts,
             "sources": by_source,
             "latest_entries": latest_entries,
             "featured_entries": latest_entries[:6],
+            "lead_entry": lead_entry,
+            "headline_entries": headline_entries,
+            "feature_entries": feature_entries,
+            "news_briefs": news_briefs,
+            "source_channels": [item for item in by_source if item.get("latest_entry")][:6],
+            "trending_topics": self._build_trending_topics(entries),
+            "category_sections": self._build_category_sections(entries),
             "manhwa_entries": [item for item in entries if item.get("category") == "manhwa"][:8],
             "manga_entries": [item for item in entries if item.get("category") == "manga"][:8],
             "comics_entries": [item for item in entries if item.get("category") == "comics"][:8],
             "latest_sync": sync_runs[0] if sync_runs else {},
             "recent_sync_runs": sync_runs,
+            "coverage": {
+                "interval_minutes": max(5, self.config.manhwa_sync_interval_minutes),
+                "last_sync_human": self._relative_timestamp((sync_runs[0] if sync_runs else {}).get("finished_at")),
+                "channels": len([item for item in by_source if item.get("active", True)]),
+            },
             "seo": {
-                "title": "Animha Manhwa, Manga, and Comics Updates",
-                "description": "Track manhwa, manga, and comics updates from live RSS and Atom feeds with a searchable, readable catalog and SEO-ready landing pages.",
+                "title": "Animha Newsroom | Manhwa, Manga, and Comics Headlines",
+                "description": "Read a live newsroom-style stream of manhwa, manga, and comics headlines, updates, and discovery stories published automatically on Animha.",
             },
             "monetization_notes": [
                 "Use public landing pages, genre hubs, and source-specific updates to attract organic traffic.",
@@ -278,11 +345,31 @@ class ManhwaFeedService:
             self.cache_service.set_json(cache_key, overview, ttl_seconds=self.OVERVIEW_CACHE_TTL_SECONDS)
         return overview
 
+    def should_auto_refresh(self, overview: dict[str, Any]) -> bool:
+        latest_sync = overview.get("latest_sync") or {}
+        finished_at = str(latest_sync.get("finished_at") or latest_sync.get("started_at") or "").strip()
+        if not finished_at:
+            return not bool(overview.get("latest_entries"))
+        try:
+            parsed = datetime.fromisoformat(finished_at)
+        except ValueError:
+            return False
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        refresh_after = timedelta(minutes=max(10, int(self.config.manhwa_sync_interval_minutes or 30)))
+        return utc_now() - parsed.astimezone(timezone.utc) >= refresh_after
+
     def list_entries(self, *, category: str | None = None, limit: int = 60) -> list[dict[str, Any]]:
-        return self.repository.list_feed_entries(category=category, limit=limit)
+        source_title_map = {item["slug"]: item["title"] for item in self.repository.list_feed_sources(limit=50)}
+        entries = self.repository.list_feed_entries(category=category, limit=limit)
+        return [self._decorate_entry(item, source_title_map) for item in entries]
 
     def get_entry(self, slug: str) -> dict[str, Any] | None:
-        return self.repository.get_feed_entry(slug)
+        entry = self.repository.get_feed_entry(slug)
+        if entry is None:
+            return None
+        source_title_map = {item["slug"]: item["title"] for item in self.repository.list_feed_sources(limit=50)}
+        return self._decorate_entry(entry, source_title_map)
 
     def build_reader_context(self, slug: str) -> dict[str, Any] | None:
         entry = self.get_entry(slug)
@@ -290,7 +377,7 @@ class ManhwaFeedService:
             return None
         related = [
             item
-            for item in self.repository.list_feed_entries(category=entry.get("category"), limit=12)
+            for item in self.list_entries(category=entry.get("category"), limit=12)
             if item.get("slug") != slug
         ][:6]
         paragraphs = self._paragraphs(entry.get("content_text") or entry.get("summary_text") or "")
@@ -534,6 +621,72 @@ class ManhwaFeedService:
             return parts
         line = value.strip()
         return [line] if line else []
+
+    def _decorate_entry(self, entry: dict[str, Any], source_title_map: dict[str, str]) -> dict[str, Any]:
+        enriched = dict(entry)
+        summary = (entry.get("summary_text") or entry.get("content_text") or "").strip()
+        enriched["summary_preview"] = summary[:220].strip() + ("..." if len(summary) > 220 else "")
+        enriched["source_title"] = source_title_map.get(entry.get("source_slug", ""), entry.get("source_slug", ""))
+        enriched["display_time"] = self._relative_timestamp(entry.get("published_at") or entry.get("fetched_at"))
+        enriched["eyebrow"] = self.CATEGORY_COPY.get(entry.get("category", ""), {}).get("title", "News desk")
+        return enriched
+
+    def _build_trending_topics(self, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        counter: Counter[str] = Counter()
+        for entry in entries[:40]:
+            for tag in entry.get("tags", [])[:4]:
+                cleaned = self._clean_text(tag).lower()
+                if cleaned and cleaned not in self.TOPIC_STOPWORDS:
+                    counter[cleaned] += 3
+            for token in re.findall(r"[a-z0-9][a-z0-9+'-]{2,}", str(entry.get("title", "")).lower()):
+                if token not in self.TOPIC_STOPWORDS and not token.isdigit():
+                    counter[token] += 1
+        topics = []
+        for label, count in counter.most_common(10):
+            topics.append({"label": label.title(), "count": count})
+        return topics
+
+    def _build_category_sections(self, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        sections: list[dict[str, Any]] = []
+        for slug in ("manhwa", "manga", "comics"):
+            section_entries = [item for item in entries if item.get("category") == slug][:5]
+            if not section_entries:
+                continue
+            copy = self.CATEGORY_COPY[slug]
+            sections.append(
+                {
+                    "slug": slug,
+                    "title": copy["title"],
+                    "description": copy["description"],
+                    "lead": section_entries[0],
+                    "items": section_entries[1:5],
+                }
+            )
+        return sections
+
+    def _relative_timestamp(self, value: str | None) -> str:
+        cleaned = str(value or "").strip()
+        if not cleaned:
+            return "Just updated"
+        try:
+            parsed = datetime.fromisoformat(cleaned)
+        except ValueError:
+            return cleaned
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        delta = utc_now() - parsed.astimezone(timezone.utc)
+        minutes = int(delta.total_seconds() // 60)
+        if minutes < 1:
+            return "Just updated"
+        if minutes < 60:
+            return f"{minutes}m ago"
+        hours = minutes // 60
+        if hours < 24:
+            return f"{hours}h ago"
+        days = hours // 24
+        if days < 7:
+            return f"{days}d ago"
+        return parsed.strftime("%d %b %Y")
 
     def _clear_cached_views(self) -> None:
         if self.cache_service is None:

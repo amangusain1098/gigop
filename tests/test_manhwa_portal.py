@@ -62,7 +62,8 @@ class ManhwaPortalTests(unittest.TestCase):
                     with TestClient(create_app()) as client:
                         home = client.get("/manhwa")
                         self.assertEqual(home.status_code, 200)
-                        self.assertIn("Automated manhwa, manga, and comics tracking", home.text)
+                        self.assertIn("Animha", home.text)
+                        self.assertIn("Latest headlines, release chatter, and discovery stories", home.text)
                         self.assertIn("New Manhwa Chapter Drops", home.text)
                         self.assertNotIn("/dashboard", home.text)
                         self.assertNotIn("/studio/manhwa", home.text)

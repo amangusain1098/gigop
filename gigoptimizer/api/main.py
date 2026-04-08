@@ -394,7 +394,7 @@ def create_app() -> FastAPI:
         if (
             config.manhwa_enabled
             and config.manhwa_auto_sync_enabled
-            and not overview["latest_entries"]
+            and (not overview["latest_entries"] or manhwa_service.should_auto_refresh(overview))
         ):
             await asyncio.to_thread(manhwa_service.sync_all_sources, force=True)
             overview = manhwa_service.build_overview()
@@ -426,9 +426,9 @@ def create_app() -> FastAPI:
         return (
             "<?xml version='1.0' encoding='UTF-8'?>"
             "<rss version='2.0'><channel>"
-            "<title>Animha Manhwa Feed</title>"
+            "<title>Animha Newsroom Feed</title>"
             f"<link>{site_url}</link>"
-            "<description>Latest fetched manhwa, manga, and comics updates tracked by Animha.</description>"
+            "<description>Latest manhwa, manga, and comics headlines published automatically on Animha.</description>"
             + "".join(items)
             + "</channel></rss>"
         )
@@ -457,9 +457,18 @@ def create_app() -> FastAPI:
     async def manhwa_home(request: Request, category: str | None = None) -> HTMLResponse:
         if not config.manhwa_enabled:
             raise HTTPException(status_code=404, detail="Animha Manhwa portal is disabled.")
+        if category and category not in {"manhwa", "manga", "comics"}:
+            raise HTTPException(status_code=404, detail="Category not found.")
         overview = await ensure_manhwa_content()
         entries = manhwa_service.list_entries(category=category, limit=36) if category else overview["latest_entries"]
         session = auth_service.get_request_session(request)
+        canonical_path = f"/manhwa?category={category}" if category else "/manhwa"
+        page_seo = dict(overview.get("seo") or {})
+        if category:
+            page_seo = {
+                "title": f"Animha {category.title()} News | Latest {category.title()} Headlines",
+                "description": f"Latest {category} headlines, release chatter, and discovery stories published automatically on Animha.",
+            }
         return templates.TemplateResponse(
             request,
             "manhwa_home.html",
@@ -467,8 +476,9 @@ def create_app() -> FastAPI:
                 "overview": overview,
                 "entries": entries,
                 "active_category": category or "all",
+                "page_seo": page_seo,
                 "auth_state": auth_service.get_auth_state(session),
-                "canonical_url": absolute_url(request, "/manhwa"),
+                "canonical_url": absolute_url(request, canonical_path),
             },
         )
 

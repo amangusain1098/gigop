@@ -3,153 +3,268 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ overview.seo.title }}</title>
-  <meta name="description" content="{{ overview.seo.description }}">
+  <title>{{ page_seo.title }}</title>
+  <meta name="description" content="{{ page_seo.description }}">
   <link rel="canonical" href="{{ canonical_url }}">
   <link rel="alternate" type="application/rss+xml" title="Animha feed" href="/manhwa/feed.xml">
-  <meta property="og:title" content="{{ overview.seo.title }}">
-  <meta property="og:description" content="{{ overview.seo.description }}">
+  <meta property="og:title" content="{{ page_seo.title }}">
+  <meta property="og:description" content="{{ page_seo.description }}">
   <meta property="og:type" content="website">
   <meta property="og:url" content="{{ canonical_url }}">
+  {% if overview.lead_entry and overview.lead_entry.image_url %}<meta property="og:image" content="{{ overview.lead_entry.image_url }}">{% endif %}
   <link rel="stylesheet" href="/static/manhwa.css">
   <script type="application/ld+json">
     {
       "@context": "https://schema.org",
-      "@type": "WebSite",
+      "@type": "NewsMediaOrganization",
       "name": "Animha",
       "url": "{{ canonical_url }}",
-      "description": "{{ overview.seo.description }}"
+      "description": "{{ page_seo.description }}"
     }
   </script>
 </head>
-<body class="manhwa-body">
-  <main class="manhwa-shell">
-    <nav class="manhwa-nav">
-      <div>
-        <div class="brand">Animha Content Engine</div>
-        <strong>Automated manhwa, manga, and comics tracking</strong>
+<body class="manhwa-home-body">
+  <header class="news-topbar">
+    <div class="news-topbar__inner">
+      <div class="news-brand-block">
+        <a class="news-wordmark" href="/manhwa">Animha</a>
+        <span class="news-edition">Newsroom</span>
       </div>
-      <div class="nav-links">
-        <a class="nav-pill" href="/manhwa">Home</a>
-        <a class="nav-pill" href="/manhwa?category=manhwa">Manhwa</a>
-        <a class="nav-pill" href="/manhwa?category=manga">Manga</a>
-        <a class="nav-pill" href="/manhwa?category=comics">Comics</a>
+      <div class="news-top-meta">
+        <span>Auto-published every {{ overview.coverage.interval_minutes }} minutes</span>
+        <span>{{ overview.coverage.channels }} channels tracked</span>
+        <span>{{ overview.coverage.last_sync_human }}</span>
       </div>
-    </nav>
+    </div>
+  </header>
 
-    <section class="hero-card">
-      <div class="hero-copy">
-        <div class="brand">SEO-ready content hub</div>
-        <h1>Fresh reading updates, discovery pages, and news-friendly landing pages for manhwa, manga, and comics.</h1>
+  <main class="news-shell">
+    <section class="news-masthead">
+      <div class="news-masthead__copy">
+        <div class="news-label">Manhwa, manga, and comics coverage</div>
+        <h1>Latest headlines, release chatter, and discovery stories collected into one SEO-ready news hub.</h1>
         <p>
-          Animha ingests legal news and update feeds, classifies entries, creates readable landing pages on your domain,
-          and gives you ad-ready surfaces for discovery traffic.
+          Animha watches live feeds from trusted news and comics sources, then publishes fresh headline pages on your own domain
+          so the site keeps growing without manual posting.
         </p>
-        <div class="category-nav">
-          <a class="category-pill {% if active_category == 'all' %}category-pill--active{% endif %}" href="/manhwa">All</a>
-          <a class="category-pill {% if active_category == 'manhwa' %}category-pill--active{% endif %}" href="/manhwa?category=manhwa">Manhwa</a>
-          <a class="category-pill {% if active_category == 'manga' %}category-pill--active{% endif %}" href="/manhwa?category=manga">Manga</a>
-          <a class="category-pill {% if active_category == 'comics' %}category-pill--active{% endif %}" href="/manhwa?category=comics">Comics</a>
-        </div>
       </div>
-      <div class="stat-grid">
-        <div class="stat-card"><span>Total fetched</span><strong>{{ overview.counts.all }}</strong></div>
-        <div class="stat-card"><span>Manhwa</span><strong>{{ overview.counts.manhwa }}</strong></div>
-        <div class="stat-card"><span>Manga</span><strong>{{ overview.counts.manga }}</strong></div>
-        <div class="stat-card"><span>Comics</span><strong>{{ overview.counts.comics }}</strong></div>
-      </div>
+      <nav class="news-nav" aria-label="Content categories">
+        <a class="news-nav__pill {% if active_category == 'all' %}news-nav__pill--active{% endif %}" href="/manhwa">All news</a>
+        <a class="news-nav__pill {% if active_category == 'manhwa' %}news-nav__pill--active{% endif %}" href="/manhwa?category=manhwa">Manhwa</a>
+        <a class="news-nav__pill {% if active_category == 'manga' %}news-nav__pill--active{% endif %}" href="/manhwa?category=manga">Manga</a>
+        <a class="news-nav__pill {% if active_category == 'comics' %}news-nav__pill--active{% endif %}" href="/manhwa?category=comics">Comics</a>
+      </nav>
     </section>
 
-    <section class="dashboard-grid">
-      <article class="panel">
-        <h2>Featured updates</h2>
-        <p class="panel-subtitle">Use these pages as SEO landing pages, newsletter hooks, and category entry points.</p>
-        <div class="entry-grid">
-          {% for entry in entries %}
-          <article class="entry-card">
+    {% if overview.featured_entries %}
+    <section class="headline-ticker" aria-label="Latest headlines">
+      <span class="headline-ticker__label">Latest</span>
+      <div class="headline-ticker__items">
+        {% for item in overview.featured_entries %}
+        <a href="/manhwa/read/{{ item.slug }}">{{ item.title }}</a>
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+
+    <section class="hero-grid">
+      <article class="lead-story">
+        {% if overview.lead_entry %}
+          {% if overview.lead_entry.image_url %}
+          <a class="lead-story__image-wrap" href="/manhwa/read/{{ overview.lead_entry.slug }}">
+            <img class="lead-story__image" src="{{ overview.lead_entry.image_url }}" alt="{{ overview.lead_entry.title }}">
+          </a>
+          {% endif %}
+          <div class="lead-story__body">
+            <div class="story-meta-row">
+              <span class="story-kicker">{{ overview.lead_entry.eyebrow }}</span>
+              <span>{{ overview.lead_entry.source_title }}</span>
+              <span>{{ overview.lead_entry.display_time }}</span>
+            </div>
+            <h2><a href="/manhwa/read/{{ overview.lead_entry.slug }}">{{ overview.lead_entry.title }}</a></h2>
+            <p>{{ overview.lead_entry.summary_preview }}</p>
+            <div class="story-tag-row">
+              <span class="story-tag">{{ overview.lead_entry.category }}</span>
+              {% for tag in overview.lead_entry.tags[:3] %}
+              <span class="story-tag">{{ tag }}</span>
+              {% endfor %}
+            </div>
+          </div>
+        {% else %}
+          <div class="lead-story__body">
+            <div class="news-label">Fresh feed pending</div>
+            <h2>The newsroom is warming up.</h2>
+            <p>The portal is ready to publish as soon as the first set of feeds lands.</p>
+          </div>
+        {% endif %}
+      </article>
+
+      <aside class="headline-stack editorial-panel">
+        <div class="panel-heading">
+          <h2>Top headlines</h2>
+          <p>Fast-moving stories from the current feed window.</p>
+        </div>
+        <div class="headline-stack__items">
+          {% for item in overview.headline_entries %}
+          <article class="headline-card">
+            <div class="story-meta-row">
+              <span class="story-kicker">{{ item.source_title }}</span>
+              <span>{{ item.display_time }}</span>
+            </div>
+            <h3><a href="/manhwa/read/{{ item.slug }}">{{ item.title }}</a></h3>
+            <p>{{ item.summary_preview }}</p>
+          </article>
+          {% endfor %}
+        </div>
+      </aside>
+
+      <aside class="coverage-rail editorial-panel">
+        <div class="panel-heading">
+          <h2>Coverage snapshot</h2>
+          <p>What the site is tracking right now.</p>
+        </div>
+        <div class="coverage-stat-list">
+          <div>
+            <span class="coverage-stat-label">Stories published</span>
+            <strong>{{ overview.counts.all }}</strong>
+          </div>
+          <div>
+            <span class="coverage-stat-label">Manhwa stories</span>
+            <strong>{{ overview.counts.manhwa }}</strong>
+          </div>
+          <div>
+            <span class="coverage-stat-label">Manga stories</span>
+            <strong>{{ overview.counts.manga }}</strong>
+          </div>
+          <div>
+            <span class="coverage-stat-label">Comics stories</span>
+            <strong>{{ overview.counts.comics }}</strong>
+          </div>
+        </div>
+        <div class="coverage-note">
+          <strong>Automation status</strong>
+          <p>New feed items are pulled, classified, and published to the site automatically so this stays current like a newsroom instead of a manual blog.</p>
+        </div>
+        {% if overview.trending_topics %}
+        <div class="topic-cloud">
+          {% for topic in overview.trending_topics[:8] %}
+          <span class="topic-chip">{{ topic.label }}</span>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </aside>
+    </section>
+
+    <section class="news-main-grid">
+      <section class="editorial-panel">
+        <div class="panel-heading">
+          <h2>{% if active_category == 'all' %}Latest stories{% else %}Latest {{ active_category|title }} stories{% endif %}</h2>
+          <p>Larger cards, faster scanability, and direct article pages kept on your own domain.</p>
+        </div>
+        <div class="story-card-grid">
+          {% for entry in entries[:12] %}
+          <article class="story-card">
             {% if entry.image_url %}
-            <img src="{{ entry.image_url }}" alt="{{ entry.title }}">
+            <a href="/manhwa/read/{{ entry.slug }}">
+              <img src="{{ entry.image_url }}" alt="{{ entry.title }}">
+            </a>
             {% endif %}
-            <div class="entry-card-content">
-              <div class="tag-row">
-                <span class="tag">{{ entry.category }}</span>
-                <span class="tag">{{ entry.source_slug }}</span>
+            <div class="story-card__body">
+              <div class="story-meta-row">
+                <span class="story-kicker">{{ entry.source_title }}</span>
+                <span>{{ entry.display_time }}</span>
               </div>
-              <h3><a class="entry-link" href="/manhwa/read/{{ entry.slug }}">{{ entry.title }}</a></h3>
-              <p>{{ (entry.summary_text or entry.content_text or '')[:170] }}{% if (entry.summary_text or entry.content_text or '')|length > 170 %}...{% endif %}</p>
-              <p class="entry-meta">Published {{ entry.published_at or entry.fetched_at }}{% if entry.author %} | {{ entry.author }}{% endif %}</p>
-              <a class="source-link" href="/manhwa/read/{{ entry.slug }}">Read update</a>
+              <h3><a href="/manhwa/read/{{ entry.slug }}">{{ entry.title }}</a></h3>
+              <p>{{ entry.summary_preview }}</p>
+              <div class="story-tag-row">
+                <span class="story-tag">{{ entry.category }}</span>
+                {% for tag in entry.tags[:2] %}
+                <span class="story-tag">{{ tag }}</span>
+                {% endfor %}
+              </div>
             </div>
           </article>
           {% endfor %}
         </div>
-      </article>
+      </section>
 
-      <aside class="panel">
-        <h2>Revenue-ready layout</h2>
-        <div class="metric-chip"><span>Last sync</span><strong>{{ overview.latest_sync.finished_at or 'Pending first sync' }}</strong></div>
-        <div class="metric-chip"><span>Tracked sources</span><strong>{{ overview.sources|length }}</strong></div>
-        <div class="metric-chip"><span>Latest new entries</span><strong>{{ overview.latest_sync.total_new_entries or 0 }}</strong></div>
-        <div class="metric-chip"><span>Errors last run</span><strong>{{ overview.latest_sync.error_count or 0 }}</strong></div>
-        <div class="sync-card"><strong>Leaderboard ad slot</strong><p class="small-note">Top of home, category, and series pages.</p></div>
-        <div class="sync-card"><strong>In-feed sponsored card</strong><p class="small-note">Blend promoted reading guides into update lists.</p></div>
-        <div class="sync-card"><strong>Reader mid-content ad slot</strong><p class="small-note">Monetize long update pages and editorial features.</p></div>
+      <aside class="editorial-sidebar">
+        <section class="editorial-panel">
+          <div class="panel-heading">
+            <h2>News brief</h2>
+            <p>Quick-hit links for fast browsing.</p>
+          </div>
+          <div class="brief-list">
+            {% for item in overview.news_briefs %}
+            <article class="brief-item">
+              <strong><a href="/manhwa/read/{{ item.slug }}">{{ item.title }}</a></strong>
+              <span>{{ item.source_title }} · {{ item.display_time }}</span>
+            </article>
+            {% endfor %}
+          </div>
+        </section>
+
+        <section class="editorial-panel">
+          <div class="panel-heading">
+            <h2>Source channels</h2>
+            <p>Trusted outlets currently feeding the site.</p>
+          </div>
+          <div class="channel-list">
+            {% for source in overview.source_channels %}
+            <article class="channel-card">
+              <div class="story-meta-row">
+                <span class="story-kicker">{{ source.category }}</span>
+                <span>{{ source.entry_count }} stories</span>
+              </div>
+              <h3>{{ source.title }}</h3>
+              {% if source.latest_entry %}
+              <p><a href="/manhwa/read/{{ source.latest_entry.slug }}">{{ source.latest_entry.title }}</a></p>
+              {% endif %}
+              {% if source.site_url %}<a class="channel-link" href="{{ source.site_url }}">Source site</a>{% endif %}
+            </article>
+            {% endfor %}
+          </div>
+        </section>
       </aside>
     </section>
 
-    <section class="panel">
-      <h2>By category</h2>
-      <div class="source-grid">
-        <article class="source-card">
-          <div class="source-card-content">
-            <h3>Manhwa discovery</h3>
-            <p>Fresh updates and discovery pages focused on webtoon and Korean comics traffic.</p>
-            {% for item in overview.manhwa_entries[:4] %}
-            <p><a class="entry-link" href="/manhwa/read/{{ item.slug }}">{{ item.title }}</a></p>
-            {% endfor %}
-          </div>
-        </article>
-        <article class="source-card">
-          <div class="source-card-content">
-            <h3>Manga discovery</h3>
-            <p>News-led and update-led pages optimized for search intent around new releases.</p>
-            {% for item in overview.manga_entries[:4] %}
-            <p><a class="entry-link" href="/manhwa/read/{{ item.slug }}">{{ item.title }}</a></p>
-            {% endfor %}
-          </div>
-        </article>
-        <article class="source-card">
-          <div class="source-card-content">
-            <h3>Comics discovery</h3>
-            <p>Broader comic traffic capture with crossover potential for reviews and buying guides.</p>
-            {% for item in overview.comics_entries[:4] %}
-            <p><a class="entry-link" href="/manhwa/read/{{ item.slug }}">{{ item.title }}</a></p>
-            {% endfor %}
-          </div>
-        </article>
+    {% for section in overview.category_sections %}
+    <section class="desk-section">
+      <div class="desk-section__header">
+        <div>
+          <div class="news-label">{{ section.slug }}</div>
+          <h2>{{ section.title }}</h2>
+        </div>
+        <p>{{ section.description }}</p>
       </div>
-    </section>
-
-    <section class="panel">
-      <h2>Tracked sources</h2>
-      <div class="source-grid">
-        {% for source in overview.sources %}
-        <article class="source-card">
-          <div class="source-card-content">
-            <div class="tag-row">
-              <span class="tag">{{ source.category }}</span>
-              {% if source.active %}<span class="tag">active</span>{% endif %}
+      <div class="desk-grid">
+        <article class="desk-lead">
+          {% if section.lead.image_url %}
+          <a href="/manhwa/read/{{ section.lead.slug }}">
+            <img src="{{ section.lead.image_url }}" alt="{{ section.lead.title }}">
+          </a>
+          {% endif %}
+          <div class="story-meta-row">
+            <span class="story-kicker">{{ section.lead.source_title }}</span>
+            <span>{{ section.lead.display_time }}</span>
+          </div>
+          <h3><a href="/manhwa/read/{{ section.lead.slug }}">{{ section.lead.title }}</a></h3>
+          <p>{{ section.lead.summary_preview }}</p>
+        </article>
+        <div class="desk-list">
+          {% for item in section["items"] %}
+          <article class="desk-list__item">
+            <div class="story-meta-row">
+              <span class="story-kicker">{{ item.source_title }}</span>
+              <span>{{ item.display_time }}</span>
             </div>
-            <h3>{{ source.title }}</h3>
-            <p class="source-meta">{{ source.entry_count }} stored updates</p>
-            <p class="source-meta">Last success: {{ source.last_success_at or 'Never' }}</p>
-            {% if source.last_error %}<p class="small-note">Last error: {{ source.last_error }}</p>{% endif %}
-            {% if source.site_url %}<a class="source-link" href="{{ source.site_url }}">Visit source</a>{% endif %}
-          </div>
-        </article>
-        {% endfor %}
+            <h3><a href="/manhwa/read/{{ item.slug }}">{{ item.title }}</a></h3>
+          </article>
+          {% endfor %}
+        </div>
       </div>
     </section>
+    {% endfor %}
   </main>
 </body>
 </html>
