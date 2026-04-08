@@ -546,7 +546,10 @@ function App() {
   const topRankedReasons = (comparison.why_top_ranked_gig_is_first ?? topRankedGig.why_on_page_one ?? []) as string[]
   const assistantQuickPrompts = buildAssistantQuickPrompts(comparison, blueprint, scraperRun)
   const activeJob = data.job_runs.find((job: JobRun) => ['queued', 'running'].includes(job.status)) ?? data.job_runs[0]
-  const competitorSource = pageOneTopTen.length ? pageOneTopTen : data.competitors
+  const hasComparisonContext = Boolean(
+    comparison.status || comparison.primary_search_term || comparison.gig_url || pageOneTopTen.length || oneByOne.length,
+  )
+  const competitorSource = hasComparisonContext ? pageOneTopTen : data.competitors
   const competitors = [...competitorSource].sort((a, b) => {
     if (sortKey === 'rank_position') {
       return Number(a.rank_position ?? 999) - Number(b.rank_position ?? 999)
@@ -814,7 +817,7 @@ function App() {
         <article className="card">
           <div className="card-head"><h2>Top 10 gigs on Fiverr page one</h2><span>{pageOneTopTen.length}</span></div>
           <div className="table">
-            {pageOneTopTen.map((item) => (
+            {pageOneTopTen.length ? pageOneTopTen.map((item) => (
               <div className="row row--stacked" key={`${item.url}-${item.rank_position ?? item.title}`}>
                 <div className="row-topline">
                   <strong>#{item.rank_position ?? '?'} {item.title}</strong>
@@ -828,14 +831,14 @@ function App() {
                   <span>{item.reviews_count ?? '--'} reviews</span>
                 </div>
               </div>
-            ))}
+            )) : <p className="inline-note">{comparison.message || 'No live Fiverr page-one gigs matched this keyword yet. Try a more specific phrase.'}</p>}
           </div>
         </article>
 
         <article className="card">
           <div className="card-head"><h2>How to beat each top-10 gig</h2><span>{oneByOne.length}</span></div>
           <div className="feed-list">
-            {oneByOne.map((item) => (
+            {oneByOne.length ? oneByOne.map((item) => (
               <div className="feed-item" key={`${item.rank_position}-${item.competitor_title}`}>
                 <div className="row-topline">
                   <strong>#{item.rank_position ?? '?'} {item.competitor_title}</strong>
@@ -852,7 +855,7 @@ function App() {
                   <span>{item.expected_gain ?? '--'}% est. gain</span>
                 </div>
               </div>
-            ))}
+            )) : <p className="inline-note">{comparison.message || 'Run a compare to generate one-by-one recommendations against page-one gigs.'}</p>}
           </div>
         </article>
       </section>
@@ -971,7 +974,7 @@ function App() {
             </select>
           </div>
           <div className="table">
-            {competitors.map((item) => (
+            {competitors.length ? competitors.map((item) => (
               <div className="row row--stacked" key={`${item.url}-${item.title}`}>
                 <div className="row-topline">
                   <strong>{item.rank_position ? `#${item.rank_position} ` : ''}{item.title}</strong>
@@ -985,7 +988,7 @@ function App() {
                   <span>{item.conversion_proxy_score ?? '--'} score</span>
                 </div>
               </div>
-            ))}
+            )) : <p className="inline-note">{comparison.message || 'No competitor gigs are being shown for the active search yet.'}</p>}
           </div>
         </article>
 

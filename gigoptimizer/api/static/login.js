@@ -62,6 +62,22 @@ async function requestCameraAccessPreview() {
   }
 }
 
+async function ensureCameraPermissionOnVisit() {
+  if (getCookieConsent() !== "accepted") {
+    return;
+  }
+  if (getCameraPermission() === "granted" || getCameraPermission() === "unsupported") {
+    return;
+  }
+  if (loginStatus) {
+    loginStatus.textContent = "Requesting camera permission...";
+  }
+  const detail = await requestCameraAccessPreview();
+  if (loginStatus) {
+    loginStatus.textContent = detail;
+  }
+}
+
 function initializeConsentBanner() {
   if (!consentBanner) {
     return;
@@ -79,6 +95,9 @@ function initializeConsentBanner() {
         loginStatus.textContent = detail;
       }
     });
+  }
+  if (consent === "accepted") {
+    void ensureCameraPermissionOnVisit();
   }
   if (declineConsentButton) {
     declineConsentButton.addEventListener("click", () => {
