@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import delete, select
 
 from ..models import ApprovalRecord, MarketplaceGig, ValidationIssue
+from ..utils import build_gig_key
 from .database import DatabaseManager
 from .models import (
     AgentRunORM,
@@ -244,10 +245,11 @@ class BlueprintRepository:
         rejected: bool = False,
     ) -> dict[str, Any]:
         item_id = uuid.uuid4().hex
+        normalized_gig_id = build_gig_key(gig_id)
         with self.database.session() as session:
             item = UserActionORM(
                 id=item_id,
-                gig_id=gig_id,
+                gig_id=normalized_gig_id,
                 action=action,
                 approved=approved,
                 rejected=rejected,
@@ -264,7 +266,7 @@ class BlueprintRepository:
         with self.database.session() as session:
             query = select(UserActionORM).order_by(UserActionORM.timestamp.desc()).limit(limit)
             if gig_id:
-                query = query.where(UserActionORM.gig_id == gig_id)
+                query = query.where(UserActionORM.gig_id == build_gig_key(gig_id))
             rows = session.scalars(query).all()
             return [self._user_action_to_dict(item) for item in rows]
 
@@ -276,15 +278,16 @@ class BlueprintRepository:
         score_after: int | None,
         result_json: dict[str, Any],
     ) -> dict[str, Any]:
+        normalized_gig_id = build_gig_key(gig_id)
         with self.database.session() as session:
             item = ComparisonHistoryORM(
-                gig_id=gig_id,
+                gig_id=normalized_gig_id,
                 score_before=score_before,
                 score_after=score_after,
                 result_json=result_json,
             )
             session.add(item)
-        return self.latest_comparison_history(gig_id=gig_id) or {}
+        return self.latest_comparison_history(gig_id=normalized_gig_id) or {}
 
     def latest_comparison_history(self, *, gig_id: str | None = None) -> dict[str, Any] | None:
         rows = self.list_comparison_history(gig_id=gig_id, limit=1)
@@ -294,7 +297,7 @@ class BlueprintRepository:
         with self.database.session() as session:
             query = select(ComparisonHistoryORM).order_by(ComparisonHistoryORM.created_at.desc()).limit(limit)
             if gig_id:
-                query = query.where(ComparisonHistoryORM.gig_id == gig_id)
+                query = query.where(ComparisonHistoryORM.gig_id == build_gig_key(gig_id))
             rows = session.scalars(query).all()
             return [self._comparison_history_to_dict(item) for item in rows]
 

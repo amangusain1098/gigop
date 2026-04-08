@@ -30,6 +30,7 @@ from ..models import (
 from ..orchestrator import GigOptimizerOrchestrator
 from ..persistence import BlueprintRepository, DatabaseManager
 from ..queue import HITLQueue
+from ..utils import build_gig_key
 from ..validators import HallucinationValidator
 from .ai_overview_service import AIOverviewService
 from .cache_service import CacheService
@@ -1645,13 +1646,13 @@ class DashboardService:
     def _gig_identifier(self, gig_url: str | None = None) -> str:
         target = str(gig_url or "").strip()
         if target:
-            return target
+            return build_gig_key(target)
         state = self._load_dashboard_state()
         comparison = state.gig_comparison or {}
         if comparison.get("gig_url"):
-            return str(comparison["gig_url"])
+            return build_gig_key(str(comparison["gig_url"]))
         snapshot = self._load_snapshot()
-        return self._normalize_query(snapshot.title) or "primary"
+        return build_gig_key(self._normalize_query(snapshot.title) or "primary")
 
     def _memory_context(self, *, gig_id: str) -> dict[str, Any]:
         return {
