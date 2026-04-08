@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Install Fiverr Capture Extension</title>
+  <meta name="robots" content="noindex,nofollow" />
+  <style>
+    body {
+      margin: 0;
+      font-family: "Segoe UI", sans-serif;
+      background: linear-gradient(180deg, #08111f 0%, #13243b 100%);
+      color: #e8f2ff;
+    }
+    .shell {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 40px 20px 60px;
+      display: grid;
+      gap: 20px;
+    }
+    .card {
+      border: 1px solid rgba(145, 177, 211, 0.18);
+      border-radius: 22px;
+      background: rgba(8, 17, 31, 0.82);
+      padding: 24px;
+      box-shadow: 0 24px 50px rgba(0, 0, 0, 0.28);
+    }
+    h1, h2 {
+      margin: 0 0 10px;
+    }
+    p, li, code {
+      color: #c5d5e8;
+      line-height: 1.6;
+    }
+    ol, ul {
+      margin: 0;
+      padding-left: 20px;
+      display: grid;
+      gap: 10px;
+    }
+    .meta {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+    }
+    .meta-item {
+      border-radius: 16px;
+      background: rgba(15, 27, 45, 0.9);
+      padding: 14px;
+    }
+    .meta-item strong {
+      display: block;
+      margin-bottom: 8px;
+      color: #f7fbff;
+    }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 46px;
+      border-radius: 999px;
+      padding: 0 18px;
+      background: linear-gradient(135deg, #46b1ff 0%, #1789ff 100%);
+      color: #fff;
+      text-decoration: none;
+      font-weight: 700;
+    }
+    .button.secondary {
+      background: rgba(145, 177, 211, 0.16);
+      color: #eef5ff;
+    }
+    pre {
+      overflow: auto;
+      border-radius: 16px;
+      background: rgba(15, 27, 45, 0.96);
+      padding: 14px;
+      color: #f2f7ff;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="card">
+      <h1>Install Fiverr Capture Extension</h1>
+      <p>Use this extension to capture the Fiverr page you are already viewing in Chrome and send the visible cards into GigOptimizer Pro for live comparison.</p>
+      <div class="actions">
+        <a class="button" href="{{ install.download_url }}">Download ZIP</a>
+        <a class="button secondary" href="/dashboard">Back to dashboard</a>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Connection details</h2>
+      <div class="meta">
+        <div class="meta-item">
+          <strong>API base URL</strong>
+          <code>{{ install.api_base_url }}</code>
+        </div>
+        <div class="meta-item">
+          <strong>Extension API token</strong>
+          <code>{{ install.api_token or 'Not configured' }}</code>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Steps</h2>
+      <ol>
+        <li>Open <code>chrome://extensions</code>.</li>
+        <li>Turn on <strong>Developer mode</strong>.</li>
+        <li>Click <strong>Load unpacked</strong> if you extracted the ZIP, or unzip the downloaded extension first.</li>
+        <li>Select the <code>fiverr-market-capture</code> folder.</li>
+        <li>Open the extension popup and paste the API base URL and token from above.</li>
+        <li>Open a Fiverr search or gig page and click <strong>Capture current Fiverr page</strong>.</li>
+      </ol>
+    </section>
+
+    <section class="card">
+      <h2>Expected behavior</h2>
+      <ul>
+        <li>The extension reads the visible Fiverr cards in your browser only.</li>
+        <li>It sends those visible cards to your private GigOptimizer backend.</li>
+        <li>Your dashboard compares them with your active Fiverr gig and updates the market recommendations.</li>
+        <li>The dashboard install banner disappears automatically once the extension is detected on <code>animha.co.in</code>.</li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>

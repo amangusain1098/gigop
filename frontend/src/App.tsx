@@ -52,6 +52,7 @@ type CompetitorRecommendation = {
 }
 
 function App() {
+  const extensionPromptDismissKey = 'gigoptimizer-extension-install-dismissed'
   const [data, setData] = useState<BootstrapPayload | null>(null)
   const [gigUrl, setGigUrl] = useState('')
   const [terms, setTerms] = useState('')
@@ -69,6 +70,8 @@ function App() {
   const [assistantBusy, setAssistantBusy] = useState(false)
   const [assistantMessages, setAssistantMessages] = useState<Array<{ role: 'user' | 'assistant'; text: string; suggestions?: string[] }>>([])
   const [assistantInitialized, setAssistantInitialized] = useState(false)
+  const [extensionInstalled, setExtensionInstalled] = useState(false)
+  const [showExtensionPrompt, setShowExtensionPrompt] = useState(false)
   const [knowledgeFile, setKnowledgeFile] = useState<File | null>(null)
   const datasetInputRef = useRef<HTMLInputElement | null>(null)
   const assistantLogRef = useRef<HTMLDivElement | null>(null)
@@ -112,6 +115,30 @@ function App() {
     })
     return () => window.cancelAnimationFrame(frame)
   }, [assistantOpen, assistantMessages.length, assistantBusy])
+
+  useEffect(() => {
+    let timer = 0
+    function handleExtensionMessage(event: MessageEvent) {
+      const payload = event.data
+      if (!payload || payload.source !== 'gigoptimizer-extension') return
+      if (payload.type === 'ready') {
+        setExtensionInstalled(true)
+        setShowExtensionPrompt(false)
+      }
+    }
+    window.addEventListener('message', handleExtensionMessage)
+    window.postMessage({ source: 'gigoptimizer-dashboard', type: 'gigoptimizer-extension-ping' }, window.location.origin)
+    timer = window.setTimeout(() => {
+      const dismissed = window.localStorage.getItem(extensionPromptDismissKey) === '1'
+      if (!dismissed) {
+        setShowExtensionPrompt(true)
+      }
+    }, 1200)
+    return () => {
+      window.removeEventListener('message', handleExtensionMessage)
+      window.clearTimeout(timer)
+    }
+  }, [])
 
   function syncMarketplaceInputs(nextState: LegacyState) {
     const marketplace = nextState.notifications?.marketplace ?? {}
@@ -529,6 +556,22 @@ function App() {
     }
   }
 
+  async function copyExtensionToken(token: string) {
+    if (!token) return
+    try {
+      await navigator.clipboard.writeText(token)
+      setMessage('Extension token copied to clipboard.')
+      setError('')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Unable to copy the extension token.')
+    }
+  }
+
+  function dismissExtensionPrompt() {
+    window.localStorage.setItem(extensionPromptDismissKey, '1')
+    setShowExtensionPrompt(false)
+  }
+
   function handleAssistantKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
@@ -610,6 +653,15 @@ function App() {
   const assistantStatusLabel = aiSettings.enabled
     ? (aiSettings.configured ? `${assistantProviderLabel} configured` : `${assistantProviderLabel} fallback`)
     : 'local market fallback'
+  const extensionInstall = data.extension_install ?? {
+    enabled: false,
+    download_url: '/downloads/fiverr-market-capture.zip',
+    guide_url: '/extension/install',
+    token_configured: false,
+    api_token: '',
+    api_base_url: 'https://animha.co.in',
+  }
+  const shouldShowExtensionPrompt = extensionInstall.enabled && !extensionInstalled && showExtensionPrompt
 
   return (
     <main className="shell">
@@ -634,6 +686,29 @@ function App() {
       </section>
 
       {(message || error) && <section className={`flash ${error ? 'flash--error' : ''}`}>{error || message}</section>}
+
+      {shouldShowExtensionPrompt ? (
+        <section className="card extension-prompt">
+          <div className="card-head">
+            <h2>Install the Fiverr capture extension</h2>
+            <span className="status status--queued">recommended</span>
+          </div>
+          <p className="inline-note">
+            This site can’t silently install a Chrome extension for you, but it can prompt you to download it and open the
+            install guide automatically. Once the extension is loaded, this banner disappears on its own.
+          </p>
+          <div className="meta-grid">
+            <MetaItem label="API base URL" value={extensionInstall.api_base_url || 'https://animha.co.in'} />
+            <MetaItem label="Token" value={extensionInstall.token_configured ? 'Ready to copy' : 'Not configured'} />
+          </div>
+          <div className="button-row">
+            <a className="button-link" href={extensionInstall.download_url} target="_blank" rel="noopener noreferrer">Download extension ZIP</a>
+            <a className="button-link button-link--secondary" href={extensionInstall.guide_url} target="_blank" rel="noopener noreferrer">Open install guide</a>
+            <button className="secondary" onClick={() => void copyExtensionToken(extensionInstall.api_token || '')} disabled={!extensionInstall.api_token}>Copy API token</button>
+            <button className="secondary" onClick={dismissExtensionPrompt}>Dismiss</button>
+          </div>
+        </section>
+      ) : null}
 
       <section className="commands card">
         <div className="card-head">

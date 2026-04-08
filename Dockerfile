@@ -19,6 +19,7 @@ WORKDIR /app
 
 COPY pyproject.toml README.md ./
 COPY gigoptimizer ./gigoptimizer
+COPY extensions ./extensions
 COPY examples ./examples
 COPY scripts ./scripts
 

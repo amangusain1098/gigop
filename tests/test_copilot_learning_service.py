@@ -46,7 +46,7 @@ class CopilotLearningServiceTests(unittest.TestCase):
             def raise_for_status(self) -> None:
                 return None
 
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             temp_root = Path(tmp)
             with patch.dict(
                 os.environ,
@@ -72,6 +72,7 @@ class CopilotLearningServiceTests(unittest.TestCase):
                         "focus": ["performance", "security"],
                     }
                 ]
+                service.DEFAULT_QUERY_TOPICS = []
 
                 with patch("gigoptimizer.services.copilot_learning_service.httpx.get", return_value=FakeResponse(rss)):
                     result = service.sync_sources(force=True)
@@ -83,6 +84,59 @@ class CopilotLearningServiceTests(unittest.TestCase):
         self.assertEqual(result["new_documents"], 2)
         self.assertGreaterEqual(len(documents), 2)
         self.assertTrue(any("firewall" in str(item.get("snippet", "")).lower() for item in retrieved))
+
+    def test_sync_query_context_uses_google_news_query_feeds_and_writes_status_snapshot(self) -> None:
+        rss = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Google News</title>
+    <item>
+      <title>Agentic AI coding update</title>
+      <link>https://example.com/agentic-ai</link>
+      <guid>agentic-ai-1</guid>
+      <description><![CDATA[New agentic AI coding workflows for software teams.]]></description>
+      <pubDate>Wed, 09 Apr 2026 09:00:00 GMT</pubDate>
+      <category>ai</category>
+    </item>
+  </channel>
+</rss>
+"""
+
+        class FakeResponse:
+            def __init__(self, text: str) -> None:
+                self.text = text
+
+            def raise_for_status(self) -> None:
+                return None
+
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            temp_root = Path(tmp)
+            with patch.dict(
+                os.environ,
+                {
+                    "DATA_DIR": str(temp_root / "data"),
+                    "UPLOADS_DIR": str(temp_root / "data" / "uploads"),
+                    "DATABASE_URL": f"sqlite:///{(temp_root / 'data' / 'test.db').as_posix()}",
+                    "INTEGRATION_SETTINGS_PATH": str(temp_root / "data" / "integrations.json"),
+                },
+                clear=False,
+            ):
+                config = GigOptimizerConfig.from_env()
+                database = DatabaseManager(config)
+                repository = BlueprintRepository(database)
+                cache_service = CacheService(config)
+                knowledge_service = KnowledgeService(config, repository, cache_service)
+                service = CopilotLearningService(config, repository, knowledge_service, cache_service)
+
+                with patch("gigoptimizer.services.copilot_learning_service.httpx.get", return_value=FakeResponse(rss)):
+                    result = service.sync_query_context("write a firewall setup for agentic AI workers", force=True)
+
+                status_path = temp_root / "data" / "copilot_learning" / "status.json"
+                documents = knowledge_service.list_documents(gig_id=service.GLOBAL_GIG_ID, limit=20)
+                self.assertEqual(result["status"], "ok")
+                self.assertTrue(result["queries"])
+                self.assertGreaterEqual(len(documents), 1)
+                self.assertTrue(status_path.exists())
 
 
 if __name__ == "__main__":

@@ -209,6 +209,16 @@ export interface BootstrapPayload {
     capture_threshold: number
     failed_login_attempts: FailedLoginAttemptRecord[]
   }
+  extension_install?: {
+    enabled: boolean
+    installed?: boolean
+    download_url: string
+    guide_url: string
+    token_configured: boolean
+    api_token?: string
+    api_base_url?: string
+    source_dir_present?: boolean
+  }
   workers: WorkerSnapshot
   health: HealthPayload
   queued_job?: JobRun

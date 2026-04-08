@@ -55,6 +55,15 @@ class BlueprintApiTests(unittest.TestCase):
                     self.assertIn("scraper_summary", payload)
                     self.assertIn("timeline", payload)
                     self.assertIn("comparison_diff", payload)
+                    self.assertIn("extension_install", payload)
+
+                    install_page = client.get("/extension/install")
+                    self.assertEqual(install_page.status_code, 200)
+                    self.assertIn("Install Fiverr Capture Extension", install_page.text)
+
+                    extension_bundle = client.get("/downloads/fiverr-market-capture.zip")
+                    self.assertEqual(extension_bundle.status_code, 200)
+                    self.assertEqual(extension_bundle.headers.get("content-type"), "application/zip")
 
     def test_job_api_enqueues_and_completes_pipeline(self) -> None:
         root = Path(__file__).resolve().parent.parent

@@ -21,6 +21,11 @@
       "matches": ["https://www.fiverr.com/*"],
       "js": ["content.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://animha.co.in/*"],
+      "js": ["dashboard_bridge.js"],
+      "run_at": "document_idle"
     }
   ]
 }

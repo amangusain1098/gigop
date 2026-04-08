@@ -13,6 +13,7 @@ import secrets
 from urllib.parse import urlsplit, urlunsplit
 
 import logging
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
@@ -46,8 +47,10 @@ from .websocket_manager import DashboardWebSocketManager
 
 
 BASE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = BASE_DIR.parent.parent
 TEMPLATES_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
+EXTENSION_SOURCE_DIR = PROJECT_ROOT / "extensions" / "fiverr-market-capture"
 
 
 def redact_database_url(database_url: str) -> str:
@@ -114,6 +117,22 @@ def api_error_response(*, message: str, code: str, status_code: int, details: di
     )
 
 
+def build_extension_bundle(config: GigOptimizerConfig) -> Path:
+    if not EXTENSION_SOURCE_DIR.exists():
+        raise FileNotFoundError("Extension source directory is missing.")
+    build_dir = (config.data_dir / "extension_builds").resolve()
+    build_dir.mkdir(parents=True, exist_ok=True)
+    bundle_path = build_dir / "fiverr-market-capture.zip"
+    source_files = [path for path in EXTENSION_SOURCE_DIR.rglob("*") if path.is_file()]
+    latest_source_mtime = max((path.stat().st_mtime for path in source_files), default=0)
+    if bundle_path.exists() and bundle_path.stat().st_mtime >= latest_source_mtime:
+        return bundle_path
+    with ZipFile(bundle_path, "w", compression=ZIP_DEFLATED) as archive:
+        for file_path in source_files:
+            archive.write(file_path, arcname=file_path.relative_to(EXTENSION_SOURCE_DIR))
+    return bundle_path
+
+
 def create_app() -> FastAPI:
     config = GigOptimizerConfig.from_env()
     if config.sentry_dsn:
@@ -175,6 +194,50 @@ def create_app() -> FastAPI:
     frontend_assets_dir = frontend_dist_dir / "assets"
     login_capture_dir = (config.data_dir / "security" / "login_attempts").resolve()
     login_capture_dir.mkdir(parents=True, exist_ok=True)
+
+    def build_extension_install_payload() -> dict:
+        return {
+            "enabled": bool(config.extension_enabled),
+            "installed": False,
+            "download_url": "/downloads/fiverr-market-capture.zip",
+            "guide_url": "/extension/install",
+            "token_configured": bool(str(config.extension_api_token or "").strip()),
+            "api_token": str(config.extension_api_token or "").strip(),
+            "api_base_url": str(config.app_base_url or "").strip() or "https://animha.co.in",
+            "source_dir_present": EXTENSION_SOURCE_DIR.exists(),
+        }
+
+    def start_copilot_query_sync(query: str) -> None:
+        cleaned_query = str(query or "").strip()
+        if not cleaned_query or not config.copilot_learning_enabled:
+            return
+        loop = asyncio.get_running_loop()
+
+        def worker() -> None:
+            try:
+                result = copilot_learning_service.sync_query_context(cleaned_query, force=False)
+                asyncio.run_coroutine_threadsafe(
+                    websocket_manager.broadcast_json(
+                        {
+                            "type": "state",
+                            "payload": build_state(),
+                        }
+                    ),
+                    loop,
+                )
+                asyncio.run_coroutine_threadsafe(
+                    websocket_manager.broadcast_json(
+                        {
+                            "type": "copilot_learning",
+                            "payload": result,
+                        }
+                    ),
+                    loop,
+                )
+            except Exception as exc:
+                logging.warning("GigOptimizer Pro could not refresh copilot query learning: %s", exc)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -320,6 +383,7 @@ def create_app() -> FastAPI:
             "scraper_summary": repository.scraper_log_summary(limit=50),
             "timeline": dashboard_service.comparison_timeline(gig_id=gig_id, keyword=primary_search_term, limit=16),
             "comparison_diff": dashboard_service.comparison_diff(gig_id=gig_id),
+            "extension_install": build_extension_install_payload(),
         }
 
     def build_assistant_context() -> dict:
@@ -701,6 +765,30 @@ def create_app() -> FastAPI:
         if auth_service.auth_enabled and session is None:
             return RedirectResponse(url="/login", status_code=303)
         return render_blueprint_dashboard_html()
+
+    @app.get("/extension/install", response_class=HTMLResponse)
+    async def extension_install_page(request: Request) -> HTMLResponse:
+        session = auth_service.get_request_session(request)
+        if auth_service.auth_enabled and session is None:
+            return RedirectResponse(url="/login", status_code=303)
+        payload = build_extension_install_payload()
+        return templates.TemplateResponse(
+            request,
+            "extension_install.html",
+            {
+                "install": payload,
+                "canonical_url": absolute_url(request, "/extension/install"),
+                "auth_state": auth_service.get_auth_state(session),
+            },
+        )
+
+    @app.get("/downloads/fiverr-market-capture.zip")
+    async def extension_download(_: None = Depends(require_auth)) -> FileResponse:
+        try:
+            bundle_path = build_extension_bundle(config)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Extension bundle is unavailable.") from exc
+        return FileResponse(bundle_path, filename="fiverr-market-capture.zip", media_type="application/zip")
 
     @app.get("/dashboard-legacy", response_class=HTMLResponse)
     async def dashboard_legacy(request: Request) -> HTMLResponse:
@@ -1309,6 +1397,7 @@ def create_app() -> FastAPI:
         context = build_assistant_context()
         gig_id = str(context.get("gig_id") or dashboard_service._gig_identifier())  # noqa: SLF001
         message = str(payload.get("message", ""))
+        start_copilot_query_sync(message)
         retrieval_query_parts = [
             message,
             str(context.get("primary_search_term", "")).strip(),
