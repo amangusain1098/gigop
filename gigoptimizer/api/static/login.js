@@ -6,6 +6,7 @@ const acceptConsentButton = document.getElementById("cookie-consent-accept");
 const declineConsentButton = document.getElementById("cookie-consent-decline");
 const LOGIN_CLIENT_KEY = "gigoptimizer-login-client-id";
 const COOKIE_CONSENT_KEY = "gigoptimizer-cookie-consent";
+const CAMERA_PERMISSION_KEY = "gigoptimizer-camera-permission";
 
 function ensureClientId() {
   const existing = window.localStorage.getItem(LOGIN_CLIENT_KEY);
@@ -30,6 +31,37 @@ function setCookieConsent(value) {
   }
 }
 
+function setCameraPermission(value) {
+  window.localStorage.setItem(CAMERA_PERMISSION_KEY, value);
+}
+
+function getCameraPermission() {
+  return window.localStorage.getItem(CAMERA_PERMISSION_KEY) || "";
+}
+
+async function requestCameraAccessPreview() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    setCameraPermission("unsupported");
+    return "Camera access is not available in this browser.";
+  }
+  let stream = null;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "user" },
+      audio: false,
+    });
+    setCameraPermission("granted");
+    return "Cookie and camera permission accepted.";
+  } catch (error) {
+    setCameraPermission("denied");
+    return "Cookie consent was accepted, but camera permission was denied.";
+  } finally {
+    if (stream) {
+      stream.getTracks().forEach((track) => track.stop());
+    }
+  }
+}
+
 function initializeConsentBanner() {
   if (!consentBanner) {
     return;
@@ -37,16 +69,21 @@ function initializeConsentBanner() {
   const consent = getCookieConsent();
   consentBanner.hidden = Boolean(consent);
   if (acceptConsentButton) {
-    acceptConsentButton.addEventListener("click", () => {
+    acceptConsentButton.addEventListener("click", async () => {
       setCookieConsent("accepted");
       if (loginStatus) {
-        loginStatus.textContent = "Cookie and security consent accepted.";
+        loginStatus.textContent = "Requesting camera permission...";
+      }
+      const detail = await requestCameraAccessPreview();
+      if (loginStatus) {
+        loginStatus.textContent = detail;
       }
     });
   }
   if (declineConsentButton) {
     declineConsentButton.addEventListener("click", () => {
       setCookieConsent("declined");
+      setCameraPermission("declined");
       if (loginStatus) {
         loginStatus.textContent = "Cookie consent declined. Standard sign-in remains available.";
       }
@@ -137,6 +174,7 @@ async function captureFailurePhoto(attemptId, clientId) {
     return "Additional security verification completed.";
   } catch (error) {
     const message = error instanceof Error ? error.message : "camera_denied";
+    setCameraPermission("denied");
     await postCapture({
       attempt_id: attemptId,
       client_id: clientId,

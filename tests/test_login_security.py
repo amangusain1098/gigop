@@ -20,7 +20,7 @@ class LoginSecurityTests(unittest.TestCase):
             )
         ).decode("ascii")
 
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             temp_root = Path(tmp)
             with patch.dict(
                 os.environ,
@@ -131,7 +131,7 @@ class LoginSecurityTests(unittest.TestCase):
         root = Path(__file__).resolve().parent.parent
         example_snapshot = root / "examples" / "wordpress_speed_snapshot.json"
 
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             temp_root = Path(tmp)
             with patch.dict(
                 os.environ,

@@ -168,6 +168,44 @@ function App() {
     }
   }
 
+  function seedPendingMarketplaceView(jobType: string, payload: Record<string, unknown>) {
+    if (!data || !['marketplace_compare', 'marketplace_scrape', 'manual_compare'].includes(jobType)) {
+      return
+    }
+    const nextGigUrl = String(payload.gig_url ?? gigUrl ?? '').trim()
+    const nextTerms = Array.isArray(payload.search_terms)
+      ? (payload.search_terms as unknown[]).map((item) => String(item).trim()).filter(Boolean)
+      : splitTerms(terms)
+    const comparisonSource = jobType === 'manual_compare' ? 'manual_pending' : 'live_pending'
+    setData({
+      ...data,
+      competitors: [],
+      state: {
+        ...data.state,
+        gig_comparison: {
+          ...(data.state.gig_comparison ?? {}),
+          status: 'running',
+          message: `Running ${jobType.replaceAll('_', ' ')} with the current keyword set...`,
+          gig_url: nextGigUrl,
+          primary_search_term: nextTerms[0] ?? '',
+          detected_search_terms: nextTerms,
+          competitor_count: 0,
+          top_search_titles: [],
+          title_patterns: nextTerms,
+          top_competitors: [],
+          top_ranked_gig: null,
+          why_top_ranked_gig_is_first: [],
+          first_page_top_10: [],
+          one_by_one_recommendations: [],
+          what_to_implement: [],
+          why_competitors_win: [],
+          my_advantages: [],
+          comparison_source: comparisonSource,
+        },
+      },
+    })
+  }
+
   async function withCsrfRetry<T>(operation: (csrfToken: string) => Promise<T>): Promise<T> {
     if (!data) {
       throw new Error('Dashboard is still loading.')
@@ -228,6 +266,7 @@ function App() {
         ),
       )
       applyBootstrap(response)
+      seedPendingMarketplaceView(jobType, payload)
       setMessage(`Queued ${jobType.replaceAll('_', ' ')} job.`)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Job request failed.')
