@@ -2041,7 +2041,7 @@ class DashboardService:
         key_terms = [self._normalize_query(term) for term in search_terms if self._normalize_query(term)]
         if not key_terms:
             return []
-        key = f"gigoptimizer:competitors:{'|'.join(sorted(key_terms))}"
+        key = self._competitor_cache_key(key_terms)
         cached = self.cache_service.get_json(key)
         if not isinstance(cached, list):
             return []
@@ -2053,18 +2053,47 @@ class DashboardService:
                 competitors.append(MarketplaceGig(**item))
             except TypeError:
                 continue
+        if competitors and not self._cached_competitors_match_terms(competitors, key_terms):
+            self.cache_service.delete(key)
+            return []
         return competitors
 
     def _cache_competitors(self, search_terms: list[str], competitor_gigs: list[MarketplaceGig]) -> None:
         key_terms = [self._normalize_query(term) for term in search_terms if self._normalize_query(term)]
         if not key_terms:
             return
-        key = f"gigoptimizer:competitors:{'|'.join(sorted(key_terms))}"
+        key = self._competitor_cache_key(key_terms)
         self.cache_service.set_json(
             key,
             [asdict(gig) for gig in competitor_gigs[:30]],
             ttl_seconds=self.COMPETITOR_CACHE_TTL_SECONDS,
         )
+
+    def _competitor_cache_key(self, normalized_terms: list[str]) -> str:
+        return f"gigoptimizer:competitors:{'|'.join(sorted(normalized_terms))}"
+
+    def _cached_competitors_match_terms(
+        self,
+        competitors: list[MarketplaceGig],
+        normalized_terms: list[str],
+    ) -> bool:
+        if not competitors or not normalized_terms:
+            return True
+        expected_tokens = {
+            token
+            for term in normalized_terms
+            for token in re.split(r"[^a-z0-9]+", term.lower())
+            if len(token) > 2
+        }
+        if not expected_tokens:
+            return True
+        sample = competitors[: min(6, len(competitors))]
+        relevant = 0
+        for gig in sample:
+            haystack = f"{gig.title} {gig.snippet}".lower()
+            if any(token in haystack for token in expected_tokens):
+                relevant += 1
+        return relevant >= max(1, len(sample) // 3)
 
     def _load_cached_comparison(self, signature: str) -> dict[str, Any] | None:
         cached = self.cache_service.get_json(signature)

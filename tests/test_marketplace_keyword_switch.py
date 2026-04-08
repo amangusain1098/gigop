@@ -6,7 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from gigoptimizer.models import ConnectorStatus, GigPageOverview
+from gigoptimizer.models import ConnectorStatus, GigPageOverview, MarketplaceGig
 from gigoptimizer.services.dashboard_service import DashboardService
 
 
@@ -67,6 +67,42 @@ class MarketplaceKeywordSwitchTests(unittest.TestCase):
                 self.assertFalse(comparison["top_competitors"])
                 self.assertFalse(comparison["top_search_titles"])
                 self.assertIn("anime logo", comparison["message"].lower())
+
+    def test_stale_cached_competitors_for_other_niche_are_ignored(self) -> None:
+        root = Path(__file__).resolve().parent.parent
+        example_snapshot = root / "examples" / "wordpress_speed_snapshot.json"
+
+        with TemporaryDirectory() as tmp:
+            temp_root = Path(tmp)
+            with patch.dict(
+                os.environ,
+                {
+                    "DATA_DIR": str(temp_root / "data"),
+                    "REPORTS_DIR": str(temp_root / "reports"),
+                    "DASHBOARD_STATE_PATH": str(temp_root / "data" / "dashboard_state.json"),
+                    "METRICS_HISTORY_PATH": str(temp_root / "data" / "metrics_history.json"),
+                    "AGENT_HEALTH_PATH": str(temp_root / "data" / "agent_health.json"),
+                    "APPROVAL_QUEUE_DB_PATH": str(temp_root / "data" / "approval_queue.db"),
+                    "INTEGRATION_SETTINGS_PATH": str(temp_root / "data" / "integrations.json"),
+                    "DEFAULT_SNAPSHOT_PATH": str(example_snapshot),
+                    "APP_AUTH_ENABLED": "false",
+                },
+                clear=False,
+            ):
+                service = DashboardService()
+                service._cache_competitors(  # noqa: SLF001
+                    ["anime logo"],
+                    [
+                        MarketplaceGig(
+                            title="I will fix wordpress speed and core web vitals",
+                            seller_name="Snapshot benchmark",
+                            matched_term="anime logo",
+                        )
+                    ],
+                )
+
+                cached = service._load_cached_competitors(["anime logo"])  # noqa: SLF001
+                self.assertFalse(cached)
 
     def test_manual_compare_for_logo_market_generates_logo_recommendations(self) -> None:
         root = Path(__file__).resolve().parent.parent
