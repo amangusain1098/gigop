@@ -149,6 +149,16 @@ class AIOverviewService:
             }
             self._set_cached(cache_key, response)
             return response
+        if self._should_force_local_chat(cleaned_message):
+            response = self._local_chat(
+                cleaned_message,
+                context,
+                provider=settings.provider,
+                model=settings.model,
+                reason="The app answered from its live grounded market and learning context for this prompt.",
+            )
+            self._set_cached(cache_key, response)
+            return response
         if not settings.enabled:
             response = self._local_chat(
                 cleaned_message,
@@ -923,6 +933,22 @@ class AIOverviewService:
                 return True
 
         return False
+
+    def _should_force_local_chat(self, message: str) -> bool:
+        lower_message = str(message or "").lower().strip()
+        if not lower_message:
+            return False
+        if self._is_greeting(lower_message):
+            return True
+        if any(word in lower_message for word in ["firewall", "ufw", "iptables", "security group"]):
+            return True
+        return (
+            any(word in lower_message for word in ["code", "script", "command", "implement", "build", "write", "generate", "create"])
+            and any(
+                word in lower_message
+                for word in ["api", "fastapi", "docker", "firewall", "worker", "redis", "postgres", "extension", "nginx", "scheduler", "server"]
+            )
+        )
 
     def _cache_key(self, prefix: str, payload: dict[str, object]) -> str:
         digest = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()

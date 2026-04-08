@@ -40,7 +40,7 @@ class CopilotLearningService:
         {
             "slug": "python-insider",
             "title": "Python Insider",
-            "feed_url": "https://feeds.feedburner.com/PythonInsider",
+            "feed_url": "https://pythoninsider.blogspot.com/feeds/posts/default?alt=rss",
             "focus": ["python", "backend", "release notes"],
         },
         {

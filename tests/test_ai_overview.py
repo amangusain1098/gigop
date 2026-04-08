@@ -437,6 +437,50 @@ class AIOverviewFallbackTests(unittest.TestCase):
         self.assertIn("allow 443/tcp", response["reply"].lower())
         self.assertTrue(response["suggestions"])
 
+    def test_n8n_configured_still_uses_grounded_local_for_greeting_and_firewall(self) -> None:
+        with TemporaryDirectory() as tmp:
+            temp_root = Path(tmp)
+            with patch.dict(
+                os.environ,
+                {
+                    "DATA_DIR": str(temp_root / "data"),
+                    "INTEGRATION_SETTINGS_PATH": str(temp_root / "data" / "integrations.json"),
+                    "AI_PROVIDER": "n8n",
+                    "AI_MODEL": "webhook",
+                    "AI_API_BASE_URL": "https://n8n.example/webhook/gigoptimizer-assistant",
+                },
+                clear=False,
+            ):
+                config = GigOptimizerConfig.from_env()
+                settings = SettingsService(config)
+                settings.update_settings(
+                    {
+                        "ai": {
+                            "enabled": True,
+                            "provider": "n8n",
+                            "model": "webhook",
+                            "api_base_url": "https://n8n.example/webhook/gigoptimizer-assistant",
+                        }
+                    }
+                )
+                service = AIOverviewService(settings)
+
+                with patch("gigoptimizer.services.ai_overview_service.urlopen") as mocked_urlopen:
+                    greeting = service.chat(
+                        message="hello there",
+                        context={"copilot_learning": {"latest_topics": ["mdn-blog-http-caching.txt"]}},
+                    )
+                    firewall = service.chat(
+                        message="write a firewall script for my ubuntu fastapi server",
+                        context={},
+                    )
+
+        mocked_urlopen.assert_not_called()
+        self.assertEqual(greeting["status"], "fallback")
+        self.assertIn("watching your live gig data", greeting["reply"].lower())
+        self.assertEqual(firewall["status"], "fallback")
+        self.assertIn("ufw", firewall["reply"].lower())
+
 
 if __name__ == "__main__":
     unittest.main()
