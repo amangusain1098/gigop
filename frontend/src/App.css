@@ -434,7 +434,7 @@ pre {
   width: min(420px, calc(100vw - 32px));
   max-height: min(72vh, 760px);
   display: grid;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   gap: 14px;
   padding: 18px;
   border-radius: 24px;
@@ -443,6 +443,8 @@ pre {
   box-shadow: 0 28px 70px rgba(0, 0, 0, 0.42);
   backdrop-filter: blur(20px);
   z-index: 40;
+  overflow: hidden;
+  min-width: 0;
 }
 
 .assistant-head {
@@ -460,6 +462,7 @@ pre {
   gap: 12px;
   padding-right: 4px;
   min-width: 0;
+  min-height: 0;
 }
 
 .assistant-bubble {
@@ -522,18 +525,33 @@ pre {
 .assistant-compose {
   display: grid;
   gap: 12px;
+  min-width: 0;
+  flex-shrink: 0;
 }
 
 .assistant-compose textarea {
   width: 100%;
   resize: vertical;
   min-height: 88px;
+  max-height: 180px;
   border: 1px solid rgba(145, 177, 211, 0.22);
   border-radius: 14px;
   background: rgba(15, 27, 45, 0.9);
   color: #eef5ff;
   padding: 13px 14px;
   box-sizing: border-box;
+}
+
+.assistant-shell .pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.assistant-shell .pill-button {
+  max-width: 100%;
+  white-space: normal;
+  text-align: left;
 }
 
 .pill-button {
