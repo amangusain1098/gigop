@@ -130,6 +130,14 @@ class GigOptimizerConfig:
     ai_model: str = "gpt-5.4-mini"
     ai_api_key: str = ""
     ai_api_base_url: str = "https://api.openai.com/v1"
+    hostinger_enabled: bool = False
+    hostinger_api_base_url: str = "https://developers.hostinger.com"
+    hostinger_api_token: str = ""
+    hostinger_virtual_machine_id: str = ""
+    hostinger_project_name: str = ""
+    hostinger_domain: str = ""
+    hostinger_metrics_window_minutes: int = 60
+    hostinger_request_timeout_seconds: int = 20
     marketplace_enabled: bool = False
     marketplace_search_terms: str = ""
     marketplace_my_gig_url: str = ""
@@ -318,6 +326,17 @@ class GigOptimizerConfig:
             ai_model=os.getenv("AI_MODEL", "gpt-5.4-mini").strip() or "gpt-5.4-mini",
             ai_api_key=os.getenv("AI_API_KEY", "").strip(),
             ai_api_base_url=os.getenv("AI_API_BASE_URL", "https://api.openai.com/v1").strip() or "https://api.openai.com/v1",
+            hostinger_enabled=_get_bool("HOSTINGER_ENABLED", False),
+            hostinger_api_base_url=(
+                os.getenv("HOSTINGER_API_BASE_URL", "https://developers.hostinger.com").strip()
+                or "https://developers.hostinger.com"
+            ),
+            hostinger_api_token=os.getenv("HOSTINGER_API_TOKEN", "").strip(),
+            hostinger_virtual_machine_id=os.getenv("HOSTINGER_VIRTUAL_MACHINE_ID", "").strip(),
+            hostinger_project_name=os.getenv("HOSTINGER_PROJECT_NAME", "").strip(),
+            hostinger_domain=os.getenv("HOSTINGER_DOMAIN", "").strip(),
+            hostinger_metrics_window_minutes=_get_int("HOSTINGER_METRICS_WINDOW_MINUTES", 60),
+            hostinger_request_timeout_seconds=_get_int("HOSTINGER_REQUEST_TIMEOUT_SECONDS", 20),
             marketplace_enabled=_get_bool("MARKETPLACE_ENABLED", False),
             marketplace_search_terms=os.getenv("MARKETPLACE_SEARCH_TERMS", "").strip(),
             marketplace_my_gig_url=os.getenv("MARKETPLACE_MY_GIG_URL", "").strip(),
@@ -342,6 +361,7 @@ class GigOptimizerConfig:
         return [
             self._validate_database(),
             self._validate_redis(),
+            self._validate_hostinger(),
             self._validate_google_trends(),
             self._validate_semrush(),
             self._validate_serpapi(),
@@ -393,6 +413,35 @@ class GigOptimizerConfig:
             connector="google_trends",
             status="skipped",
             detail="skipped (install the optional 'live' dependencies to enable pytrends)",
+        )
+
+    def _validate_hostinger(self) -> ConnectorStatus:
+        if not self.hostinger_enabled:
+            return ConnectorStatus(
+                connector="hostinger",
+                status="skipped",
+                detail="skipped (HOSTINGER_ENABLED is false)",
+            )
+        if not self.hostinger_api_token:
+            return ConnectorStatus(
+                connector="hostinger",
+                status="warning",
+                detail="warning (HOSTINGER_API_TOKEN not set)",
+            )
+        if any(char.isspace() for char in self.hostinger_api_token):
+            return ConnectorStatus(
+                connector="hostinger",
+                status="warning",
+                detail="warning (HOSTINGER_API_TOKEN contains whitespace and looks malformed)",
+            )
+        return ConnectorStatus(
+            connector="hostinger",
+            status="active",
+            detail=(
+                "active "
+                f"(base={self.hostinger_api_base_url}, vm={self.hostinger_virtual_machine_id or 'auto'}, "
+                f"project={self.hostinger_project_name or 'n/a'})"
+            ),
         )
 
     def _validate_semrush(self) -> ConnectorStatus:

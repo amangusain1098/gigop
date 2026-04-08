@@ -7,6 +7,7 @@ from ..config import GigOptimizerConfig
 from ..models import (
     AISettings,
     EmailSettings,
+    HostingerSettings,
     MarketplaceSettings,
     NotificationEvents,
     NotificationSettings,
@@ -54,6 +55,28 @@ class SettingsService:
                 model=self.config.ai_model or str(stored.get("ai", {}).get("model", "gpt-5.4-mini")).strip(),
                 api_key=self.config.ai_api_key or str(stored.get("ai", {}).get("api_key", "")).strip(),
                 api_base_url=self.config.ai_api_base_url or str(stored.get("ai", {}).get("api_base_url", "https://api.openai.com/v1")).strip(),
+            ),
+            hostinger=HostingerSettings(
+                enabled=self.config.hostinger_enabled or bool(stored.get("hostinger", {}).get("enabled", False)),
+                api_base_url=(
+                    self.config.hostinger_api_base_url
+                    or str(stored.get("hostinger", {}).get("api_base_url", "https://developers.hostinger.com")).strip()
+                    or "https://developers.hostinger.com"
+                ),
+                api_token=self.config.hostinger_api_token or str(stored.get("hostinger", {}).get("api_token", "")).strip(),
+                virtual_machine_id=(
+                    self.config.hostinger_virtual_machine_id
+                    or str(stored.get("hostinger", {}).get("virtual_machine_id", "")).strip()
+                ),
+                project_name=(
+                    self.config.hostinger_project_name
+                    or str(stored.get("hostinger", {}).get("project_name", "")).strip()
+                ),
+                domain=self.config.hostinger_domain or str(stored.get("hostinger", {}).get("domain", "")).strip(),
+                metrics_window_minutes=max(
+                    5,
+                    int(stored.get("hostinger", {}).get("metrics_window_minutes", self.config.hostinger_metrics_window_minutes) or self.config.hostinger_metrics_window_minutes),
+                ),
             ),
             marketplace=MarketplaceSettings(
                 enabled=self.config.marketplace_enabled or bool(stored.get("marketplace", {}).get("enabled", False)),
@@ -120,6 +143,15 @@ class SettingsService:
                 "provider": settings.ai.provider,
                 "model": settings.ai.model,
                 "api_base_url": settings.ai.api_base_url,
+            },
+            "hostinger": {
+                "enabled": settings.hostinger.enabled,
+                "configured": bool(settings.hostinger.api_token),
+                "api_base_url": settings.hostinger.api_base_url,
+                "virtual_machine_id": settings.hostinger.virtual_machine_id,
+                "project_name": settings.hostinger.project_name,
+                "domain": settings.hostinger.domain,
+                "metrics_window_minutes": settings.hostinger.metrics_window_minutes,
             },
             "marketplace": {
                 "enabled": settings.marketplace.enabled,
@@ -193,6 +225,28 @@ class SettingsService:
         if "api_key" in ai_payload and str(ai_payload.get("api_key", "")).strip():
             current.ai.api_key = str(ai_payload.get("api_key", "")).strip()
 
+        hostinger_payload = payload.get("hostinger") or {}
+        if "enabled" in hostinger_payload:
+            current.hostinger.enabled = bool(hostinger_payload["enabled"])
+        if "api_base_url" in hostinger_payload:
+            current.hostinger.api_base_url = (
+                str(hostinger_payload.get("api_base_url", current.hostinger.api_base_url)).strip()
+                or current.hostinger.api_base_url
+            )
+        if "api_token" in hostinger_payload and str(hostinger_payload.get("api_token", "")).strip():
+            current.hostinger.api_token = str(hostinger_payload.get("api_token", "")).strip()
+        if "virtual_machine_id" in hostinger_payload:
+            current.hostinger.virtual_machine_id = str(hostinger_payload.get("virtual_machine_id", "")).strip()
+        if "project_name" in hostinger_payload:
+            current.hostinger.project_name = str(hostinger_payload.get("project_name", "")).strip()
+        if "domain" in hostinger_payload:
+            current.hostinger.domain = str(hostinger_payload.get("domain", "")).strip()
+        if "metrics_window_minutes" in hostinger_payload:
+            current.hostinger.metrics_window_minutes = max(
+                5,
+                int(hostinger_payload.get("metrics_window_minutes") or current.hostinger.metrics_window_minutes),
+            )
+
         marketplace_payload = payload.get("marketplace") or {}
         if "enabled" in marketplace_payload:
             current.marketplace.enabled = bool(marketplace_payload["enabled"])
@@ -264,6 +318,15 @@ class SettingsService:
                 model=self.config.ai_model,
                 api_key=self.config.ai_api_key,
                 api_base_url=self.config.ai_api_base_url,
+            ),
+            hostinger=HostingerSettings(
+                enabled=self.config.hostinger_enabled,
+                api_base_url=self.config.hostinger_api_base_url,
+                api_token=self.config.hostinger_api_token,
+                virtual_machine_id=self.config.hostinger_virtual_machine_id,
+                project_name=self.config.hostinger_project_name,
+                domain=self.config.hostinger_domain,
+                metrics_window_minutes=self.config.hostinger_metrics_window_minutes,
             ),
             marketplace=MarketplaceSettings(
                 enabled=self.config.marketplace_enabled,

@@ -384,6 +384,17 @@ class AISettings:
 
 
 @dataclass(slots=True)
+class HostingerSettings:
+    enabled: bool = False
+    api_base_url: str = "https://developers.hostinger.com"
+    api_token: str = ""
+    virtual_machine_id: str = ""
+    project_name: str = ""
+    domain: str = ""
+    metrics_window_minutes: int = 60
+
+
+@dataclass(slots=True)
 class MarketplaceSettings:
     enabled: bool = False
     search_terms: list[str] = field(default_factory=list)
@@ -406,6 +417,7 @@ class NotificationSettings:
     slack: SlackSettings = field(default_factory=SlackSettings)
     whatsapp: WhatsAppSettings = field(default_factory=WhatsAppSettings)
     ai: AISettings = field(default_factory=AISettings)
+    hostinger: HostingerSettings = field(default_factory=HostingerSettings)
     marketplace: MarketplaceSettings = field(default_factory=MarketplaceSettings)
 
 

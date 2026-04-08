@@ -23,6 +23,7 @@ from ..services import (
     AIOverviewService,
     AuthService,
     DashboardService,
+    HostingerService,
     NotificationService,
     SettingsService,
     WeeklyReportService,
@@ -63,6 +64,7 @@ def create_app() -> FastAPI:
     event_bus = JobEventBus(config)
     job_service = JobService(config, repository, event_bus)
     auth_service = AuthService(config)
+    hostinger_service = HostingerService(config, settings_service)
     validation_errors, validation_warnings = auth_service.validate_runtime()
     if validation_errors:
         raise RuntimeError("GigOptimizer Pro startup validation failed: " + " | ".join(validation_errors))
@@ -98,6 +100,7 @@ def create_app() -> FastAPI:
 
         app.state.config = config
         app.state.dashboard_service = dashboard_service
+        app.state.ai_overview_service = ai_overview_service
         app.state.report_service = report_service
         app.state.database_manager = database_manager
         app.state.repository = repository
@@ -106,6 +109,7 @@ def create_app() -> FastAPI:
         app.state.auth_service = auth_service
         app.state.settings_service = settings_service
         app.state.notification_service = notification_service
+        app.state.hostinger_service = hostinger_service
         app.state.websocket_manager = websocket_manager
         event_bus.subscribe(relay_bus_event)
         event_bus.start()
@@ -157,8 +161,31 @@ def create_app() -> FastAPI:
             "job_runs": job_service.list_runs(limit=25),
             "queue": repository.list_hitl_items(limit=50),
             "competitors": repository.list_competitor_snapshots(limit=30),
+            "hostinger": hostinger_service.get_public_status(),
             "workers": job_service.worker_snapshot(),
             "health": build_health_payload(),
+        }
+
+    def build_assistant_context() -> dict:
+        state = dashboard_service.get_state()
+        comparison = state.get("gig_comparison") or {}
+        implementation = comparison.get("implementation_blueprint") or {}
+        latest_report = state.get("latest_report") or {}
+        return {
+            "optimization_score": latest_report.get("optimization_score"),
+            "recommended_title": implementation.get("recommended_title", ""),
+            "recommended_tags": implementation.get("recommended_tags", []),
+            "market_anchor_price": comparison.get("market_anchor_price"),
+            "competitor_count": comparison.get("competitor_count", 0),
+            "why_competitors_win": comparison.get("why_competitors_win", []),
+            "what_to_implement": comparison.get("what_to_implement", []),
+            "pricing_strategy": implementation.get("pricing_strategy", []),
+            "trust_boosters": implementation.get("trust_boosters", []),
+            "faq_recommendations": implementation.get("faq_recommendations", []),
+            "persona_focus": implementation.get("persona_focus", []),
+            "scraper_status": (state.get("scraper_run") or {}).get("status", "idle"),
+            "scraper_message": (state.get("scraper_run") or {}).get("last_status_message", ""),
+            "hostinger": hostinger_service.get_public_status(),
         }
 
     def build_health_payload() -> dict:
@@ -422,6 +449,22 @@ def create_app() -> FastAPI:
     @app.get("/api/settings")
     async def get_settings(_: None = Depends(require_auth)) -> dict:
         return settings_service.get_public_settings()
+
+    @app.get("/api/hostinger/status")
+    async def hostinger_status(_: None = Depends(require_auth)) -> dict:
+        return {"hostinger": hostinger_service.get_public_status()}
+
+    @app.post("/api/assistant/chat")
+    async def assistant_chat(
+        payload: dict = Body(...),
+        _: None = Depends(require_auth),
+        __: None = Depends(require_csrf),
+    ) -> dict:
+        reply = ai_overview_service.chat(
+            message=str(payload.get("message", "")),
+            context=build_assistant_context(),
+        )
+        return {"assistant": reply}
 
     @app.post("/api/settings")
     async def save_settings(payload: dict = Body(...), _: None = Depends(require_auth), __: None = Depends(require_csrf)) -> dict:

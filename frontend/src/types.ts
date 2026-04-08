@@ -110,6 +110,7 @@ export interface BootstrapPayload {
   job_runs: JobRun[]
   queue: QueueRecord[]
   competitors: CompetitorRecord[]
+  hostinger?: Record<string, any>
   workers: WorkerSnapshot
   health: HealthPayload
   queued_job?: JobRun

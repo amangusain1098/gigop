@@ -490,6 +490,7 @@ class DashboardApiTests(unittest.TestCase):
                     settings_payload = saved.json()
                     self.assertTrue(settings_payload["slack"]["configured"])
                     self.assertEqual(settings_payload["whatsapp"]["phone_number_id"], "1234567890")
+                    self.assertFalse(settings_payload["hostinger"]["configured"])
                     self.assertTrue(settings_payload["marketplace"]["auto_compare_enabled"])
                     self.assertTrue(settings_payload["marketplace"]["reader_enabled"])
                     self.assertEqual(settings_payload["marketplace"]["reader_base_url"], "https://r.jina.ai/http://")
@@ -523,6 +524,56 @@ class DashboardApiTests(unittest.TestCase):
 
                     post_logout_state = client.get("/api/state")
                     self.assertEqual(post_logout_state.status_code, 401)
+
+    def test_hostinger_status_and_assistant_chat_routes_work(self) -> None:
+        root = Path(__file__).resolve().parent.parent
+        example_snapshot = root / "examples" / "wordpress_speed_snapshot.json"
+
+        with TemporaryDirectory() as tmp:
+            temp_root = Path(tmp)
+            with patch.dict(
+                os.environ,
+                {
+                    "DATA_DIR": str(temp_root / "data"),
+                    "REPORTS_DIR": str(temp_root / "reports"),
+                    "DASHBOARD_STATE_PATH": str(temp_root / "data" / "dashboard_state.json"),
+                    "METRICS_HISTORY_PATH": str(temp_root / "data" / "metrics_history.json"),
+                    "AGENT_HEALTH_PATH": str(temp_root / "data" / "agent_health.json"),
+                    "APPROVAL_QUEUE_DB_PATH": str(temp_root / "data" / "approval_queue.db"),
+                    "INTEGRATION_SETTINGS_PATH": str(temp_root / "data" / "integrations.json"),
+                    "DEFAULT_SNAPSHOT_PATH": str(example_snapshot),
+                    "APP_AUTH_ENABLED": "true",
+                    "APP_ADMIN_USERNAME": "admin",
+                    "APP_ADMIN_PASSWORD": "super-secret-password",
+                    "APP_ADMIN_PASSWORD_HASH": "",
+                    "APP_SESSION_SECRET": "test-session-secret",
+                },
+                clear=False,
+            ):
+                from gigoptimizer.api.main import create_app
+
+                with TestClient(create_app()) as client:
+                    good_login = client.post(
+                        "/api/auth/login",
+                        json={"username": "admin", "password": "super-secret-password"},
+                    )
+                    csrf_token = good_login.json()["auth"]["csrf_token"]
+
+                    with patch.object(client.app.state.hostinger_service, "get_public_status", return_value={"status": "ok", "configured": True, "project_name": "deploy"}):
+                        hostinger = client.get("/api/hostinger/status")
+
+                    self.assertEqual(hostinger.status_code, 200)
+                    self.assertEqual(hostinger.json()["hostinger"]["status"], "ok")
+
+                    with patch.object(client.app.state.ai_overview_service, "chat", return_value={"status": "ok", "reply": "Use the recommended title.", "suggestions": ["Queue the title update."]}):
+                        assistant = client.post(
+                            "/api/assistant/chat",
+                            json={"message": "What title should I use?"},
+                            headers={"X-CSRF-Token": csrf_token},
+                        )
+
+                    self.assertEqual(assistant.status_code, 200)
+                    self.assertEqual(assistant.json()["assistant"]["reply"], "Use the recommended title.")
 
 
 if __name__ == "__main__":
