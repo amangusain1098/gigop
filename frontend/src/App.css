@@ -459,13 +459,15 @@ pre {
 }
 
 .assistant-log {
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   display: grid;
   gap: 12px;
   padding-right: 4px;
   min-width: 0;
   min-height: 0;
   align-content: start;
+  scroll-behavior: smooth;
 }
 
 .assistant-bubble {
@@ -482,6 +484,11 @@ pre {
 
 .assistant-bubble--user {
   background: rgba(23, 137, 255, 0.14);
+}
+
+.assistant-bubble--pending {
+  border-style: dashed;
+  opacity: 0.9;
 }
 
 .assistant-bubble strong {
@@ -546,6 +553,11 @@ pre {
   color: #eef5ff;
   padding: 13px 14px;
   box-sizing: border-box;
+}
+
+.assistant-compose textarea:focus {
+  outline: 2px solid rgba(70, 177, 255, 0.45);
+  outline-offset: 2px;
 }
 
 .assistant-shell .pill-row {

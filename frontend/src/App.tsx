@@ -57,6 +57,8 @@ function App() {
   const [assistantInitialized, setAssistantInitialized] = useState(false)
   const [knowledgeFile, setKnowledgeFile] = useState<File | null>(null)
   const datasetInputRef = useRef<HTMLInputElement | null>(null)
+  const assistantLogRef = useRef<HTMLDivElement | null>(null)
+  const assistantInputRef = useRef<HTMLTextAreaElement | null>(null)
 
   useEffect(() => {
     let active = true
@@ -83,6 +85,18 @@ function App() {
       socket.close()
     }
   }, [])
+
+  useEffect(() => {
+    if (!assistantOpen) return
+    const frame = window.requestAnimationFrame(() => {
+      assistantLogRef.current?.scrollTo({
+        top: assistantLogRef.current.scrollHeight,
+        behavior: 'smooth',
+      })
+      assistantInputRef.current?.focus()
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [assistantOpen, assistantMessages.length, assistantBusy])
 
   function applyBootstrap(payload: BootstrapPayload) {
     setData(payload)
@@ -953,7 +967,7 @@ function App() {
               </button>
             ))}
           </div>
-          <div className="assistant-log">
+          <div className="assistant-log" ref={assistantLogRef}>
             {assistantMessages.map((entry, index) => (
               <div className={`assistant-bubble assistant-bubble--${entry.role}`} key={`${entry.role}-${index}`}>
                 <strong>{entry.role === 'assistant' ? 'Copilot' : 'You'}</strong>
@@ -974,9 +988,16 @@ function App() {
                 ) : null}
               </div>
             ))}
+            {assistantBusy ? (
+              <div className="assistant-bubble assistant-bubble--assistant assistant-bubble--pending">
+                <strong>Copilot</strong>
+                <p>Thinking through your live gig data...</p>
+              </div>
+            ) : null}
           </div>
           <div className="assistant-compose">
             <textarea
+              ref={assistantInputRef}
               rows={3}
               value={assistantInput}
               onChange={(event) => setAssistantInput(event.target.value)}
@@ -1058,6 +1079,14 @@ function mapAssistantHistory(items: Array<Record<string, any>>, payload: Bootstr
     ? buildAssistantQuickPrompts(payload.state.gig_comparison ?? {}, (payload.state.gig_comparison ?? {}).implementation_blueprint ?? {}, payload.state.scraper_run ?? {})
     : []
   const mapped = [...items]
+    .sort((left, right) => {
+      const leftTime = Date.parse(String(left.created_at ?? ''))
+      const rightTime = Date.parse(String(right.created_at ?? ''))
+      if (!Number.isNaN(leftTime) && !Number.isNaN(rightTime) && leftTime !== rightTime) {
+        return leftTime - rightTime
+      }
+      return Number(left.id ?? 0) - Number(right.id ?? 0)
+    })
     .map((item) => ({
       role: (item.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
       text: String(item.content ?? '').trim(),
