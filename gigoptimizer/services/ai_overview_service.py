@@ -497,7 +497,28 @@ class AIOverviewService:
         reply = f"The app recommends updating your gig around the current market gap. {reason}".strip()
         suggestions: list[str] = []
 
-        if any(word in lower_message for word in ["title", "headline"]):
+        if any(word in lower_message for word in ["dataset", "knowledge", "document", "upload", "train"]):
+            if retrieved_knowledge:
+                best = retrieved_knowledge[0]
+                reply = (
+                    f"The most relevant uploaded knowledge right now is from '{best.get('filename', 'dataset')}'. "
+                    f"{best.get('snippet', '')}"
+                ).strip()
+                suggestions = [
+                    f"Use the {best.get('filename', 'dataset')} findings in the title and description rewrite.",
+                    "Upload more review exports or competitor notes if you want the copilot to answer from them too.",
+                ]
+            elif knowledge_documents:
+                reply = (
+                    f"You have {len(knowledge_documents)} uploaded knowledge file(s), but none matched this question strongly yet."
+                )
+                suggestions = [
+                    "Ask about a phrase that exists in your uploaded dataset.",
+                    "Upload CSV, JSON, DOCX, or Markdown reports for stronger retrieval coverage.",
+                ]
+            else:
+                reply = "No uploaded knowledge is available yet. Add a CSV, JSON, DOCX, or Markdown file from the dashboard first."
+        elif any(word in lower_message for word in ["title", "headline"]):
             reply = f"Your strongest current title option is: {recommended_title or 'Run a market compare to generate a title.'}"
             if primary_search_term and top_ranked_gig.get("title"):
                 reply += (
@@ -571,27 +592,6 @@ class AIOverviewService:
             else:
                 reply = "The app needs a fresh market scan to answer from the live Fiverr feed."
             suggestions = [f"Explain why #{item.get('rank_position', '?')} is winning" for item in top_ten[:3]]
-        elif any(word in lower_message for word in ["dataset", "knowledge", "document", "upload", "train"]):
-            if retrieved_knowledge:
-                best = retrieved_knowledge[0]
-                reply = (
-                    f"The most relevant uploaded knowledge right now is from '{best.get('filename', 'dataset')}'. "
-                    f"{best.get('snippet', '')}"
-                ).strip()
-                suggestions = [
-                    f"Use the {best.get('filename', 'dataset')} findings in the title and description rewrite.",
-                    "Upload more review exports or competitor notes if you want the copilot to answer from them too.",
-                ]
-            elif knowledge_documents:
-                reply = (
-                    f"You have {len(knowledge_documents)} uploaded knowledge file(s), but none matched this question strongly yet."
-                )
-                suggestions = [
-                    "Ask about a phrase that exists in your uploaded dataset.",
-                    "Upload CSV, JSON, DOCX, or Markdown reports for stronger retrieval coverage.",
-                ]
-            else:
-                reply = "No uploaded knowledge is available yet. Add a CSV, JSON, DOCX, or Markdown file from the dashboard first."
         else:
             relevant = self._relevant_context_lines(message, context)
             if relevant:
@@ -794,6 +794,12 @@ class AIOverviewService:
         if any(word in question for word in ["title", "headline"]):
             if recommended_title and recommended_title not in answer and "title" not in answer:
                 return True
+
+        if any(word in question for word in ["dataset", "knowledge", "document", "upload"]):
+            filenames = [str(item.get("filename", "")).lower() for item in (context.get("retrieved_knowledge") or [])[:3]]
+            if filenames and not any(name and name in answer for name in filenames):
+                if "uploaded" not in answer and "knowledge" not in answer and "dataset" not in answer:
+                    return True
 
         if any(word in question for word in ["tag", "keyword"]):
             if recommended_tags and not any(tag in answer for tag in recommended_tags[:3]):
