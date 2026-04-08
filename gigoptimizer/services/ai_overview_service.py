@@ -276,6 +276,7 @@ class AIOverviewService:
         return (
             "You are the in-app GigOptimizer Pro copilot. "
             "Answer the user using only the provided market analysis, scrape feed, and current gig context. "
+            "If retrieved_knowledge contains uploaded dataset snippets, treat them as first-class evidence and use them in the answer. "
             "Treat the first-page Fiverr competitors as the current market truth. "
             "Be practical and concise. Give a short direct answer, then up to 3 suggested next actions. "
             "If the question asks what to change, prioritize the current top-impact action and mention the page-one leader when helpful.\n\n"
@@ -493,6 +494,7 @@ class AIOverviewService:
         one_by_one = list(context.get("one_by_one_recommendations", []) or [])
         recent_events = list(context.get("recent_scraper_events", []) or [])
         keyword_pulse = list(context.get("keyword_pulse", []) or [])
+        grounded_knowledge = self._grounded_knowledge_context(retrieved_knowledge)
 
         reply = f"The app recommends updating your gig around the current market gap. {reason}".strip()
         suggestions: list[str] = []
@@ -525,6 +527,8 @@ class AIOverviewService:
                     f" The live page-one leader is '{top_ranked_gig.get('title')}', "
                     f"which is ranking because it matches '{primary_search_term}' more directly."
                 )
+            if grounded_knowledge:
+                reply += f" Your uploaded data also points to: {grounded_knowledge}"
             suggestions = prioritized[:2] + (["Queue the recommended title into HITL and approve it if it matches your positioning."] if recommended_title else [])
         elif any(word in lower_message for word in ["tag", "keyword"]):
             reply = (
@@ -534,20 +538,37 @@ class AIOverviewService:
             )
             if keyword_pulse:
                 reply += f" The freshest query pulse includes: {', '.join(keyword_pulse[:3])}."
+            if grounded_knowledge:
+                reply += f" Uploaded notes reinforce this with: {grounded_knowledge}"
+            suggestions = prioritized[:2] or actions[:2]
+        elif any(word in lower_message for word in ["description", "rewrite", "copy", "summary", "bio", "paragraph"]):
+            reply = (
+                "Lead with the market-matched promise, then explain the business outcome, then list proof and exact deliverables."
+            )
+            if grounded_knowledge:
+                reply += f" Your uploaded data adds this angle: {grounded_knowledge}"
             suggestions = prioritized[:2] or actions[:2]
         elif any(word in lower_message for word in ["price", "pricing", "package"]):
             reply = pricing[0] if pricing else "The app needs a fresh compare run before it can score your pricing against the live market anchor."
+            if grounded_knowledge:
+                reply += f" Uploaded notes also highlight: {grounded_knowledge}"
             suggestions = pricing[1:3]
         elif any(word in lower_message for word in ["trust", "review", "proof"]):
             reply = trust[0] if trust else "The clearest trust gap is still visible proof and review density compared with stronger competitors."
+            if grounded_knowledge:
+                reply += f" Your uploaded dataset supports this with: {grounded_knowledge}"
             suggestions = trust[1:4]
         elif any(word in lower_message for word in ["faq", "question"]):
             reply = faqs[0] if faqs else "The app has not generated FAQ recommendations yet."
+            if grounded_knowledge:
+                reply += f" Your uploaded material also suggests: {grounded_knowledge}"
             suggestions = faqs[1:4]
         elif any(word in lower_message for word in ["persona", "buyer"]):
             if personas:
                 top = personas[0]
                 reply = f"The highest-priority buyer persona right now is {top.get('persona', 'Unknown')}."
+                if grounded_knowledge:
+                    reply += f" Uploaded context that fits this persona: {grounded_knowledge}"
                 suggestions = [str(top.get("pain_point", "")).strip()] + [", ".join(top.get("emphasis", [])[:3])]
             else:
                 reply = "The app needs a fresh compare run before it can rank buyer personas."
@@ -555,6 +576,8 @@ class AIOverviewService:
             latest = user_actions[0]
             action = latest.get("action") or {}
             reply = f"Your latest tracked review action was {action.get('action_type', 'an action')}."
+            if grounded_knowledge:
+                reply += f" Uploaded learning context: {grounded_knowledge}"
             suggestions = prioritized[:2] or actions[:2]
         elif any(word in lower_message for word in ["#1", "beat #1", "compare my gig", "change first"]):
             leader_change = one_by_one[0] if one_by_one else {}
@@ -565,6 +588,8 @@ class AIOverviewService:
                 )
             else:
                 reply = "Run a fresh market compare so the app can compare your gig against the current #1 result."
+            if grounded_knowledge:
+                reply += f" The uploaded dataset backs this up with: {grounded_knowledge}"
             suggestions = (
                 list(leader_change.get("what_to_change", [])[:3])
                 or prioritized[:3]
@@ -597,8 +622,12 @@ class AIOverviewService:
             if relevant:
                 reply = relevant[0]
                 suggestions = [item for item in relevant[1:4] if item]
+                if grounded_knowledge and "uploaded dataset" not in reply.lower():
+                    reply += f" Uploaded context also says: {grounded_knowledge}"
             elif why:
                 reply = why[0]
+                if grounded_knowledge:
+                    reply += f" Uploaded context also says: {grounded_knowledge}"
                 suggestions = prioritized[:2] + trust[:1]
             elif assistant_history:
                 last = assistant_history[0]
@@ -606,9 +635,13 @@ class AIOverviewService:
                     f"Your last copilot topic was about '{str(last.get('content', 'your gig'))[:100]}'. "
                     "Ask about title, keywords, page-one competitors, pricing, trust, or what to change first."
                 )
+                if grounded_knowledge:
+                    reply += f" Uploaded context also says: {grounded_knowledge}"
             elif history:
                 latest = history[0].get("result_json") or {}
                 reply = str(latest.get("implementation_summary", "")).strip() or reply
+                if grounded_knowledge:
+                    reply += f" Uploaded context also says: {grounded_knowledge}"
                 suggestions = prioritized[:2]
 
         suggestions = [item for item in suggestions if item]
@@ -619,6 +652,16 @@ class AIOverviewService:
             "reply": reply,
             "suggestions": self._dedupe_strings(suggestions)[:4],
         }
+
+    def _grounded_knowledge_context(self, retrieved_knowledge: list[dict]) -> str:
+        if not retrieved_knowledge:
+            return ""
+        top = retrieved_knowledge[0]
+        filename = str(top.get("filename", "dataset")).strip()
+        snippet = str(top.get("snippet", "")).strip()
+        if not snippet:
+            return ""
+        return f"{filename}: {snippet}"
 
     def _relevant_context_lines(self, message: str, context: dict) -> list[str]:
         tokens = self._query_tokens(message)
@@ -796,6 +839,14 @@ class AIOverviewService:
                 return True
 
         if any(word in question for word in ["dataset", "knowledge", "document", "upload"]):
+            filenames = [str(item.get("filename", "")).lower() for item in (context.get("retrieved_knowledge") or [])[:3]]
+            if filenames and not any(name and name in answer for name in filenames):
+                if "uploaded" not in answer and "knowledge" not in answer and "dataset" not in answer:
+                    return True
+
+        if context.get("retrieved_knowledge") and any(
+            word in question for word in ["title", "headline", "description", "rewrite", "copy", "tag", "keyword", "change", "first", "do first"]
+        ):
             filenames = [str(item.get("filename", "")).lower() for item in (context.get("retrieved_knowledge") or [])[:3]]
             if filenames and not any(name and name in answer for name in filenames):
                 if "uploaded" not in answer and "knowledge" not in answer and "dataset" not in answer:

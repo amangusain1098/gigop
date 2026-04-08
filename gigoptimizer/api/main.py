@@ -244,7 +244,9 @@ def create_app() -> FastAPI:
     ) -> dict:
         state = build_state(request=request, authenticated=authenticated, session=session)
         comparison = state.get("gig_comparison") or {}
-        gig_id = comparison.get("gig_id") or comparison.get("gig_url") or dashboard_service._gig_identifier()  # noqa: SLF001
+        marketplace_settings = settings_service.get_settings().marketplace
+        active_gig_url = str(marketplace_settings.my_gig_url or comparison.get("gig_url") or "").strip()
+        gig_id = dashboard_service._gig_identifier(active_gig_url or None)  # noqa: SLF001
         return {
             "state": state,
             "job_runs": job_service.list_runs(limit=25),
@@ -261,8 +263,11 @@ def create_app() -> FastAPI:
     def build_assistant_context() -> dict:
         state = dashboard_service.get_state()
         comparison = state.get("gig_comparison") or {}
+        marketplace_settings = settings_service.get_settings().marketplace
         implementation = comparison.get("implementation_blueprint") or {}
-        gig_id = comparison.get("gig_id") or comparison.get("gig_url") or dashboard_service._gig_identifier()  # noqa: SLF001
+        active_gig_url = str(marketplace_settings.my_gig_url or comparison.get("gig_url") or "").strip()
+        active_terms = marketplace_settings.search_terms or comparison.get("detected_search_terms") or []
+        gig_id = dashboard_service._gig_identifier(active_gig_url or None)  # noqa: SLF001
         memory_context = dashboard_service._memory_context(gig_id=gig_id)  # noqa: SLF001
         latest_report = state.get("latest_report") or {}
         scraper_run = state.get("scraper_run") or {}
@@ -276,8 +281,8 @@ def create_app() -> FastAPI:
         return {
             "optimization_score": latest_report.get("optimization_score"),
             "gig_id": gig_id,
-            "gig_url": comparison.get("gig_url", ""),
-            "primary_search_term": comparison.get("primary_search_term", ""),
+            "gig_url": active_gig_url,
+            "primary_search_term": (active_terms[0] if active_terms else comparison.get("primary_search_term", "")),
             "recommended_title": implementation.get("recommended_title", ""),
             "recommended_tags": implementation.get("recommended_tags", []),
             "market_anchor_price": comparison.get("market_anchor_price"),
@@ -310,6 +315,18 @@ def create_app() -> FastAPI:
             "assistant_history": memory_context.get("assistant_history", []),
             "knowledge_documents": knowledge_service.summarize_documents(gig_id=gig_id, limit=8),
         }
+
+    def sync_marketplace_context(*, gig_url: str = "", search_terms: list[str] | None = None) -> None:
+        cleaned_gig_url = str(gig_url or "").strip()
+        cleaned_terms = [str(item).strip() for item in (search_terms or []) if str(item).strip()]
+        if not cleaned_gig_url and not cleaned_terms:
+            return
+        payload: dict[str, dict[str, object]] = {"marketplace": {}}
+        if cleaned_gig_url:
+            payload["marketplace"]["my_gig_url"] = cleaned_gig_url
+        if cleaned_terms:
+            payload["marketplace"]["search_terms"] = cleaned_terms
+        settings_service.update_settings(payload)
 
     def build_health_payload() -> dict:
         db_ok, db_detail = database_manager.healthcheck()
@@ -763,17 +780,28 @@ def create_app() -> FastAPI:
                 use_live_connectors=bool(payload.get("use_live_connectors", False))
             )
         elif job_type == "marketplace_compare":
+            sync_marketplace_context(
+                gig_url=str(payload.get("gig_url", "")).strip(),
+                search_terms=[str(item).strip() for item in (payload.get("search_terms") or []) if str(item).strip()],
+            )
             run = job_service.enqueue_marketplace_compare(
                 gig_url=str(payload.get("gig_url", "")).strip(),
                 search_terms=[str(item).strip() for item in (payload.get("search_terms") or []) if str(item).strip()],
             )
         elif job_type == "manual_compare":
+            sync_marketplace_context(
+                gig_url=str(payload.get("gig_url", "")).strip(),
+                search_terms=[str(item).strip() for item in (payload.get("search_terms") or []) if str(item).strip()],
+            )
             run = job_service.enqueue_manual_compare(
                 gig_url=str(payload.get("gig_url", "")).strip(),
                 competitor_input=str(payload.get("competitor_input", "")),
                 search_terms=[str(item).strip() for item in (payload.get("search_terms") or []) if str(item).strip()],
             )
         elif job_type == "marketplace_scrape":
+            sync_marketplace_context(
+                search_terms=[str(item).strip() for item in (payload.get("search_terms") or []) if str(item).strip()],
+            )
             run = job_service.enqueue_marketplace_scrape(
                 search_terms=[str(item).strip() for item in (payload.get("search_terms") or []) if str(item).strip()],
             )
@@ -798,8 +826,8 @@ def create_app() -> FastAPI:
         return {"records": repository.list_hitl_items(limit=50)}
 
     @app.get("/api/v2/datasets")
-    async def list_datasets(request: Request, _: None = Depends(require_auth)) -> dict:
-        gig_id = dashboard_service._gig_identifier()  # noqa: SLF001
+    async def list_datasets(request: Request, gig_url: str = "", _: None = Depends(require_auth)) -> dict:
+        gig_id = dashboard_service._gig_identifier(gig_url or None)  # noqa: SLF001
         return {
             "gig_id": gig_id,
             "datasets": knowledge_service.list_documents(gig_id=gig_id, limit=20),
@@ -823,6 +851,7 @@ def create_app() -> FastAPI:
         except Exception as exc:
             raise HTTPException(status_code=400, detail="Dataset payload is not valid base64.") from exc
 
+        sync_marketplace_context(gig_url=gig_url)
         gig_id = dashboard_service._gig_identifier(gig_url or None)  # noqa: SLF001
         try:
             document = knowledge_service.ingest_document(
@@ -848,10 +877,11 @@ def create_app() -> FastAPI:
     async def delete_dataset(
         request: Request,
         document_id: str,
+        gig_url: str = "",
         _: None = Depends(require_auth),
         __: None = Depends(require_csrf),
     ) -> dict:
-        gig_id = dashboard_service._gig_identifier()  # noqa: SLF001
+        gig_id = dashboard_service._gig_identifier(gig_url or None)  # noqa: SLF001
         try:
             deleted = knowledge_service.delete_document(gig_id=gig_id, document_id=document_id)
         except KeyError as exc:
@@ -883,11 +913,34 @@ def create_app() -> FastAPI:
         context = build_assistant_context()
         gig_id = str(context.get("gig_id") or dashboard_service._gig_identifier())  # noqa: SLF001
         message = str(payload.get("message", ""))
-        context["retrieved_knowledge"] = knowledge_service.retrieve_context(
+        retrieval_query_parts = [
+            message,
+            str(context.get("primary_search_term", "")).strip(),
+            str(context.get("recommended_title", "")).strip(),
+            " ".join(str(item).strip() for item in (context.get("recommended_tags") or [])[:3] if str(item).strip()),
+            " ".join(str(item).strip() for item in (context.get("do_this_first") or [])[:2] if str(item).strip()),
+        ]
+        retrieval_query = " ".join(part for part in retrieval_query_parts if part).strip()
+        retrieved_knowledge = knowledge_service.retrieve_context(
             gig_id=gig_id,
-            query=message,
+            query=retrieval_query or message,
             limit=6,
         )
+        if not retrieved_knowledge:
+            retrieved_knowledge = [
+                {
+                    "document_id": item.get("id"),
+                    "filename": item.get("filename", ""),
+                    "score": 1,
+                    "snippet": str(item.get("preview", "")).strip(),
+                    "content": str(item.get("preview", "")).strip(),
+                    "metadata": {"source": "document_preview"},
+                    "created_at": item.get("created_at"),
+                }
+                for item in knowledge_service.summarize_documents(gig_id=gig_id, limit=3)
+                if str(item.get("preview", "")).strip()
+            ]
+        context["retrieved_knowledge"] = retrieved_knowledge
         repository.record_assistant_message(
             gig_id=gig_id,
             role="user",

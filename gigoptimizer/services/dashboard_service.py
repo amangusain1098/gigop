@@ -1994,6 +1994,10 @@ class DashboardService:
         comparison = state.gig_comparison or {}
         if comparison.get("gig_url"):
             return build_gig_key(str(comparison["gig_url"]))
+        if self.settings_service is not None:
+            settings_gig_url = str(self.settings_service.get_settings().marketplace.my_gig_url or "").strip()
+            if settings_gig_url:
+                return build_gig_key(settings_gig_url)
         snapshot = self._load_snapshot()
         return build_gig_key(self._normalize_query(snapshot.title) or "primary")
 

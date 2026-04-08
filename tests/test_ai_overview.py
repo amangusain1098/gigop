@@ -205,6 +205,40 @@ class AIOverviewFallbackTests(unittest.TestCase):
         self.assertIn("uploaded knowledge", response["reply"].lower())
         self.assertTrue(response["suggestions"])
 
+    def test_local_chat_uses_uploaded_knowledge_for_title_rewrite_question(self) -> None:
+        with TemporaryDirectory() as tmp:
+            temp_root = Path(tmp)
+            with patch.dict(
+                os.environ,
+                {
+                    "DATA_DIR": str(temp_root / "data"),
+                    "INTEGRATION_SETTINGS_PATH": str(temp_root / "data" / "integrations.json"),
+                    "AI_PROVIDER": "n8n",
+                    "AI_API_KEY": "",
+                },
+                clear=False,
+            ):
+                config = GigOptimizerConfig.from_env()
+                settings = SettingsService(config)
+                settings.update_settings({"ai": {"enabled": True, "provider": "n8n", "api_base_url": ""}})
+                service = AIOverviewService(settings)
+                response = service.chat(
+                    message="Rewrite my title for better search demand.",
+                    context={
+                        "recommended_title": "I will optimize WordPress speed and improve PageSpeed Insights",
+                        "retrieved_knowledge": [
+                            {
+                                "filename": "market-notes.txt",
+                                "snippet": "Put PageSpeed Insights and GTmetrix in the first line because buyers search those exact tool names.",
+                            }
+                        ],
+                    },
+                )
+
+        self.assertIn("strongest current title option", response["reply"].lower())
+        self.assertIn("market-notes.txt", response["reply"])
+        self.assertIn("pagespeed insights", response["reply"].lower())
+
     def test_n8n_overview_uses_webhook_response(self) -> None:
         with TemporaryDirectory() as tmp:
             temp_root = Path(tmp)

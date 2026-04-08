@@ -101,8 +101,14 @@ function App() {
   function applyBootstrap(payload: BootstrapPayload) {
     setData(payload)
     const marketplace = payload.state.notifications?.marketplace ?? {}
-    setGigUrl(String(marketplace.my_gig_url ?? payload.state.gig_comparison?.gig_url ?? ''))
-    setTerms((marketplace.search_terms ?? payload.state.gig_comparison?.detected_search_terms ?? []).join(', '))
+    const comparisonGigUrl = String(payload.state.gig_comparison?.gig_url ?? '').trim()
+    const comparisonTerms = Array.isArray(payload.state.gig_comparison?.detected_search_terms)
+      ? payload.state.gig_comparison?.detected_search_terms ?? []
+      : []
+    const savedGigUrl = String(marketplace.my_gig_url ?? '').trim()
+    const savedTerms = Array.isArray(marketplace.search_terms) ? marketplace.search_terms : []
+    setGigUrl(comparisonGigUrl || savedGigUrl)
+    setTerms((comparisonTerms.length ? comparisonTerms : savedTerms).join(', '))
     setMaxResults(Number(marketplace.max_results ?? 10))
     setAutoCompareEnabled(Boolean(marketplace.auto_compare_enabled ?? false))
     setAutoCompareMinutes(Number(marketplace.auto_compare_interval_minutes ?? 5))

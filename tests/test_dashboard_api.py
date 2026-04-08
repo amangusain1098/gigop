@@ -705,6 +705,124 @@ class DashboardApiTests(unittest.TestCase):
                     self.assertEqual(deleted.status_code, 200)
                     self.assertFalse(deleted.json()["datasets"])
 
+    def test_marketplace_compare_job_persists_active_gig_and_terms(self) -> None:
+        root = Path(__file__).resolve().parent.parent
+        example_snapshot = root / "examples" / "wordpress_speed_snapshot.json"
+
+        with TemporaryDirectory() as tmp:
+            temp_root = Path(tmp)
+            with patch.dict(
+                os.environ,
+                {
+                    "DATA_DIR": str(temp_root / "data"),
+                    "UPLOADS_DIR": str(temp_root / "data" / "uploads"),
+                    "REPORTS_DIR": str(temp_root / "reports"),
+                    "DASHBOARD_STATE_PATH": str(temp_root / "data" / "dashboard_state.json"),
+                    "METRICS_HISTORY_PATH": str(temp_root / "data" / "metrics_history.json"),
+                    "AGENT_HEALTH_PATH": str(temp_root / "data" / "agent_health.json"),
+                    "APPROVAL_QUEUE_DB_PATH": str(temp_root / "data" / "approval_queue.db"),
+                    "INTEGRATION_SETTINGS_PATH": str(temp_root / "data" / "integrations.json"),
+                    "DEFAULT_SNAPSHOT_PATH": str(example_snapshot),
+                    "APP_AUTH_ENABLED": "true",
+                    "APP_ADMIN_USERNAME": "admin",
+                    "APP_ADMIN_PASSWORD": "super-secret-password",
+                    "APP_ADMIN_PASSWORD_HASH": "",
+                    "APP_SESSION_SECRET": "test-session-secret",
+                    "JOB_QUEUE_EAGER": "true",
+                },
+                clear=False,
+            ):
+                from gigoptimizer.api.main import create_app
+
+                with TestClient(create_app()) as client:
+                    login = client.post(
+                        "/api/auth/login",
+                        json={"username": "admin", "password": "super-secret-password"},
+                    )
+                    csrf_token = login.json()["auth"]["csrf_token"]
+
+                    queued = client.post(
+                        "/api/v2/jobs",
+                        json={
+                            "job_type": "marketplace_compare",
+                            "gig_url": "https://www.fiverr.com/example/custom-anime-logo",
+                            "search_terms": ["anime logo", "mascot logo"],
+                        },
+                        headers={"X-CSRF-Token": csrf_token},
+                    )
+
+                    self.assertEqual(queued.status_code, 200)
+                    marketplace = queued.json()["state"]["notifications"]["marketplace"]
+                    self.assertEqual(marketplace["my_gig_url"], "https://www.fiverr.com/example/custom-anime-logo")
+                    self.assertEqual(marketplace["search_terms"], ["anime logo", "mascot logo"])
+
+    def test_dataset_upload_anchors_to_selected_gig_and_generic_chat_uses_it(self) -> None:
+        root = Path(__file__).resolve().parent.parent
+        example_snapshot = root / "examples" / "wordpress_speed_snapshot.json"
+
+        with TemporaryDirectory() as tmp:
+            temp_root = Path(tmp)
+            with patch.dict(
+                os.environ,
+                {
+                    "DATA_DIR": str(temp_root / "data"),
+                    "UPLOADS_DIR": str(temp_root / "data" / "uploads"),
+                    "REPORTS_DIR": str(temp_root / "reports"),
+                    "DASHBOARD_STATE_PATH": str(temp_root / "data" / "dashboard_state.json"),
+                    "METRICS_HISTORY_PATH": str(temp_root / "data" / "metrics_history.json"),
+                    "AGENT_HEALTH_PATH": str(temp_root / "data" / "agent_health.json"),
+                    "APPROVAL_QUEUE_DB_PATH": str(temp_root / "data" / "approval_queue.db"),
+                    "INTEGRATION_SETTINGS_PATH": str(temp_root / "data" / "integrations.json"),
+                    "DEFAULT_SNAPSHOT_PATH": str(example_snapshot),
+                    "APP_AUTH_ENABLED": "true",
+                    "APP_ADMIN_USERNAME": "admin",
+                    "APP_ADMIN_PASSWORD": "super-secret-password",
+                    "APP_ADMIN_PASSWORD_HASH": "",
+                    "APP_SESSION_SECRET": "test-session-secret",
+                    "AI_PROVIDER": "n8n",
+                    "AI_API_KEY": "",
+                },
+                clear=False,
+            ):
+                from gigoptimizer.api.main import create_app
+
+                with TestClient(create_app()) as client:
+                    login = client.post(
+                        "/api/auth/login",
+                        json={"username": "admin", "password": "super-secret-password"},
+                    )
+                    csrf_token = login.json()["auth"]["csrf_token"]
+                    payload = base64.b64encode(
+                        b"Use anime logo and mascot logo near the top of the title, then mention color variants."
+                    ).decode("ascii")
+
+                    uploaded = client.post(
+                        "/api/v2/datasets/upload",
+                        json={
+                            "filename": "anime-notes.txt",
+                            "content_type": "text/plain",
+                            "content_base64": payload,
+                            "gig_url": "https://www.fiverr.com/example/custom-anime-logo",
+                        },
+                        headers={"X-CSRF-Token": csrf_token},
+                    )
+                    self.assertEqual(uploaded.status_code, 200)
+                    self.assertTrue(uploaded.json()["datasets"])
+                    self.assertEqual(
+                        uploaded.json()["state"]["notifications"]["marketplace"]["my_gig_url"],
+                        "https://www.fiverr.com/example/custom-anime-logo",
+                    )
+
+                    assistant = client.post(
+                        "/api/assistant/chat",
+                        json={"message": "How should I rewrite my title right now?"},
+                        headers={"X-CSRF-Token": csrf_token},
+                    )
+                    self.assertEqual(assistant.status_code, 200)
+                    reply = assistant.json()["assistant"]["reply"].lower()
+                    self.assertIn("uploaded", reply)
+                    self.assertIn("anime-notes.txt", assistant.json()["assistant"]["reply"])
+
     def test_health_endpoint_redacts_database_url_and_summarizes_last_run(self) -> None:
         root = Path(__file__).resolve().parent.parent
         example_snapshot = root / "examples" / "wordpress_speed_snapshot.json"
