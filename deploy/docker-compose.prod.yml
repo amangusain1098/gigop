@@ -31,6 +31,12 @@ services:
     restart: unless-stopped
     environment:
       APP_ENV: production
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.gigoptimizer.rule: "Host(`animha.co.in`) || Host(`www.animha.co.in`)"
+      traefik.http.routers.gigoptimizer.entrypoints: "websecure"
+      traefik.http.routers.gigoptimizer.tls.certresolver: "letsencrypt"
+      traefik.http.services.gigoptimizer.loadbalancer.server.port: "8001"
     volumes:
       - app_data:/app/data
       - app_reports:/app/reports

@@ -26,4 +26,5 @@ jobs:
             git fetch --all
             git checkout main
             git pull --ff-only origin main
+            [ -f .env.production ] || cp .env.production.example .env.production
             bash deploy/restart-stack.sh

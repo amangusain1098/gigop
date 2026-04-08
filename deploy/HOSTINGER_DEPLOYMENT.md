@@ -34,8 +34,8 @@ Optional but recommended:
 ## 3. Start the stack
 
 ```bash
-docker compose -f deploy/docker-compose.prod.yml build
-docker compose -f deploy/docker-compose.prod.yml up -d postgres redis app worker scheduler nginx certbot
+docker compose --env-file .env.production -f deploy/docker-compose.prod.yml build
+docker compose --env-file .env.production -f deploy/docker-compose.prod.yml up -d postgres redis app worker scheduler nginx certbot
 ```
 
 ## 4. Issue SSL certificates
@@ -43,8 +43,8 @@ docker compose -f deploy/docker-compose.prod.yml up -d postgres redis app worker
 Point your DNS to the VPS first, then run:
 
 ```bash
-docker compose -f deploy/docker-compose.prod.yml run --rm certbot certonly --webroot -w /var/www/certbot -d animha.co.in --email you@example.com --agree-tos --no-eff-email
-docker compose -f deploy/docker-compose.prod.yml restart nginx
+docker compose --env-file .env.production -f deploy/docker-compose.prod.yml run --rm certbot certonly --webroot -w /var/www/certbot -d animha.co.in --email you@example.com --agree-tos --no-eff-email
+docker compose --env-file .env.production -f deploy/docker-compose.prod.yml restart nginx
 ```
 
 The nginx entrypoint automatically switches from the HTTP template to the HTTPS template once certificates are present.
@@ -64,7 +64,7 @@ curl -fsSL https://animha.co.in/api/health
 ## 7. Worker commands
 
 ```bash
-docker compose -f deploy/docker-compose.prod.yml logs -f worker
-docker compose -f deploy/docker-compose.prod.yml logs -f scheduler
-docker compose -f deploy/docker-compose.prod.yml ps
+docker compose --env-file .env.production -f deploy/docker-compose.prod.yml logs -f worker
+docker compose --env-file .env.production -f deploy/docker-compose.prod.yml logs -f scheduler
+docker compose --env-file .env.production -f deploy/docker-compose.prod.yml ps
 ```

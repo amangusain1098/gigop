@@ -29,8 +29,8 @@ git clone https://github.com/YOUR_GITHUB_USERNAME/YOUR_REPOSITORY.git gigoptimiz
 cd /opt/gigoptimizer-pro
 cp .env.production.example .env.production
 nano .env.production
-docker compose -f deploy/docker-compose.prod.yml build
-docker compose -f deploy/docker-compose.prod.yml up -d postgres redis app worker scheduler nginx certbot
-docker compose -f deploy/docker-compose.prod.yml run --rm certbot certonly --webroot -w /var/www/certbot -d animha.co.in --email you@example.com --agree-tos --no-eff-email
-docker compose -f deploy/docker-compose.prod.yml restart nginx
+docker compose --env-file .env.production -f deploy/docker-compose.prod.yml build
+docker compose --env-file .env.production -f deploy/docker-compose.prod.yml up -d postgres redis app worker scheduler nginx certbot
+docker compose --env-file .env.production -f deploy/docker-compose.prod.yml run --rm certbot certonly --webroot -w /var/www/certbot -d animha.co.in --email you@example.com --agree-tos --no-eff-email
+docker compose --env-file .env.production -f deploy/docker-compose.prod.yml restart nginx
 ```
