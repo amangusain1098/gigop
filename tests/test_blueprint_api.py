@@ -15,7 +15,7 @@ class BlueprintApiTests(unittest.TestCase):
         root = Path(__file__).resolve().parent.parent
         example_snapshot = root / "examples" / "wordpress_speed_snapshot.json"
 
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             temp_root = Path(tmp)
             with patch.dict(
                 os.environ,
@@ -37,6 +37,10 @@ class BlueprintApiTests(unittest.TestCase):
                 from gigoptimizer.api.main import create_app
 
                 with TestClient(create_app()) as client:
+                    terms = client.get("/terms-of-service")
+                    self.assertEqual(terms.status_code, 200)
+                    self.assertIn("Terms of service", terms.text)
+
                     dashboard = client.get("/dashboard")
                     self.assertEqual(dashboard.status_code, 200)
                     self.assertIn("GigOptimizer Pro Blueprint Dashboard", dashboard.text)
@@ -52,7 +56,7 @@ class BlueprintApiTests(unittest.TestCase):
         root = Path(__file__).resolve().parent.parent
         example_snapshot = root / "examples" / "wordpress_speed_snapshot.json"
 
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             temp_root = Path(tmp)
             with patch.dict(
                 os.environ,

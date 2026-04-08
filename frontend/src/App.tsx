@@ -99,12 +99,11 @@ function App() {
     return () => window.cancelAnimationFrame(frame)
   }, [assistantOpen, assistantMessages.length, assistantBusy])
 
-  function applyBootstrap(payload: BootstrapPayload) {
-    setData(payload)
-    const marketplace = payload.state.notifications?.marketplace ?? {}
-    const comparisonGigUrl = String(payload.state.gig_comparison?.gig_url ?? '').trim()
-    const comparisonTerms = Array.isArray(payload.state.gig_comparison?.detected_search_terms)
-      ? payload.state.gig_comparison?.detected_search_terms ?? []
+  function syncMarketplaceInputs(nextState: LegacyState) {
+    const marketplace = nextState.notifications?.marketplace ?? {}
+    const comparisonGigUrl = String(nextState.gig_comparison?.gig_url ?? '').trim()
+    const comparisonTerms = Array.isArray(nextState.gig_comparison?.detected_search_terms)
+      ? nextState.gig_comparison?.detected_search_terms ?? []
       : []
     const savedGigUrl = String(marketplace.my_gig_url ?? '').trim()
     const savedTerms = Array.isArray(marketplace.search_terms) ? marketplace.search_terms : []
@@ -116,6 +115,11 @@ function App() {
     setMaxResults(Number(marketplace.max_results ?? 10))
     setAutoCompareEnabled(Boolean(marketplace.auto_compare_enabled ?? false))
     setAutoCompareMinutes(Number(marketplace.auto_compare_interval_minutes ?? 5))
+  }
+
+  function applyBootstrap(payload: BootstrapPayload) {
+    setData(payload)
+    syncMarketplaceInputs(payload.state)
     const nextAssistantMessages = buildAssistantMessages(payload)
     if (nextAssistantMessages.length) {
       setAssistantMessages(nextAssistantMessages)
@@ -130,6 +134,7 @@ function App() {
     if (!data) return
     if (event.type === 'state') {
       const nextState = event.payload as LegacyState
+      syncMarketplaceInputs(nextState)
       setData({
         ...data,
         state: { ...data.state, ...nextState },
@@ -306,7 +311,9 @@ function App() {
           csrfToken,
         ),
       )
-      setData({ ...data, state: { ...data.state, notifications: settings } })
+      const notifications = settings
+      syncMarketplaceInputs({ ...data.state, notifications })
+      setData({ ...data, state: { ...data.state, notifications } })
       setMessage('Marketplace settings saved.')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Unable to save settings.')
@@ -444,6 +451,31 @@ function App() {
     }
   }
 
+  async function reviewSecurityAttempt(attemptId: string, action: 'save' | 'discard') {
+    if (!data) return
+    setBusy(`security-${action}-${attemptId}`)
+    setError('')
+    setMessage('')
+    try {
+      await withCsrfRetry((csrfToken) =>
+        fetchJson<{ attempt: Record<string, unknown> }>(
+          `/api/security/login-attempts/${attemptId}/${action}`,
+          {
+            method: 'POST',
+          },
+          csrfToken,
+        ),
+      )
+      const refreshed = await loadBootstrap()
+      applyBootstrap(refreshed)
+      setMessage(action === 'save' ? 'Security capture saved.' : 'Security capture discarded.')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Security review action failed.')
+    } finally {
+      setBusy('')
+    }
+  }
+
   function handleAssistantKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
@@ -502,7 +534,10 @@ function App() {
     <main className="shell">
       <section className="hero">
         <div>
-          <p className="eyebrow">GigOptimizer Pro Blueprint</p>
+          <div className="hero-topbar">
+            <p className="eyebrow">GigOptimizer Pro Blueprint</p>
+            <a className="hero-link" href="/terms-of-service" target="_blank" rel="noopener noreferrer">Terms of Service</a>
+          </div>
           <h1>Live Fiverr visibility, page-one competitor tracking, and exact gig changes to publish next.</h1>
           <p className="lede">
             This dashboard watches Fiverr page one, compares your gig against the current top 10 public results, and turns
@@ -532,7 +567,7 @@ function App() {
         <div className="button-row">
           <button onClick={() => postJob('pipeline', { use_live_connectors: liveMode })} disabled={busy === 'pipeline'}>{busy === 'pipeline' ? 'Queueing...' : 'Run pipeline'}</button>
           <button onClick={() => postJob('marketplace_compare', { gig_url: gigUrl, search_terms: splitTerms(terms) })} disabled={busy === 'marketplace_compare'}>{busy === 'marketplace_compare' ? 'Queueing...' : 'Compare gig vs top 10'}</button>
-          <button onClick={() => postJob('marketplace_scrape', { search_terms: splitTerms(terms) })} disabled={busy === 'marketplace_scrape'}>{busy === 'marketplace_scrape' ? 'Queueing...' : 'Scan market'}</button>
+          <button onClick={() => postJob('marketplace_scrape', { gig_url: gigUrl, search_terms: splitTerms(terms) })} disabled={busy === 'marketplace_scrape'}>{busy === 'marketplace_scrape' ? 'Queueing...' : 'Scan market'}</button>
           <button onClick={() => postJob('manual_compare', { gig_url: gigUrl, search_terms: splitTerms(terms), competitor_input: manualInput })} disabled={busy === 'manual_compare' || !manualInput.trim()}>{busy === 'manual_compare' ? 'Queueing...' : 'Analyze manual input'}</button>
           <button onClick={() => postJob('weekly_report', { use_live_connectors: liveMode })} disabled={busy === 'weekly_report'}>{busy === 'weekly_report' ? 'Queueing...' : 'Run weekly report'}</button>
           <button className="secondary" onClick={() => void refresh()} disabled={busy === 'refresh'}>Refresh dashboard</button>
@@ -978,8 +1013,27 @@ function App() {
                     <p>{attempt.remote_addr || 'Unknown IP'}</p>
                     <p>{attempt.failure_count} failed tries</p>
                     <p>Capture: {human(attempt.capture_status || 'not_requested')}</p>
+                    <p>{attempt.user_agent || 'No device summary captured.'}</p>
                     {attempt.capture_error ? <p>{attempt.capture_error}</p> : null}
                     <p>{attempt.created_at ? new Date(attempt.created_at).toLocaleString() : '--'}</p>
+                    {attempt.capture_status === 'pending_review' && attempt.photo_available ? (
+                      <div className="button-row button-row--two security-actions">
+                        <button
+                          className="secondary"
+                          onClick={() => void reviewSecurityAttempt(attempt.id, 'save')}
+                          disabled={busy === `security-save-${attempt.id}`}
+                        >
+                          {busy === `security-save-${attempt.id}` ? 'Saving...' : 'Save'}
+                        </button>
+                        <button
+                          className="secondary"
+                          onClick={() => void reviewSecurityAttempt(attempt.id, 'discard')}
+                          disabled={busy === `security-discard-${attempt.id}`}
+                        >
+                          {busy === `security-discard-${attempt.id}` ? 'Discarding...' : 'Discard'}
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               ))}
@@ -1097,7 +1151,10 @@ function Block({ title, body, action, busy }: { title: string; body: string; act
 }
 
 function splitTerms(value: string) {
-  return value.split(',').map((item) => item.trim()).filter(Boolean)
+  return value
+    .split(/[\n,;]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
 }
 
 function preserveMarketplaceDraft(currentValue: string, previousSyncedValue: string) {

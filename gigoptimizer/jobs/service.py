@@ -90,10 +90,18 @@ class JobService:
         )
         return self.repository.get_agent_run(run["run_id"]) or run
 
-    def enqueue_marketplace_scrape(self, *, search_terms: list[str] | None = None) -> dict[str, Any]:
+    def enqueue_marketplace_scrape(
+        self,
+        *,
+        gig_url: str = "",
+        search_terms: list[str] | None = None,
+    ) -> dict[str, Any]:
         run = self.repository.create_agent_run(
             run_type="marketplace_scrape",
-            input_payload={"search_terms": search_terms or []},
+            input_payload={
+                "gig_url": gig_url,
+                "search_terms": search_terms or [],
+            },
             status="queued",
         )
         self._dispatch(

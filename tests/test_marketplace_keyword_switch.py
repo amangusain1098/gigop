@@ -8,9 +8,82 @@ from unittest.mock import patch
 
 from gigoptimizer.models import ConnectorStatus, GigPageOverview, MarketplaceGig
 from gigoptimizer.services.dashboard_service import DashboardService
+from gigoptimizer.services.settings_service import SettingsService
 
 
 class MarketplaceKeywordSwitchTests(unittest.TestCase):
+    def test_marketplace_scrape_uses_live_terms_and_active_gig(self) -> None:
+        root = Path(__file__).resolve().parent.parent
+        example_snapshot = root / "examples" / "wordpress_speed_snapshot.json"
+
+        with TemporaryDirectory() as tmp:
+            temp_root = Path(tmp)
+            with patch.dict(
+                os.environ,
+                {
+                    "DATA_DIR": str(temp_root / "data"),
+                    "REPORTS_DIR": str(temp_root / "reports"),
+                    "DASHBOARD_STATE_PATH": str(temp_root / "data" / "dashboard_state.json"),
+                    "METRICS_HISTORY_PATH": str(temp_root / "data" / "metrics_history.json"),
+                    "AGENT_HEALTH_PATH": str(temp_root / "data" / "agent_health.json"),
+                    "APPROVAL_QUEUE_DB_PATH": str(temp_root / "data" / "approval_queue.db"),
+                    "INTEGRATION_SETTINGS_PATH": str(temp_root / "data" / "integrations.json"),
+                    "DEFAULT_SNAPSHOT_PATH": str(example_snapshot),
+                    "APP_AUTH_ENABLED": "false",
+                },
+                clear=False,
+            ):
+                service = DashboardService()
+                service.settings_service = SettingsService(service.config)
+                service.settings_service.update_settings(
+                    {
+                        "marketplace": {
+                            "my_gig_url": "https://www.fiverr.com/example/react-app",
+                            "search_terms": ["animation"],
+                        }
+                    }
+                )
+                react_gig = GigPageOverview(
+                    url="https://www.fiverr.com/example/react-app",
+                    title="I will build your react application",
+                    seller_name="React Dev",
+                    description_excerpt="React frontend development service.",
+                    starting_price=75.0,
+                    rating=4.9,
+                    reviews_count=18,
+                    tags=["react", "frontend"],
+                )
+                competitor_gigs = [
+                    MarketplaceGig(
+                        title="I will build full stack website with react js",
+                        seller_name="React Seller",
+                        matched_term="react",
+                        starting_price=60,
+                        rating=4.9,
+                        reviews_count=120,
+                        rank_position=1,
+                        page_number=1,
+                        is_first_page=True,
+                    )
+                ]
+                with patch.object(
+                    service.orchestrator.marketplace,
+                    "fetch_competitor_gigs",
+                    return_value=(competitor_gigs, ConnectorStatus("fiverr_marketplace", "ok", "Loaded react gigs.")),
+                ) as fetch_competitors, patch.object(
+                    service.orchestrator.marketplace,
+                    "fetch_gig_page_overview",
+                    return_value=(react_gig, ConnectorStatus("fiverr_marketplace", "ok", "Loaded react gig.")),
+                ), patch.object(service, "_send_comparison_alert"):
+                    state = service.run_marketplace_scrape(search_terms=["react"])
+
+                fetch_competitors.assert_called()
+                self.assertEqual(fetch_competitors.call_args.args[0], ["react"])
+                comparison = state["gig_comparison"]
+                self.assertEqual(comparison["primary_search_term"], "react")
+                self.assertEqual(comparison["gig_url"], react_gig.url)
+                self.assertGreaterEqual(comparison["competitor_count"], 1)
+
     def test_explicit_mismatched_terms_do_not_fall_back_to_snapshot_competitors(self) -> None:
         root = Path(__file__).resolve().parent.parent
         example_snapshot = root / "examples" / "wordpress_speed_snapshot.json"

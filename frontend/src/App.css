@@ -28,6 +28,25 @@
   grid-template-columns: 1.4fr 1fr;
 }
 
+.hero-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.hero-link {
+  color: #8ed3ff;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.hero-link:hover {
+  text-decoration: underline;
+}
+
 .eyebrow {
   margin: 0 0 8px;
   color: #70c6ff;
@@ -256,6 +275,10 @@ button:disabled {
 .security-card__content p {
   margin: 6px 0 0;
   color: #91a6be;
+}
+
+.security-actions {
+  margin-top: 12px;
 }
 
 .security-thumb {

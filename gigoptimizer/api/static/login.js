@@ -1,7 +1,11 @@
 const loginForm = document.getElementById("login-form");
 const loginStatus = document.getElementById("login-status");
 const submitButton = loginForm ? loginForm.querySelector('button[type="submit"]') : null;
+const consentBanner = document.getElementById("cookie-consent-banner");
+const acceptConsentButton = document.getElementById("cookie-consent-accept");
+const declineConsentButton = document.getElementById("cookie-consent-decline");
 const LOGIN_CLIENT_KEY = "gigoptimizer-login-client-id";
+const COOKIE_CONSENT_KEY = "gigoptimizer-cookie-consent";
 
 function ensureClientId() {
   const existing = window.localStorage.getItem(LOGIN_CLIENT_KEY);
@@ -13,6 +17,52 @@ function ensureClientId() {
     : `gigoptimizer-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   window.localStorage.setItem(LOGIN_CLIENT_KEY, generated);
   return generated;
+}
+
+function getCookieConsent() {
+  return window.localStorage.getItem(COOKIE_CONSENT_KEY) || "";
+}
+
+function setCookieConsent(value) {
+  window.localStorage.setItem(COOKIE_CONSENT_KEY, value);
+  if (consentBanner) {
+    consentBanner.hidden = true;
+  }
+}
+
+function initializeConsentBanner() {
+  if (!consentBanner) {
+    return;
+  }
+  const consent = getCookieConsent();
+  consentBanner.hidden = Boolean(consent);
+  if (acceptConsentButton) {
+    acceptConsentButton.addEventListener("click", () => {
+      setCookieConsent("accepted");
+      if (loginStatus) {
+        loginStatus.textContent = "Cookie consent accepted. Camera-based security capture is available if repeated failed logins occur.";
+      }
+    });
+  }
+  if (declineConsentButton) {
+    declineConsentButton.addEventListener("click", () => {
+      setCookieConsent("declined");
+      if (loginStatus) {
+        loginStatus.textContent = "Cookie consent declined. Login still works, but camera-based security capture is disabled.";
+      }
+    });
+  }
+}
+
+function collectDeviceInfo() {
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+  return {
+    platform: navigator.platform || "",
+    language: navigator.language || "",
+    screen: window.screen ? `${window.screen.width}x${window.screen.height}` : "",
+    timezone,
+    touch_points: typeof navigator.maxTouchPoints === "number" ? String(navigator.maxTouchPoints) : "",
+  };
 }
 
 async function postCapture(payload) {
@@ -29,11 +79,22 @@ async function postCapture(payload) {
 }
 
 async function captureFailurePhoto(attemptId, clientId) {
+  if (getCookieConsent() !== "accepted") {
+    await postCapture({
+      attempt_id: attemptId,
+      client_id: clientId,
+      capture_error: "consent_declined",
+      device_info: collectDeviceInfo(),
+    });
+    return "Cookie or camera consent was not granted, so no snapshot was captured.";
+  }
+
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     await postCapture({
       attempt_id: attemptId,
       client_id: clientId,
       capture_error: "camera_not_supported",
+      device_info: collectDeviceInfo(),
     });
     return "Camera access is not available in this browser.";
   }
@@ -71,6 +132,7 @@ async function captureFailurePhoto(attemptId, clientId) {
       client_id: clientId,
       content_type: "image/jpeg",
       image_base64: imageBase64,
+      device_info: collectDeviceInfo(),
     });
     return "Security snapshot captured after repeated failed login attempts.";
   } catch (error) {
@@ -79,6 +141,7 @@ async function captureFailurePhoto(attemptId, clientId) {
       attempt_id: attemptId,
       client_id: clientId,
       capture_error: message,
+      device_info: collectDeviceInfo(),
     });
     return "Camera capture was required, but permission was denied or unavailable.";
   } finally {
@@ -88,6 +151,8 @@ async function captureFailurePhoto(attemptId, clientId) {
     video.remove();
   }
 }
+
+initializeConsentBanner();
 
 if (loginForm && loginStatus) {
   loginForm.addEventListener("submit", async (event) => {
@@ -121,7 +186,7 @@ if (loginForm && loginStatus) {
             message = `${message} ${captureDetail}`;
           }
         } else if (payload.failed_attempts) {
-          message = `${message} Failed attempts: ${payload.failed_attempts}/3 before camera capture is required.`;
+          message = `${message} Failed attempts: ${payload.failed_attempts}/3 before camera capture is considered.`;
         }
         loginStatus.textContent = message;
         return;

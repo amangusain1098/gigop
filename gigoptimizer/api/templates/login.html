@@ -9,7 +9,10 @@
 <body class="login-body">
   <main class="login-shell">
     <section class="login-card">
-      <p class="eyebrow">GigOptimizer Pro</p>
+      <div class="login-card__top">
+        <p class="eyebrow">GigOptimizer Pro</p>
+        <a class="login-terms-link" href="/terms-of-service" target="_blank" rel="noopener">Terms of Service</a>
+      </div>
       <h1>Secure dashboard login.</h1>
       <p class="hero-text">
         Sign in before connecting the app to your real Fiverr seller data, Slack workspace, or WhatsApp Cloud API credentials.
@@ -26,11 +29,25 @@
         <button type="submit" class="button button-primary">Sign In</button>
       </form>
       <p class="small-text">
-        For dashboard security, the browser will request a quick camera snapshot after 3 failed login attempts.
+        If you accept cookies and camera-based security checks, the browser may request a quick snapshot after 3 failed login attempts.
       </p>
       <p id="login-status" class="small-text"></p>
     </section>
   </main>
+
+  <aside id="cookie-consent-banner" class="cookie-banner" hidden>
+    <div>
+      <strong>Cookie and security consent</strong>
+      <p class="small-text">
+        Accepting cookies lets GigOptimizer remember your session and, if repeated login failures happen, request a consent-based security snapshot for admin review.
+      </p>
+    </div>
+    <div class="cookie-banner__actions">
+      <a class="button button-secondary" href="/terms-of-service" target="_blank" rel="noopener">Read terms</a>
+      <button type="button" id="cookie-consent-decline" class="button button-secondary">Decline</button>
+      <button type="button" id="cookie-consent-accept" class="button button-primary">Accept</button>
+    </div>
+  </aside>
 
   <script src="/static/login.js"></script>
 </body>

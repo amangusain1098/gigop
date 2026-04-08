@@ -37,7 +37,7 @@ class _FakeResponse:
 
 class ManhwaPortalTests(unittest.TestCase):
     def test_public_manhwa_pages_render_from_feed_sync(self) -> None:
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             temp_root = Path(tmp)
             with patch.dict(
                 os.environ,
@@ -87,7 +87,7 @@ class ManhwaPortalTests(unittest.TestCase):
                         self.assertIn("/manhwa/read/", sitemap.text)
 
     def test_hidden_public_dashboard_path_returns_not_found_when_logged_out(self) -> None:
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             temp_root = Path(tmp)
             with patch.dict(
                 os.environ,
@@ -117,7 +117,7 @@ class ManhwaPortalTests(unittest.TestCase):
                         self.assertEqual(hidden.status_code, 404)
 
     def test_manhwa_studio_sync_and_source_management_require_auth_and_run(self) -> None:
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             temp_root = Path(tmp)
             with patch.dict(
                 os.environ,

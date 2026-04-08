@@ -163,7 +163,7 @@ class DashboardService:
             }
         )
         self._start_scraper_run(
-            [target_url],
+            explicit_terms or [target_url],
             status="comparing_gig",
             message="Loading your Fiverr gig and scanning the surrounding market.",
         )
@@ -555,7 +555,28 @@ class DashboardService:
                 gig_page_lookup=self.orchestrator.marketplace.fetch_gig_page_overview_http,
                 observer=lambda event: self._record_scraper_event(event, scraper_event_callback),
             )
+        if gigs:
+            self._cache_competitors(terms, gigs)
+        active_gig_url = (
+            str(settings_marketplace.my_gig_url).strip()
+            if settings_marketplace is not None and settings_marketplace.my_gig_url
+            else ""
+        )
+        if active_gig_url:
+            return self.compare_my_gig_to_market(
+                gig_url=active_gig_url,
+                search_terms=terms,
+                scraper_event_callback=scraper_event_callback,
+            )
         self._apply_marketplace_results(snapshot=snapshot, gigs=gigs, status=status)
+        self._save_gig_comparison(
+            self._build_market_scan_view(
+                search_terms=terms,
+                gigs=gigs,
+                status=status.status,
+                message=status.detail,
+            )
+        )
         self._finalize_scraper_run(
             status=status.status,
             gigs=gigs,
@@ -1033,6 +1054,52 @@ class DashboardService:
             "first_page_top_10": [],
             "one_by_one_recommendations": [],
             "comparison_source": comparison_source,
+            "implementation_blueprint": {},
+            "implementation_summary": "",
+            "do_this_first": [],
+            "top_action": None,
+            "last_compared_at": utc_now_iso(),
+        }
+
+    def _build_market_scan_view(
+        self,
+        *,
+        search_terms: list[str],
+        gigs: list[MarketplaceGig],
+        status: str,
+        message: str,
+    ) -> dict[str, Any]:
+        primary_search_term = search_terms[0] if search_terms else ""
+        market_anchor_price = self._market_anchor_price(gigs)
+        first_page_top_10 = self._first_page_top_10(
+            gigs,
+            primary_term=primary_search_term,
+            market_anchor_price=market_anchor_price,
+            analysis=None,
+        )
+        top_ranked_gig = first_page_top_10[0] if first_page_top_10 else (gigs[0] if gigs else None)
+        return {
+            "status": status,
+            "message": message,
+            "gig_url": "",
+            "gig_id": self._gig_identifier(""),
+            "my_gig": None,
+            "primary_search_term": primary_search_term,
+            "detected_search_terms": search_terms,
+            "top_search_titles": [gig.title for gig in first_page_top_10[:10]],
+            "title_patterns": self._title_patterns_from_gigs(gigs, search_terms),
+            "market_anchor_price": market_anchor_price,
+            "competitor_count": len(gigs),
+            "optimization_score": None,
+            "what_to_implement": [],
+            "why_competitors_win": [],
+            "my_advantages": [],
+            "top_competitors": [asdict(gig) for gig in gigs[:10]],
+            "top_ranked_gig": asdict(top_ranked_gig) if top_ranked_gig is not None else None,
+            "why_top_ranked_gig_is_first": (top_ranked_gig.why_on_page_one or top_ranked_gig.win_reasons) if top_ranked_gig is not None else [],
+            "first_page_top_10": [asdict(gig) for gig in first_page_top_10],
+            "one_by_one_recommendations": [],
+            "comparison_source": "scan_only",
             "implementation_blueprint": {},
             "implementation_summary": "",
             "do_this_first": [],
@@ -2574,6 +2641,31 @@ class DashboardService:
         if len(prices) % 2:
             return round(float(prices[midpoint]), 2)
         return round((float(prices[midpoint - 1]) + float(prices[midpoint])) / 2, 2)
+
+    def _title_patterns_from_gigs(self, gigs: list[MarketplaceGig], search_terms: list[str]) -> list[str]:
+        prioritized = [self._normalize_query(term) for term in search_terms if self._normalize_query(term)]
+        patterns: list[str] = []
+        seen: set[str] = set()
+        for item in prioritized:
+            key = item.lower()
+            if key not in seen:
+                seen.add(key)
+                patterns.append(item)
+        for gig in gigs[:12]:
+            tokens = [
+                token.strip()
+                for token in re.split(r"[^a-z0-9]+", gig.title.lower())
+                if len(token.strip()) >= 4 and token.strip() not in {"will", "your", "with", "from", "this", "that"}
+            ]
+            if not tokens:
+                continue
+            candidate = " ".join(tokens[:2]).strip()
+            if candidate and candidate not in seen:
+                seen.add(candidate)
+                patterns.append(candidate)
+            if len(patterns) >= 8:
+                break
+        return patterns[:8]
 
     def _snapshot_gig_overview(self, snapshot: GigSnapshot, gig_url: str) -> GigPageOverview:
         return GigPageOverview(

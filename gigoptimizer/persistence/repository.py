@@ -153,20 +153,21 @@ class BlueprintRepository:
 
     def upsert_hitl_item(self, record: ApprovalRecord) -> None:
         with self.database.session() as session:
-            item = session.get(HITLItemORM, record.id)
-            if item is None:
-                item = HITLItemORM(id=record.id)
-                session.add(item)
-            item.agent_name = record.agent_name
-            item.action_type = record.action_type
-            item.current_value = record.current_value
-            item.proposed_value = record.proposed_value
-            item.confidence_score = record.confidence_score
-            item.validator_issues = [issue.__dict__ for issue in record.validator_issues]
-            item.status = record.status
-            item.reviewer_notes = record.reviewer_notes
-            item.created_at = self._coerce_datetime(record.created_at)
-            item.reviewed_at = self._coerce_datetime(record.reviewed_at)
+            session.merge(
+                HITLItemORM(
+                    id=record.id,
+                    agent_name=record.agent_name,
+                    action_type=record.action_type,
+                    current_value=record.current_value,
+                    proposed_value=record.proposed_value,
+                    confidence_score=record.confidence_score,
+                    validator_issues=[issue.__dict__ for issue in record.validator_issues],
+                    status=record.status,
+                    reviewer_notes=record.reviewer_notes,
+                    created_at=self._coerce_datetime(record.created_at),
+                    reviewed_at=self._coerce_datetime(record.reviewed_at),
+                )
+            )
 
     def sync_hitl_items(self, records: list[ApprovalRecord]) -> None:
         for record in records:
@@ -414,6 +415,7 @@ class BlueprintRepository:
         photo_content_type: str | None = None,
         capture_status: str = "captured",
         capture_error: str = "",
+        device_summary: str = "",
     ) -> dict[str, Any]:
         with self.database.session() as session:
             item = session.get(LoginAttemptORM, attempt_id)
@@ -421,10 +423,33 @@ class BlueprintRepository:
                 raise KeyError(attempt_id)
             item.capture_status = str(capture_status).strip() or item.capture_status
             item.capture_error = str(capture_error).strip() or None
+            if device_summary:
+                summary = str(device_summary).strip()
+                if summary and summary not in (item.user_agent or ""):
+                    item.user_agent = f"{item.user_agent} | {summary}".strip(" |")
             if photo_path:
                 item.photo_path = str(photo_path).strip()
                 item.photo_content_type = str(photo_content_type or "").strip() or item.photo_content_type
                 item.photo_captured_at = utc_now()
+            item.updated_at = utc_now()
+        return self.get_login_attempt(attempt_id) or {}
+
+    def review_login_attempt(
+        self,
+        *,
+        attempt_id: str,
+        capture_status: str,
+        clear_photo: bool = False,
+    ) -> dict[str, Any]:
+        with self.database.session() as session:
+            item = session.get(LoginAttemptORM, attempt_id)
+            if item is None:
+                raise KeyError(attempt_id)
+            item.capture_status = str(capture_status).strip() or item.capture_status
+            if clear_photo:
+                item.photo_path = None
+                item.photo_content_type = None
+                item.photo_captured_at = None
             item.updated_at = utc_now()
         return self.get_login_attempt(attempt_id) or {}
 

@@ -437,7 +437,9 @@ def create_app() -> FastAPI:
 
     def build_login_security_payload() -> dict:
         attempts = []
-        for item in repository.list_login_attempts(limit=12):
+        for item in repository.list_login_attempts(limit=20):
+            if item["capture_status"] == "discarded":
+                continue
             attempts.append(
                 {
                     "id": item["id"],
@@ -458,6 +460,8 @@ def create_app() -> FastAPI:
                     ),
                 }
             )
+        attempts.sort(key=lambda item: item.get("created_at") or "", reverse=True)
+        attempts.sort(key=lambda item: item["capture_status"] != "pending_review")
         return {"capture_threshold": 3, "failed_login_attempts": attempts}
 
     def render_manhwa_feed_xml(request: Request, entries: list[dict]) -> str:
@@ -626,6 +630,14 @@ def create_app() -> FastAPI:
             {
                 "auth_enabled": auth_service.auth_enabled,
             },
+        )
+
+    @app.get("/terms-of-service", response_class=HTMLResponse)
+    async def terms_of_service_page(request: Request) -> HTMLResponse:
+        return templates.TemplateResponse(
+            request,
+            "terms_of_service.html",
+            {},
         )
 
     @app.get("/api/auth/session")
@@ -834,9 +846,23 @@ def create_app() -> FastAPI:
         image_base64 = str(payload.get("image_base64", "")).strip()
         content_type = str(payload.get("content_type", "image/jpeg")).strip() or "image/jpeg"
         capture_error = str(payload.get("capture_error", "")).strip()
+        device_info = payload.get("device_info") or {}
+        device_summary_parts: list[str] = []
+        if isinstance(device_info, dict):
+            for label, key in (
+                ("platform", "platform"),
+                ("language", "language"),
+                ("screen", "screen"),
+                ("timezone", "timezone"),
+                ("touch", "touch_points"),
+            ):
+                value = str(device_info.get(key, "")).strip()
+                if value:
+                    device_summary_parts.append(f"{label}={value}")
+        device_summary = ", ".join(device_summary_parts)
 
         photo_path = ""
-        capture_status = "captured"
+        capture_status = "pending_review"
         if image_base64:
             try:
                 image_bytes = base64.b64decode(image_base64, validate=True)
@@ -849,7 +875,15 @@ def create_app() -> FastAPI:
             output_path.write_bytes(image_bytes)
             photo_path = str(output_path)
         else:
-            capture_status = "camera_denied" if capture_error else "not_captured"
+            normalized_error = capture_error.lower()
+            if normalized_error == "consent_declined":
+                capture_status = "consent_declined"
+            elif normalized_error == "camera_not_supported":
+                capture_status = "camera_unavailable"
+            elif capture_error:
+                capture_status = "camera_denied"
+            else:
+                capture_status = "not_captured"
 
         updated = repository.attach_login_attempt_capture(
             attempt_id=attempt_id,
@@ -857,6 +891,7 @@ def create_app() -> FastAPI:
             photo_content_type=content_type if photo_path else None,
             capture_status=capture_status,
             capture_error=capture_error,
+            device_summary=device_summary,
         )
         await websocket_manager.broadcast_json({"type": "security_update", "payload": build_login_security_payload()})
         return {
@@ -866,6 +901,32 @@ def create_app() -> FastAPI:
                 "photo_url": f"/api/security/login-attempts/{attempt_id}/image" if updated.get("photo_path") else "",
             }
         }
+
+    @app.post("/api/security/login-attempts/{attempt_id}/{action}")
+    async def review_login_attempt(
+        attempt_id: str,
+        action: str,
+        _: None = Depends(require_auth),
+        __: None = Depends(require_csrf),
+    ) -> dict:
+        normalized = action.strip().lower()
+        if normalized not in {"save", "discard"}:
+            raise HTTPException(status_code=400, detail="Unsupported login-attempt action.")
+        attempt = repository.get_login_attempt(attempt_id)
+        if attempt is None:
+            raise HTTPException(status_code=404, detail="Login attempt not found.")
+        photo_path_value = str(attempt.get("photo_path") or "").strip()
+        if normalized == "discard" and photo_path_value:
+            photo_path = Path(photo_path_value)
+            if photo_path.exists():
+                photo_path.unlink(missing_ok=True)
+        updated = repository.review_login_attempt(
+            attempt_id=attempt_id,
+            capture_status="saved" if normalized == "save" else "discarded",
+            clear_photo=(normalized == "discard"),
+        )
+        await websocket_manager.broadcast_json({"type": "security_update", "payload": build_login_security_payload()})
+        return {"attempt": updated}
 
     @app.get("/api/security/login-attempts/{attempt_id}/image")
     async def login_attempt_image(attempt_id: str, _: None = Depends(require_auth)) -> FileResponse:
@@ -942,9 +1003,11 @@ def create_app() -> FastAPI:
             )
         elif job_type == "marketplace_scrape":
             sync_marketplace_context(
+                gig_url=str(payload.get("gig_url", "")).strip(),
                 search_terms=[str(item).strip() for item in (payload.get("search_terms") or []) if str(item).strip()],
             )
             run = job_service.enqueue_marketplace_scrape(
+                gig_url=str(payload.get("gig_url", "")).strip(),
                 search_terms=[str(item).strip() for item in (payload.get("search_terms") or []) if str(item).strip()],
             )
         elif job_type == "weekly_report":
