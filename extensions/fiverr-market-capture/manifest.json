@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "GigOptimizer Fiverr Market Capture",
+  "description": "Capture visible Fiverr search-page gig cards and send them to GigOptimizer Pro.",
+  "version": "0.1.0",
+  "permissions": ["activeTab", "storage", "tabs", "scripting"],
+  "host_permissions": [
+    "https://www.fiverr.com/*",
+    "https://animha.co.in/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "GigOptimizer Capture",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.fiverr.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

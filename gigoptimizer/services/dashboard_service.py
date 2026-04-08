@@ -7,6 +7,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 import tempfile
+from time import monotonic
 from typing import Any
 
 from ..config import GigOptimizerConfig
@@ -76,6 +77,9 @@ class DashboardService:
         self.validator = HallucinationValidator()
         self.cache_service = cache_service or CacheService(self.config)
         self.slack_service = slack_service
+        self._active_scraper_log_id: int | None = None
+        self._active_scraper_started_at_monotonic: float | None = None
+        self._active_scrape_run_id: str = ""
         self.ai_overview_service = ai_overview_service or (
             AIOverviewService(self.settings_service, self.cache_service) if self.settings_service is not None else None
         )
@@ -112,6 +116,7 @@ class DashboardService:
         search_terms: list[str] | None = None,
         scraper_event_callback=None,
         progress_callback=None,
+        run_id: str = "",
     ) -> dict[str, Any]:
         snapshot = self._load_snapshot()
         score_before = (self._load_dashboard_state().latest_report or {}).get("optimization_score")
@@ -166,6 +171,7 @@ class DashboardService:
             explicit_terms or [target_url],
             status="comparing_gig",
             message="Loading your Fiverr gig and scanning the surrounding market.",
+            run_id=run_id,
         )
         if scraper_event_callback is not None:
             scraper_event_callback(self.get_scraper_run_state())
@@ -334,6 +340,7 @@ class DashboardService:
         search_terms: list[str] | None = None,
         scraper_event_callback=None,
         progress_callback=None,
+        run_id: str = "",
     ) -> dict[str, Any]:
         snapshot = self._load_snapshot()
         score_before = (self._load_dashboard_state().latest_report or {}).get("optimization_score")
@@ -454,12 +461,184 @@ class DashboardService:
         self._send_comparison_alert(comparison)
         return self.get_state()
 
+    def compare_imported_market_data(
+        self,
+        *,
+        gig_url: str,
+        keyword: str,
+        gigs_payload: list[dict[str, Any]],
+        source_url: str = "",
+        source_label: str = "browser_extension",
+        scraper_event_callback=None,
+        progress_callback=None,
+        run_id: str = "",
+    ) -> dict[str, Any]:
+        snapshot = self._load_snapshot()
+        score_before = (self._load_dashboard_state().latest_report or {}).get("optimization_score")
+        settings_marketplace = self.settings_service.get_settings().marketplace if self.settings_service else None
+        if settings_marketplace is not None:
+            self._apply_marketplace_runtime_settings(settings_marketplace)
+
+        target_url = gig_url.strip() or (
+            settings_marketplace.my_gig_url if settings_marketplace is not None else ""
+        )
+        gig_id = self._gig_identifier(target_url)
+        cleaned_keyword = self._normalize_query(keyword).strip() or self._normalize_query(snapshot.niche)
+        imported_competitors = self._normalize_imported_competitors(
+            gigs_payload,
+            matched_term=cleaned_keyword,
+            source_url=source_url,
+        )
+        if not imported_competitors:
+            self._save_gig_comparison(
+                {
+                    "status": "warning",
+                    "message": "The browser extension did not send any valid Fiverr competitor cards.",
+                    "gig_url": target_url,
+                    "my_gig": None,
+                    "detected_search_terms": [cleaned_keyword] if cleaned_keyword else [],
+                    "top_search_titles": [],
+                    "title_patterns": [],
+                    "market_anchor_price": None,
+                    "competitor_count": 0,
+                    "what_to_implement": [],
+                    "why_competitors_win": [],
+                    "my_advantages": [],
+                    "top_competitors": [],
+                    "comparison_source": source_label,
+                }
+            )
+            return self.get_state()
+
+        self._save_gig_comparison(
+            {
+                "status": "running",
+                "message": "Processing competitor data imported from the Fiverr browser extension.",
+                "gig_url": target_url,
+                "my_gig": None,
+                "detected_search_terms": [cleaned_keyword] if cleaned_keyword else [],
+                "top_search_titles": [],
+                "title_patterns": [],
+                "market_anchor_price": None,
+                "competitor_count": len(imported_competitors),
+                "what_to_implement": [],
+                "why_competitors_win": [],
+                "my_advantages": [],
+                "top_competitors": [],
+                "comparison_source": source_label,
+            }
+        )
+        self._start_scraper_run(
+            [cleaned_keyword] if cleaned_keyword else [source_label],
+            status="imported",
+            message=f"Processing {len(imported_competitors)} competitor gigs imported from the browser extension.",
+            run_id=run_id,
+        )
+        for competitor in imported_competitors[:10]:
+            self._record_scraper_event(
+                {
+                    "stage": "gig_found",
+                    "term": cleaned_keyword,
+                    "url": competitor.url,
+                    "gig_title": competitor.title,
+                    "seller_name": competitor.seller_name,
+                    "starting_price": competitor.starting_price,
+                    "rating": competitor.rating,
+                    "message": f"Imported visible Fiverr card '{competitor.title}' from the browser session.",
+                },
+                scraper_event_callback,
+            )
+        self._record_scraper_event(
+            {
+                "stage": "run_completed",
+                "term": cleaned_keyword,
+                "url": source_url,
+                "result_count": len(imported_competitors),
+                "message": f"Received {len(imported_competitors)} competitor gigs from the browser extension.",
+            },
+            scraper_event_callback,
+        )
+
+        my_gig: GigPageOverview
+        if target_url:
+            live_gig, status = self.orchestrator.marketplace.fetch_gig_page_overview(
+                target_url,
+                observer=lambda event: self._record_scraper_event(event, scraper_event_callback),
+            )
+            if live_gig is not None:
+                my_gig = live_gig
+                detail = "Loaded your gig URL and combined it with the competitor set imported from the browser extension."
+            else:
+                my_gig = self._snapshot_gig_overview(snapshot, target_url)
+                detail = f"{status.detail} Used your local snapshot as the 'my gig' baseline instead."
+        else:
+            my_gig = self._snapshot_gig_overview(snapshot, target_url)
+            detail = "Used your local snapshot as the 'my gig' baseline because no public gig URL was provided."
+
+        derived_terms = [cleaned_keyword] if cleaned_keyword else self._derive_gig_search_terms(my_gig, snapshot)
+        self._cache_competitors(derived_terms, imported_competitors)
+        comparison_snapshot = self._build_snapshot_from_gig(my_gig, snapshot, derived_terms=derived_terms)
+        analysis = self.orchestrator.competitive_analysis.analyze(
+            comparison_snapshot,
+            imported_competitors,
+        )
+        comparison_signature = self._comparison_signature(
+            gig_url=my_gig.url,
+            derived_terms=derived_terms,
+            my_gig=my_gig,
+            competitor_gigs=imported_competitors,
+        )
+        comparison = self._load_cached_comparison(comparison_signature) or self._build_market_comparison(
+            my_gig=my_gig,
+            base_snapshot=snapshot,
+            comparison_snapshot=comparison_snapshot,
+            derived_terms=derived_terms,
+            competitor_gigs=imported_competitors,
+            analysis=analysis,
+            status="ok" if analysis is not None else "warning",
+            message=detail,
+            comparison_source=source_label,
+            progress_callback=progress_callback,
+        )
+        if comparison.get("message") != detail:
+            comparison["message"] = detail
+            comparison["status"] = "cached"
+            comparison["comparison_source"] = f"{source_label}_cached"
+            comparison["last_compared_at"] = utc_now_iso()
+        comparison["imported_from"] = source_label
+        comparison["source_url"] = source_url
+        self._cache_comparison(comparison_signature, comparison)
+        self._save_gig_comparison(comparison)
+        self._create_market_comparison_drafts(comparison_snapshot, comparison)
+
+        state = self._load_dashboard_state()
+        latest_report = dict(state.latest_report or {})
+        latest_report["competitive_gap_analysis"] = asdict(analysis) if analysis is not None else None
+        state.latest_report = latest_report
+        self._save_dashboard_state(state)
+        self._finalize_scraper_run(
+            status="ok" if imported_competitors else "warning",
+            gigs=imported_competitors,
+            message=detail,
+        )
+        self.repository.record_comparison_history(
+            gig_id=str(comparison.get("gig_id") or gig_id),
+            score_before=score_before,
+            score_after=comparison.get("optimization_score"),
+            result_json=comparison,
+        )
+        self._send_comparison_alert(comparison)
+        if scraper_event_callback is not None:
+            scraper_event_callback(self.get_scraper_run_state())
+        return self.get_state()
+
     def run_pipeline(
         self,
         *,
         use_live_connectors: bool,
         scraper_event_callback=None,
         progress_callback=None,
+        run_id: str = "",
     ) -> dict[str, Any]:
         snapshot = self._load_snapshot()
         started_at = utc_now_iso()
@@ -481,7 +660,7 @@ class DashboardService:
                 else self._default_marketplace_terms(snapshot)
             )
             if include_marketplace:
-                self._start_scraper_run(search_terms)
+                self._start_scraper_run(search_terms, run_id=run_id)
                 if scraper_event_callback is not None:
                     scraper_event_callback(self.get_scraper_run_state())
             live_snapshot, live_research = self.orchestrator.prepare_run(
@@ -531,6 +710,7 @@ class DashboardService:
         *,
         search_terms: list[str] | None = None,
         scraper_event_callback=None,
+        run_id: str = "",
     ) -> dict[str, Any]:
         snapshot = self._load_snapshot()
         settings_marketplace = self.settings_service.get_settings().marketplace if self.settings_service else None
@@ -541,7 +721,7 @@ class DashboardService:
             if settings_marketplace is not None and settings_marketplace.search_terms
             else self._default_marketplace_terms(snapshot)
         )
-        self._start_scraper_run(terms)
+        self._start_scraper_run(terms, run_id=run_id)
         if scraper_event_callback is not None:
             scraper_event_callback(self.get_scraper_run_state())
 
@@ -567,6 +747,7 @@ class DashboardService:
                 gig_url=active_gig_url,
                 search_terms=terms,
                 scraper_event_callback=scraper_event_callback,
+                run_id=run_id,
             )
         self._apply_marketplace_results(snapshot=snapshot, gigs=gigs, status=status)
         self._save_gig_comparison(
@@ -591,6 +772,7 @@ class DashboardService:
         *,
         search_terms: list[str] | None = None,
         scraper_event_callback=None,
+        run_id: str = "",
     ) -> dict[str, Any]:
         snapshot = self._load_snapshot()
         settings_marketplace = self.settings_service.get_settings().marketplace if self.settings_service else None
@@ -606,6 +788,7 @@ class DashboardService:
             terms,
             status="verification_pending",
             message="Waiting for manual Fiverr verification in the persistent browser profile.",
+            run_id=run_id,
         )
         if scraper_event_callback is not None:
             scraper_event_callback(self.get_scraper_run_state())
@@ -871,6 +1054,8 @@ class DashboardService:
             recent_reports=recent_reports,
             scraper_run=ScraperRunState(
                 status=scraper_raw.get("status", "idle"),
+                run_id=scraper_raw.get("run_id", ""),
+                job_id=scraper_raw.get("job_id", ""),
                 started_at=scraper_raw.get("started_at", ""),
                 finished_at=scraper_raw.get("finished_at", ""),
                 search_terms=list(scraper_raw.get("search_terms", [])),
@@ -970,6 +1155,7 @@ class DashboardService:
             progress_callback=progress_callback,
         )
         market_anchor_price = self._market_anchor_price(competitor_gigs)
+        keyword_score = self._keyword_quality_score(competitor_gigs, derived_terms)
         implementation_blueprint = self._build_implementation_blueprint(
             my_gig=my_gig,
             base_snapshot=base_snapshot,
@@ -1003,6 +1189,7 @@ class DashboardService:
             "detected_search_terms": derived_terms,
             "top_search_titles": [gig.title for gig in (first_page_top_10 or (analysis.top_competitors if analysis else competitor_gigs[:5]))],
             "title_patterns": analysis.title_patterns if analysis else [],
+            "keyword_score": keyword_score,
             "market_anchor_price": market_anchor_price,
             "competitor_count": len(competitor_gigs),
             "optimization_score": optimization_report.optimization_score,
@@ -1042,6 +1229,7 @@ class DashboardService:
             "detected_search_terms": derived_terms,
             "top_search_titles": [],
             "title_patterns": [],
+            "keyword_score": self._keyword_quality_score([], derived_terms),
             "market_anchor_price": None,
             "competitor_count": 0,
             "optimization_score": None,
@@ -1071,6 +1259,7 @@ class DashboardService:
     ) -> dict[str, Any]:
         primary_search_term = search_terms[0] if search_terms else ""
         market_anchor_price = self._market_anchor_price(gigs)
+        keyword_score = self._keyword_quality_score(gigs, search_terms)
         first_page_top_10 = self._first_page_top_10(
             gigs,
             primary_term=primary_search_term,
@@ -1088,6 +1277,7 @@ class DashboardService:
             "detected_search_terms": search_terms,
             "top_search_titles": [gig.title for gig in first_page_top_10[:10]],
             "title_patterns": self._title_patterns_from_gigs(gigs, search_terms),
+            "keyword_score": keyword_score,
             "market_anchor_price": market_anchor_price,
             "competitor_count": len(gigs),
             "optimization_score": None,
@@ -2076,6 +2266,83 @@ class DashboardService:
             "knowledge_documents": self.repository.list_knowledge_documents(gig_id=gig_id, limit=8),
         }
 
+    def comparison_timeline(
+        self,
+        *,
+        gig_id: str,
+        keyword: str = "",
+        limit: int = 24,
+    ) -> list[dict[str, Any]]:
+        history = self.repository.list_comparison_history(gig_id=gig_id, limit=limit)
+        normalized_keyword = self._normalize_query(keyword).lower()
+        points: list[dict[str, Any]] = []
+        for item in reversed(history):
+            result = item.get("result_json") or {}
+            primary_term = str(result.get("primary_search_term", "")).strip()
+            if normalized_keyword and self._normalize_query(primary_term).lower() != normalized_keyword:
+                continue
+            keyword_score = result.get("keyword_score") or {}
+            top_ranked = result.get("top_ranked_gig") or {}
+            top_action = (result.get("implementation_blueprint") or {}).get("top_action") or {}
+            points.append(
+                {
+                    "id": item.get("id"),
+                    "created_at": item.get("created_at"),
+                    "keyword": primary_term,
+                    "optimization_score": result.get("optimization_score"),
+                    "competitor_count": result.get("competitor_count", 0),
+                    "keyword_score": keyword_score.get("score"),
+                    "keyword_difficulty": keyword_score.get("difficulty"),
+                    "top_ranked_title": top_ranked.get("title", ""),
+                    "top_action": top_action.get("action_text", ""),
+                }
+            )
+        return points
+
+    def comparison_diff(self, *, gig_id: str, left_id: int | None = None, right_id: int | None = None) -> dict[str, Any]:
+        history = self.repository.list_comparison_history(gig_id=gig_id, limit=24)
+        if not history:
+            return {"available": False, "summary": "No comparison history is available yet.", "changes": []}
+        left_item = next((item for item in history if left_id is not None and int(item.get("id", 0)) == int(left_id)), None)
+        right_item = next((item for item in history if right_id is not None and int(item.get("id", 0)) == int(right_id)), None)
+        if right_item is None:
+            right_item = history[0]
+        if left_item is None:
+            left_item = history[1] if len(history) > 1 else history[0]
+        left_result = left_item.get("result_json") or {}
+        right_result = right_item.get("result_json") or {}
+        left_impl = left_result.get("implementation_blueprint") or {}
+        right_impl = right_result.get("implementation_blueprint") or {}
+        changes: list[dict[str, Any]] = []
+
+        def add_change(label: str, before: Any, after: Any) -> None:
+            if before == after:
+                return
+            changes.append({"label": label, "before": before, "after": after})
+
+        add_change("Recommended title", left_impl.get("recommended_title", ""), right_impl.get("recommended_title", ""))
+        add_change("Primary search term", left_result.get("primary_search_term", ""), right_result.get("primary_search_term", ""))
+        add_change("Optimization score", left_result.get("optimization_score"), right_result.get("optimization_score"))
+        add_change("Competitor count", left_result.get("competitor_count"), right_result.get("competitor_count"))
+        add_change("Market anchor price", left_result.get("market_anchor_price"), right_result.get("market_anchor_price"))
+        add_change(
+            "Top ranked gig",
+            (left_result.get("top_ranked_gig") or {}).get("title", ""),
+            (right_result.get("top_ranked_gig") or {}).get("title", ""),
+        )
+        add_change(
+            "Top action",
+            (left_impl.get("top_action") or {}).get("action_text", ""),
+            (right_impl.get("top_action") or {}).get("action_text", ""),
+        )
+        return {
+            "available": True,
+            "left": {"id": left_item.get("id"), "created_at": left_item.get("created_at")},
+            "right": {"id": right_item.get("id"), "created_at": right_item.get("created_at")},
+            "summary": f"Compared history runs {left_item.get('id')} and {right_item.get('id')}.",
+            "changes": changes,
+        }
+
     def _comparison_signature(
         self,
         *,
@@ -2417,10 +2684,28 @@ class DashboardService:
         *,
         status: str = "running",
         message: str = "Starting live marketplace scraper.",
+        run_id: str = "",
     ) -> None:
         state = self._load_dashboard_state()
+        generated_run_id = datetime.now(timezone.utc).strftime("scrape-%Y%m%d%H%M%S%f")
+        self._active_scrape_run_id = str(run_id or generated_run_id).strip()
+        self._active_scraper_started_at_monotonic = monotonic()
+        self._active_scraper_log_id = None
+        if self.config.feature_scraper_visibility:
+            created = self.repository.create_scraper_log(
+                job_id=self._active_scrape_run_id,
+                keyword=" | ".join(search_terms[:4]),
+                status=status,
+                meta_json={
+                    "search_terms": search_terms[:8],
+                    "message": message,
+                },
+            )
+            self._active_scraper_log_id = int(created.get("id") or 0) or None
         state.scraper_run = ScraperRunState(
             status=status,
+            run_id=self._active_scrape_run_id,
+            job_id=self._active_scrape_run_id,
             started_at=utc_now_iso(),
             search_terms=search_terms,
             last_status_message=message,
@@ -2456,6 +2741,8 @@ class DashboardService:
         state.scraper_run.last_status_message = entry.message or state.scraper_run.last_status_message
         state.scraper_run.debug_html_path = entry.debug_html_path or state.scraper_run.debug_html_path
         state.scraper_run.debug_screenshot_path = entry.debug_screenshot_path or state.scraper_run.debug_screenshot_path
+        state.scraper_run.run_id = self._active_scrape_run_id or state.scraper_run.run_id
+        state.scraper_run.job_id = self._active_scrape_run_id or state.scraper_run.job_id
         if entry.stage == "gig_found" and entry.gig_title:
             preview_gig = MarketplaceGig(
                 title=entry.gig_title,
@@ -2472,6 +2759,32 @@ class DashboardService:
         state.scraper_run.recent_events.append(entry)
         state.scraper_run.recent_events = state.scraper_run.recent_events[-80:]
         self._save_dashboard_state(state)
+        if self._active_scraper_log_id and self.config.feature_scraper_visibility:
+            meta_update: dict[str, Any] = {
+                "last_stage": entry.stage,
+                "last_message": entry.message,
+                "last_url": entry.url,
+                "search_term": entry.term,
+            }
+            if entry.debug_html_path:
+                meta_update["debug_html_path"] = entry.debug_html_path
+            if entry.debug_screenshot_path:
+                meta_update["debug_screenshot_path"] = entry.debug_screenshot_path
+            log_status = None
+            if entry.level == "error":
+                log_status = "error"
+            elif entry.level == "warning":
+                log_status = "warning"
+            try:
+                self.repository.update_scraper_log(
+                    self._active_scraper_log_id,
+                    status=log_status,
+                    gigs_found=state.scraper_run.total_results,
+                    error_msg=entry.message if entry.level in {"warning", "error"} else None,
+                    meta_json=meta_update,
+                )
+            except KeyError:
+                self._active_scraper_log_id = None
         if callback is not None:
             callback(self.get_scraper_run_state())
 
@@ -2488,7 +2801,30 @@ class DashboardService:
         state.scraper_run.total_results = len(gigs)
         state.scraper_run.last_status_message = message
         state.scraper_run.recent_gigs = gigs[:12]
+        state.scraper_run.run_id = self._active_scrape_run_id or state.scraper_run.run_id
+        state.scraper_run.job_id = self._active_scrape_run_id or state.scraper_run.job_id
         self._save_dashboard_state(state)
+        if self._active_scraper_log_id and self.config.feature_scraper_visibility:
+            duration_ms = None
+            if self._active_scraper_started_at_monotonic is not None:
+                duration_ms = int((monotonic() - self._active_scraper_started_at_monotonic) * 1000)
+            try:
+                self.repository.update_scraper_log(
+                    self._active_scraper_log_id,
+                    status=status,
+                    gigs_found=len(gigs),
+                    duration_ms=duration_ms,
+                    error_msg=message if status in {"warning", "error", "failed"} else "",
+                    meta_json={
+                        "last_message": message,
+                        "search_terms": state.scraper_run.search_terms,
+                    },
+                )
+            except KeyError:
+                pass
+        self._active_scraper_log_id = None
+        self._active_scraper_started_at_monotonic = None
+        self._active_scrape_run_id = ""
 
     def _dedupe_marketplace_gigs(self, gigs: list[MarketplaceGig]) -> list[MarketplaceGig]:
         unique: list[MarketplaceGig] = []
@@ -2642,6 +2978,82 @@ class DashboardService:
             return round(float(prices[midpoint]), 2)
         return round((float(prices[midpoint - 1]) + float(prices[midpoint])) / 2, 2)
 
+    def _keyword_quality_score(self, gigs: list[MarketplaceGig], search_terms: list[str]) -> dict[str, Any]:
+        primary_term = self._normalize_query(search_terms[0]) if search_terms else ""
+        if not self.config.feature_keyword_scoring:
+            return {
+                "enabled": False,
+                "keyword": primary_term,
+                "score": None,
+                "difficulty": "disabled",
+                "components": {},
+            }
+        if not gigs:
+            return {
+                "enabled": True,
+                "keyword": primary_term,
+                "score": 0,
+                "difficulty": "unknown",
+                "components": {
+                    "density": 0,
+                    "avg_reviews": 0,
+                    "price_spread": 0,
+                    "title_match_rate": 0,
+                },
+                "summary": "No live market results were captured for this keyword yet.",
+            }
+        density = min(100.0, (len(gigs) / max(1, self.config.fiverr_marketplace_max_results)) * 100.0)
+        reviews = [int(gig.reviews_count or 0) for gig in gigs if gig.reviews_count is not None]
+        avg_reviews = sum(reviews) / len(reviews) if reviews else 0.0
+        normalized_reviews = min(100.0, (avg_reviews / 500.0) * 100.0)
+        prices = [float(gig.starting_price or 0) for gig in gigs if gig.starting_price is not None]
+        price_spread_value = (max(prices) - min(prices)) if len(prices) >= 2 else 0.0
+        normalized_price_spread = min(100.0, (price_spread_value / 200.0) * 100.0)
+        term_tokens = {
+            token
+            for term in search_terms
+            for token in re.split(r"[^a-z0-9]+", term.lower())
+            if len(token) >= 3
+        }
+        if term_tokens:
+            title_matches = sum(
+                1
+                for gig in gigs
+                if all(token in gig.title.lower() for token in term_tokens)
+            )
+            title_match_rate = (title_matches / max(1, len(gigs))) * 100.0
+        else:
+            title_match_rate = 0.0
+        score = round(
+            (density * 0.4)
+            + (normalized_reviews * 0.3)
+            + (normalized_price_spread * 0.15)
+            + (title_match_rate * 0.15),
+            1,
+        )
+        if score >= 75:
+            difficulty = "hard"
+        elif score >= 45:
+            difficulty = "medium"
+        else:
+            difficulty = "easy"
+        return {
+            "enabled": True,
+            "keyword": primary_term,
+            "score": score,
+            "difficulty": difficulty,
+            "components": {
+                "density": round(density, 1),
+                "avg_reviews": round(normalized_reviews, 1),
+                "price_spread": round(normalized_price_spread, 1),
+                "title_match_rate": round(title_match_rate, 1),
+            },
+            "summary": (
+                f"{difficulty.title()} keyword lane based on {len(gigs)} visible gigs, "
+                f"review pressure, price spread, and title match saturation."
+            ),
+        }
+
     def _title_patterns_from_gigs(self, gigs: list[MarketplaceGig], search_terms: list[str]) -> list[str]:
         prioritized = [self._normalize_query(term) for term in search_terms if self._normalize_query(term)]
         patterns: list[str] = []
@@ -2762,6 +3174,58 @@ class DashboardService:
                 )
             )
         return competitors[:20]
+
+    def _normalize_imported_competitors(
+        self,
+        items: list[dict[str, Any]],
+        *,
+        matched_term: str = "",
+        source_url: str = "",
+    ) -> list[MarketplaceGig]:
+        competitors: list[MarketplaceGig] = []
+        limit = max(1, int(self.config.extension_max_gigs_per_import))
+        normalized_source_url = str(source_url or "").strip()
+        for index, item in enumerate(items[:limit], start=1):
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title", "")).strip()
+            url = str(item.get("url", "")).strip()
+            seller = str(item.get("seller_name", "") or item.get("seller", "")).strip()
+            price = self._safe_number(item.get("starting_price") or item.get("price") or "")
+            rating = self._safe_number(item.get("rating") or "")
+            reviews_value = self._safe_number(item.get("reviews_count") or item.get("reviews") or "")
+            reviews_count = int(reviews_value) if reviews_value is not None else None
+            rank_value = self._safe_number(item.get("rank_position") or item.get("rank") or item.get("position") or "")
+            rank_position = int(rank_value) if rank_value is not None else index
+            page_value = self._safe_number(item.get("page_number") or item.get("page") or "1")
+            page_number = int(page_value) if page_value is not None else 1
+            delivery_days = self._extract_delivery_days(
+                item.get("delivery_days") or item.get("delivery") or item.get("snippet") or ""
+            )
+            snippet = str(item.get("snippet", "")).strip()
+            badges_raw = item.get("badges") or []
+            badges = [str(value).strip() for value in badges_raw if str(value).strip()] if isinstance(badges_raw, list) else []
+            if not title and not url:
+                continue
+            competitors.append(
+                MarketplaceGig(
+                    title=title or url or "Imported competitor",
+                    url=url,
+                    seller_name=seller or "Imported seller",
+                    starting_price=price,
+                    rating=rating,
+                    reviews_count=reviews_count,
+                    delivery_days=delivery_days,
+                    badges=badges,
+                    snippet=snippet,
+                    matched_term=matched_term,
+                    rank_position=rank_position,
+                    page_number=page_number,
+                    is_first_page=bool(item.get("is_first_page", page_number == 1 and rank_position <= 10)),
+                    search_url=normalized_source_url,
+                )
+            )
+        return self._dedupe_marketplace_gigs(competitors)[:limit]
 
     def _parse_json_competitors(self, competitor_input: str, *, matched_term: str = "") -> list[MarketplaceGig]:
         raw = (competitor_input or "").strip()

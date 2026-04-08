@@ -57,6 +57,23 @@ class CacheService:
         with self._lock:
             self._memory_cache.pop(key, None)
 
+    def set_json_if_absent(self, key: str, value: Any, *, ttl_seconds: int) -> bool:
+        serialized = json.dumps(value, default=str)
+        if self._redis is not None:
+            try:
+                return bool(self._redis.set(key, serialized, ex=max(1, ttl_seconds), nx=True))
+            except Exception:
+                pass
+        expires_at = time.time() + max(1, ttl_seconds)
+        with self._lock:
+            entry = self._memory_cache.get(key)
+            if entry is not None:
+                current_expires_at, _ = entry
+                if not current_expires_at or current_expires_at >= time.time():
+                    return False
+            self._memory_cache[key] = (expires_at, serialized)
+            return True
+
     def _connect_redis(self):
         if not self.config.redis_url:
             return None

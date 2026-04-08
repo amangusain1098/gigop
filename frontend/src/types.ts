@@ -77,6 +77,57 @@ export interface CompetitorRecord {
   captured_at?: string
 }
 
+export interface KeywordScore {
+  enabled: boolean
+  keyword: string
+  score: number
+  difficulty: string
+  summary: string
+  components?: Record<string, number>
+}
+
+export interface ScraperLogRecord {
+  id: number
+  job_id?: string
+  keyword?: string
+  status: string
+  gigs_found?: number | null
+  duration_ms?: number | null
+  error_msg?: string
+  meta_json?: Record<string, any>
+  created_at?: string
+  updated_at?: string
+}
+
+export interface ScraperSummary {
+  total_runs: number
+  success_rate: number
+  failure_rate: number
+  avg_duration_ms: number
+  last_success_at?: string | null
+  last_error?: string
+}
+
+export interface ComparisonTimelinePoint {
+  id: number
+  created_at?: string
+  keyword: string
+  optimization_score?: number | null
+  competitor_count?: number | null
+  keyword_score?: number | null
+  keyword_difficulty?: string
+  top_ranked_title?: string
+  top_action?: string
+}
+
+export interface ComparisonDiffPayload {
+  available: boolean
+  summary: string
+  left?: Record<string, any>
+  right?: Record<string, any>
+  changes: Array<{ label: string; before: any; after: any }>
+}
+
 export interface LegacyState {
   snapshot_path: string
   latest_report: Record<string, any> | null
@@ -146,6 +197,10 @@ export interface BootstrapPayload {
   job_runs: JobRun[]
   queue: QueueRecord[]
   competitors: CompetitorRecord[]
+  scraper_logs?: ScraperLogRecord[]
+  scraper_summary?: ScraperSummary
+  timeline?: ComparisonTimelinePoint[]
+  comparison_diff?: ComparisonDiffPayload
   datasets?: DatasetRecord[]
   memory?: Record<string, any>
   assistant_history?: Array<Record<string, any>>

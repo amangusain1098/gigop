@@ -319,6 +319,8 @@ class ScraperActivityEntry:
 @dataclass(slots=True)
 class ScraperRunState:
     status: str = "idle"
+    run_id: str = ""
+    job_id: str = ""
     started_at: str = ""
     finished_at: str = ""
     search_terms: list[str] = field(default_factory=list)
@@ -329,6 +331,20 @@ class ScraperRunState:
     debug_screenshot_path: str = ""
     recent_events: list[ScraperActivityEntry] = field(default_factory=list)
     recent_gigs: list[MarketplaceGig] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class ScraperLogEntry:
+    id: int | None = None
+    job_id: str = ""
+    keyword: str = ""
+    status: str = "queued"
+    gigs_found: int = 0
+    duration_ms: int | None = None
+    error_msg: str = ""
+    meta_json: dict[str, Any] = field(default_factory=dict)
+    created_at: str = ""
+    updated_at: str = ""
 
 
 @dataclass(slots=True)

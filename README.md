@@ -50,6 +50,7 @@ The app now supports the production-style split described in the blueprint:
 
 - Browser frontend: React + Vite + WebSocket on `/dashboard`
 - Legacy frontend: server-rendered dashboard on `/dashboard-legacy`
+- Optional browser extension import endpoint on `/api/extension/import`
 - Application server: FastAPI
 - Persistence: SQLAlchemy with PostgreSQL-ready `DATABASE_URL`
 - Jobs: Redis/RQ-ready queue abstraction with local thread fallback on Windows/dev
@@ -104,6 +105,8 @@ cd D:\gigoptimizer-pro\frontend
 npm install
 npm run build
 ```
+
+The Vite build now uses chunk splitting for `react-core`, `charts`, and `vendor`, so the blueprint dashboard no longer ships as one oversized production bundle.
 
 Run the backend:
 
@@ -173,11 +176,34 @@ The dashboard includes:
 - keyword pulse cards with an `Apply to Gig` action
 - agent health cards for all seven layers
 - live competitor comparison with title-pattern and conversion-proxy analysis
+- scraper visibility logs, keyword quality scoring, comparison timeline, and latest diff history
 - protected notification settings for Slack and WhatsApp
 - SMTP email settings and test delivery
 - marketplace scraper and AI overview settings
 - weekly report generation and HTML report links
 - live browser updates over WebSocket
+
+## Chrome Extension Import
+
+GigOptimizer now includes a Chrome extension scaffold in [extensions/fiverr-market-capture](/D:/gigoptimizer-pro/extensions/fiverr-market-capture) so visible Fiverr page-one results can be imported directly from the user’s browser instead of relying only on server-side scraping.
+
+Backend env for extension import:
+
+```powershell
+EXTENSION_ENABLED=true
+EXTENSION_API_TOKEN=replace-with-a-long-random-secret
+EXTENSION_MAX_GIGS_PER_IMPORT=25
+EXTENSION_IMPORT_TTL_SECONDS=900
+```
+
+Extension flow:
+
+1. Load the unpacked extension folder in Chrome.
+2. Save the API base URL, extension API token, and your Fiverr gig URL.
+3. Open a Fiverr search page.
+4. Click `Capture current Fiverr page`.
+5. The extension sends the visible cards to `/api/extension/import`.
+6. The backend validates, normalizes, caches, compares, stores, and broadcasts the results to the dashboard and copilot.
 
 ## Verification
 

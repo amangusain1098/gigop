@@ -417,6 +417,10 @@ button:disabled {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.diff--stacked {
+  grid-template-columns: 1fr;
+}
+
 pre,
 .row strong,
 .block strong {
@@ -431,6 +435,10 @@ pre {
   border-radius: 16px;
   background: rgba(4, 9, 18, 0.72);
   color: #dce7f4;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .row p,
@@ -467,6 +475,16 @@ pre {
 .status--queued,
 .status--degraded {
   background: rgba(255, 179, 71, 0.18);
+}
+
+.status--running,
+.status--cached {
+  background: rgba(73, 179, 255, 0.18);
+}
+
+.status--skipped,
+.status--idle {
+  background: rgba(145, 177, 211, 0.16);
 }
 
 .bullet-list {

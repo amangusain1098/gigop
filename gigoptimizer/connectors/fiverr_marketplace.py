@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import random
 import re
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from time import monotonic
+from time import monotonic, sleep
 from urllib.parse import parse_qs, quote_plus, urljoin, urlparse
 from urllib.request import Request, urlopen
 
@@ -28,6 +29,25 @@ MARKETPLACE_TITLE_STOPWORDS = {
     "service",
     "gig",
 }
+
+USER_AGENTS = [
+    (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
+        "(KHTML, like Gecko) Version/17.4 Safari/605.1.15"
+    ),
+    (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+    ),
+    (
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 "
+        "(KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1"
+    ),
+]
 
 
 class FiverrMarketplaceConnector:
@@ -1241,32 +1261,50 @@ class FiverrMarketplaceConnector:
         return None
 
     def _http_get_html(self, url: str, *, extra_headers: dict[str, str] | None = None) -> str:
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            ),
-            "Accept-Language": "en-US,en;q=0.9",
-        }
-        if extra_headers:
-            headers.update(extra_headers)
-        try:
-            import requests
+        max_attempts = max(1, int(self.config.fiverr_marketplace_max_retries))
+        base_delay = max(1, int(self.config.fiverr_marketplace_retry_base_delay_seconds))
+        request_delay_ms = max(0, int(self.config.fiverr_marketplace_request_delay_ms))
+        last_error: Exception | None = None
 
-            response = requests.get(
-                url,
-                timeout=30,
-                headers=headers,
-            )
-            response.raise_for_status()
-            return response.text
-        except ImportError:
-            request = Request(
-                url,
-                headers=headers,
-            )
-            with urlopen(request, timeout=30) as response:
-                return response.read().decode("utf-8", errors="ignore")
+        for attempt in range(1, max_attempts + 1):
+            headers = {
+                "User-Agent": random.choice(USER_AGENTS),
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Cache-Control": "no-cache",
+                "Pragma": "no-cache",
+            }
+            if extra_headers:
+                headers.update(extra_headers)
+            if request_delay_ms:
+                sleep(request_delay_ms / 1000)
+            try:
+                try:
+                    import requests
+
+                    response = requests.get(
+                        url,
+                        timeout=30,
+                        headers=headers,
+                    )
+                    response.raise_for_status()
+                    return response.text
+                except ImportError:
+                    request = Request(
+                        url,
+                        headers=headers,
+                    )
+                    with urlopen(request, timeout=30) as response:
+                        return response.read().decode("utf-8", errors="ignore")
+            except Exception as exc:
+                last_error = exc
+                if attempt >= max_attempts:
+                    break
+                jitter = random.uniform(0.15, 0.75)
+                sleep((base_delay ** attempt) + jitter)
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("Marketplace HTTP fetch failed without returning an HTML payload.")
 
     def _looks_like_challenge_html(self, html: str) -> bool:
         lowered = html.lower()

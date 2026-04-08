@@ -13,7 +13,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self._config = config
         dev_origin = ""
-        if config.frontend_dev_url:
+        if not config.is_production and config.frontend_dev_url:
             parsed = urlparse(config.frontend_dev_url)
             if parsed.scheme and parsed.netloc:
                 dev_origin = f" {parsed.scheme}://{parsed.netloc}"
@@ -36,7 +36,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
-        response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        response.headers.setdefault("Permissions-Policy", "camera=(self), microphone=(), geolocation=()")
         response.headers.setdefault("Content-Security-Policy", self._csp)
         if self._config.app_cookie_secure or request.url.scheme == "https":
             response.headers.setdefault(

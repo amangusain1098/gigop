@@ -95,6 +95,9 @@ class GigOptimizerConfig:
     fiverr_marketplace_snippet_selector: str = 'p, [data-testid="gig-card-description"]'
     fiverr_marketplace_delivery_selector: str = '[data-testid="delivery-time"], [class*="delivery"]'
     fiverr_marketplace_max_results: int = 12
+    fiverr_marketplace_max_retries: int = 3
+    fiverr_marketplace_retry_base_delay_seconds: int = 2
+    fiverr_marketplace_request_delay_ms: int = 1500
     fiverr_marketplace_profile_dir: Path = Path("playwright/.marketplace-profile")
     fiverr_marketplace_verification_timeout_seconds: int = 600
     fiverr_marketplace_headless: bool = False
@@ -148,6 +151,14 @@ class GigOptimizerConfig:
     knowledge_max_upload_bytes: int = 5 * 1024 * 1024
     knowledge_chunk_chars: int = 900
     knowledge_chunk_overlap_chars: int = 150
+    extension_enabled: bool = True
+    extension_api_token: str = ""
+    extension_max_gigs_per_import: int = 25
+    extension_import_ttl_seconds: int = 900
+    feature_scraper_visibility: bool = True
+    feature_keyword_scoring: bool = True
+    feature_compare_timeline: bool = True
+    feature_scraper_sse: bool = True
 
     @classmethod
     def from_env(cls) -> "GigOptimizerConfig":
@@ -289,6 +300,9 @@ class GigOptimizerConfig:
                 '[data-testid="delivery-time"], [class*="delivery"]',
             ).strip(),
             fiverr_marketplace_max_results=_get_int("FIVERR_MARKETPLACE_MAX_RESULTS", 12),
+            fiverr_marketplace_max_retries=_get_int("FIVERR_MARKETPLACE_MAX_RETRIES", 3),
+            fiverr_marketplace_retry_base_delay_seconds=_get_int("FIVERR_MARKETPLACE_RETRY_BASE_DELAY_SECONDS", 2),
+            fiverr_marketplace_request_delay_ms=_get_int("FIVERR_MARKETPLACE_REQUEST_DELAY_MS", 1500),
             fiverr_marketplace_profile_dir=Path(
                 os.getenv("FIVERR_MARKETPLACE_PROFILE_DIR", "playwright/.marketplace-profile")
             ),
@@ -354,6 +368,14 @@ class GigOptimizerConfig:
             knowledge_max_upload_bytes=_get_int("KNOWLEDGE_MAX_UPLOAD_BYTES", 5 * 1024 * 1024),
             knowledge_chunk_chars=_get_int("KNOWLEDGE_CHUNK_CHARS", 900),
             knowledge_chunk_overlap_chars=_get_int("KNOWLEDGE_CHUNK_OVERLAP_CHARS", 150),
+            extension_enabled=_get_bool("EXTENSION_ENABLED", True),
+            extension_api_token=os.getenv("EXTENSION_API_TOKEN", "").strip(),
+            extension_max_gigs_per_import=_get_int("EXTENSION_MAX_GIGS_PER_IMPORT", 25),
+            extension_import_ttl_seconds=_get_int("EXTENSION_IMPORT_TTL_SECONDS", 900),
+            feature_scraper_visibility=_get_bool("FEATURE_SCRAPER_VISIBILITY", True),
+            feature_keyword_scoring=_get_bool("FEATURE_KEYWORD_SCORING", True),
+            feature_compare_timeline=_get_bool("FEATURE_COMPARE_TIMELINE", True),
+            feature_scraper_sse=_get_bool("FEATURE_SCRAPER_SSE", True),
         )
 
     @property
@@ -382,6 +404,7 @@ class GigOptimizerConfig:
             self._validate_marketplace_reader(),
             self._validate_browserless(),
             self._validate_fiverr(),
+            self._validate_extension_ingest(),
             self._validate_manhwa(),
         ]
 
@@ -592,6 +615,31 @@ class GigOptimizerConfig:
             connector="fiverr",
             status="skipped",
             detail="skipped (FIVERR_EMAIL not set and no saved storage state found)",
+        )
+
+    def _validate_extension_ingest(self) -> ConnectorStatus:
+        if not self.extension_enabled:
+            return ConnectorStatus(
+                connector="browser_extension",
+                status="skipped",
+                detail="skipped (EXTENSION_ENABLED is false)",
+            )
+        if not self.extension_api_token:
+            return ConnectorStatus(
+                connector="browser_extension",
+                status="warning",
+                detail="warning (EXTENSION_API_TOKEN not set)",
+            )
+        if len(self.extension_api_token) < 16 or any(char.isspace() for char in self.extension_api_token):
+            return ConnectorStatus(
+                connector="browser_extension",
+                status="warning",
+                detail="warning (EXTENSION_API_TOKEN looks malformed; rotate or replace it before using the extension)",
+            )
+        return ConnectorStatus(
+            connector="browser_extension",
+            status="active",
+            detail=f"active (imports up to {max(1, self.extension_max_gigs_per_import)} gigs per page)",
         )
 
     def _validate_manhwa(self) -> ConnectorStatus:

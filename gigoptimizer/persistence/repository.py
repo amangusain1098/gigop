@@ -23,6 +23,7 @@ from .models import (
     KnowledgeChunkORM,
     KnowledgeDocumentORM,
     LoginAttemptORM,
+    ScraperLogORM,
     UserActionORM,
 )
 
@@ -234,6 +235,97 @@ class BlueprintRepository:
                 .limit(limit)
             ).all()
             return [self._competitor_to_dict(item) for item in rows]
+
+    def create_scraper_log(
+        self,
+        *,
+        job_id: str,
+        keyword: str,
+        status: str = "queued",
+        gigs_found: int = 0,
+        error_msg: str = "",
+        meta_json: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        with self.database.session() as session:
+            item = ScraperLogORM(
+                job_id=str(job_id or "").strip(),
+                keyword=str(keyword or "").strip(),
+                status=str(status or "queued").strip() or "queued",
+                gigs_found=max(0, int(gigs_found or 0)),
+                error_msg=str(error_msg or "").strip(),
+                meta_json=meta_json or {},
+            )
+            session.add(item)
+            session.flush()
+            item_id = int(item.id)
+        return self.get_scraper_log(item_id) or {}
+
+    def update_scraper_log(
+        self,
+        log_id: int,
+        *,
+        status: str | None = None,
+        gigs_found: int | None = None,
+        duration_ms: int | None = None,
+        error_msg: str | None = None,
+        meta_json: dict[str, Any] | None = None,
+        merge_meta: bool = True,
+    ) -> dict[str, Any]:
+        with self.database.session() as session:
+            item = session.get(ScraperLogORM, log_id)
+            if item is None:
+                raise KeyError(log_id)
+            if status is not None:
+                item.status = str(status).strip() or item.status
+            if gigs_found is not None:
+                item.gigs_found = max(0, int(gigs_found))
+            if duration_ms is not None:
+                item.duration_ms = max(0, int(duration_ms))
+            if error_msg is not None:
+                item.error_msg = str(error_msg).strip()
+            if meta_json is not None:
+                incoming = meta_json or {}
+                item.meta_json = {**(item.meta_json or {}), **incoming} if merge_meta else incoming
+        return self.get_scraper_log(log_id) or {}
+
+    def get_scraper_log(self, log_id: int) -> dict[str, Any] | None:
+        with self.database.session() as session:
+            item = session.get(ScraperLogORM, log_id)
+            return self._scraper_log_to_dict(item) if item is not None else None
+
+    def list_scraper_logs(self, *, limit: int = 10, keyword: str | None = None) -> list[dict[str, Any]]:
+        with self.database.session() as session:
+            query = select(ScraperLogORM).order_by(ScraperLogORM.created_at.desc()).limit(limit)
+            if keyword:
+                query = query.where(ScraperLogORM.keyword == str(keyword).strip())
+            rows = session.scalars(query).all()
+            return [self._scraper_log_to_dict(item) for item in rows]
+
+    def scraper_log_summary(self, *, limit: int = 50) -> dict[str, Any]:
+        logs = self.list_scraper_logs(limit=limit)
+        if not logs:
+            return {
+                "total_runs": 0,
+                "success_rate": 0.0,
+                "failure_rate": 0.0,
+                "avg_duration_ms": 0,
+                "last_success_at": "",
+                "last_error": "",
+            }
+        total_runs = len(logs)
+        success_count = sum(1 for item in logs if item.get("status") in {"ok", "completed", "cached", "partial"})
+        failure_count = sum(1 for item in logs if item.get("status") in {"error", "failed", "warning"})
+        durations = [int(item["duration_ms"]) for item in logs if item.get("duration_ms") is not None]
+        last_success_at = next((str(item.get("created_at", "")) for item in logs if item.get("status") in {"ok", "completed", "cached", "partial"}), "")
+        last_error = next((str(item.get("error_msg", "")) for item in logs if str(item.get("error_msg", "")).strip()), "")
+        return {
+            "total_runs": total_runs,
+            "success_rate": round((success_count / total_runs) * 100, 1),
+            "failure_rate": round((failure_count / total_runs) * 100, 1),
+            "avg_duration_ms": round(sum(durations) / len(durations)) if durations else 0,
+            "last_success_at": last_success_at,
+            "last_error": last_error,
+        }
 
     def last_successful_run(self, run_type: str | None = None) -> dict[str, Any] | None:
         with self.database.session() as session:
@@ -818,6 +910,20 @@ class BlueprintRepository:
             "score_after": item.score_after,
             "result_json": item.result_json or {},
             "created_at": self._iso(item.created_at),
+        }
+
+    def _scraper_log_to_dict(self, item: ScraperLogORM) -> dict[str, Any]:
+        return {
+            "id": item.id,
+            "job_id": item.job_id,
+            "keyword": item.keyword,
+            "status": item.status,
+            "gigs_found": item.gigs_found,
+            "duration_ms": item.duration_ms,
+            "error_msg": item.error_msg,
+            "meta_json": item.meta_json or {},
+            "created_at": self._iso(item.created_at),
+            "updated_at": self._iso(item.updated_at),
         }
 
     def _assistant_message_to_dict(self, item: AssistantMessageORM) -> dict[str, Any]:

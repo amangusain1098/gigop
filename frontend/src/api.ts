@@ -31,7 +31,7 @@ export async function fetchJson<T>(url: string, options: RequestInit = {}, csrfT
     let detail = response.statusText
     try {
       const payload = await response.json()
-      detail = payload.detail ?? JSON.stringify(payload)
+      detail = payload.error ?? payload.detail ?? payload.message ?? JSON.stringify(payload)
     } catch {
       detail = await response.text()
     }

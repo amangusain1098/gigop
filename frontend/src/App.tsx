@@ -13,7 +13,21 @@ import {
   YAxis,
 } from 'recharts'
 import { createDashboardSocket, fetchJson, loadBootstrap } from './api'
-import type { BootstrapPayload, CompetitorRecord, DashboardEvent, DatasetRecord, FailedLoginAttemptRecord, JobRun, LegacyState, QueueRecord } from './types'
+import type {
+  BootstrapPayload,
+  ComparisonDiffPayload,
+  ComparisonTimelinePoint,
+  CompetitorRecord,
+  DashboardEvent,
+  DatasetRecord,
+  FailedLoginAttemptRecord,
+  JobRun,
+  KeywordScore,
+  LegacyState,
+  QueueRecord,
+  ScraperLogRecord,
+  ScraperSummary,
+} from './types'
 import './App.css'
 
 type TitleOption = { label: string; title: string; rationale: string }
@@ -542,6 +556,27 @@ function App() {
   const personaFocus = (blueprint.persona_focus ?? []) as PersonaFocus[]
   const pageOneTopTen = ((comparison.first_page_top_10 ?? []) as CompetitorRecord[]).slice(0, 10)
   const oneByOne = (comparison.one_by_one_recommendations ?? []) as CompetitorRecommendation[]
+  const keywordScore = (comparison.keyword_score ?? {
+    enabled: false,
+    score: 0,
+    difficulty: 'unknown',
+    summary: 'Run a comparison to score this keyword.',
+  }) as KeywordScore
+  const scraperLogs = (data.scraper_logs ?? []) as ScraperLogRecord[]
+  const scraperSummary = (data.scraper_summary ?? {
+    total_runs: 0,
+    success_rate: 0,
+    failure_rate: 0,
+    avg_duration_ms: 0,
+    last_success_at: '',
+    last_error: '',
+  }) as ScraperSummary
+  const timeline = (data.timeline ?? []) as ComparisonTimelinePoint[]
+  const comparisonDiff = (data.comparison_diff ?? {
+    available: false,
+    summary: 'No comparison diff is available yet.',
+    changes: [],
+  }) as ComparisonDiffPayload
   const topRankedGig = (comparison.top_ranked_gig ?? pageOneTopTen[0] ?? {}) as Record<string, any>
   const topRankedReasons = (comparison.why_top_ranked_gig_is_first ?? topRankedGig.why_on_page_one ?? []) as string[]
   const assistantQuickPrompts = buildAssistantQuickPrompts(comparison, blueprint, scraperRun)
@@ -567,6 +602,10 @@ function App() {
     { name: 'Actions', value: clamp((blueprint.weekly_actions?.length ?? 0) * 18) },
     { name: 'Trust', value: clamp(report.optimization_score ?? 0) },
   ]
+  const timelineChart = timeline.map((item) => ({
+    ...item,
+    label: shortDate(item.created_at),
+  }))
   const assistantProviderLabel = aiSettings.provider === 'n8n' ? 'n8n webhook' : String(aiSettings.provider ?? 'local fallback')
   const assistantStatusLabel = aiSettings.enabled
     ? (aiSettings.configured ? `${assistantProviderLabel} configured` : `${assistantProviderLabel} fallback`)
@@ -752,6 +791,51 @@ function App() {
 
       <section className="content-grid">
         <article className="card">
+          <div className="card-head"><h2>Keyword quality</h2><span className={`status status--${keywordDifficultyTone(keywordScore.difficulty)}`}>{keywordScore.difficulty || 'unknown'}</span></div>
+          <div className="meta-grid">
+            <MetaItem label="Keyword" value={keywordScore.keyword || String(comparison.primary_search_term ?? '--')} />
+            <MetaItem label="Score" value={String(keywordScore.score ?? '--')} />
+            <MetaItem label="Competitors found" value={String(comparison.competitor_count ?? 0)} />
+            <MetaItem label="Market anchor" value={currency(comparison.market_anchor_price)} />
+          </div>
+          <p className="inline-note">{keywordScore.summary || 'Run a compare to score the current keyword.'}</p>
+          <div className="pill-row">
+            {Object.entries(keywordScore.components ?? {}).map(([label, value]) => (
+              <span className="pill" key={label}>{human(label)}: {String(value)}</span>
+            ))}
+          </div>
+        </article>
+
+        <article className="card">
+          <div className="card-head"><h2>Scraper visibility</h2><span>{scraperSummary.total_runs ?? 0} tracked runs</span></div>
+          <div className="meta-grid">
+            <MetaItem label="Success rate" value={percent(scraperSummary.success_rate)} />
+            <MetaItem label="Failure rate" value={percent(scraperSummary.failure_rate)} />
+            <MetaItem label="Avg duration" value={milliseconds(scraperSummary.avg_duration_ms)} />
+            <MetaItem label="Last success" value={scraperSummary.last_success_at ? shortDate(scraperSummary.last_success_at) : '--'} />
+          </div>
+          {scraperSummary.last_error ? <p className="inline-note">{scraperSummary.last_error}</p> : null}
+          <div className="table">
+            {scraperLogs.length ? scraperLogs.slice(0, 6).map((item) => (
+              <div className="row row--stacked" key={`${item.id}-${item.updated_at ?? item.created_at ?? ''}`}>
+                <div className="row-topline">
+                  <strong>{item.keyword || 'marketplace scrape'}</strong>
+                  <span className={`status status--${item.status || 'queued'}`}>{item.status || 'unknown'}</span>
+                </div>
+                <p>{String(item.meta_json?.last_message ?? item.error_msg ?? 'No status message captured yet.')}</p>
+                <div className="row-metrics">
+                  <span>{item.gigs_found ?? 0} gigs</span>
+                  <span>{milliseconds(item.duration_ms)}</span>
+                  <span>{item.updated_at ? shortDate(item.updated_at) : '--'}</span>
+                </div>
+              </div>
+            )) : <p className="inline-note">No scraper log rows yet. Run a live market compare to start building visibility history.</p>}
+          </div>
+        </article>
+      </section>
+
+      <section className="content-grid">
+        <article className="card">
           <div className="card-head"><h2>My gig vs market</h2><span>{comparison.primary_search_term ?? '--'}</span></div>
           <div className="meta-grid">
             <MetaItem label="My gig title" value={String(myGig.title ?? '--')} />
@@ -809,6 +893,65 @@ function App() {
                 ))}
               </div>
             </div>
+          </div>
+        </article>
+      </section>
+
+      <section className="content-grid">
+        <article className="card">
+          <div className="card-head"><h2>Comparison timeline</h2><span>{timeline.length} saved runs</span></div>
+          <div className="chart-shell">
+            {timelineChart.length ? (
+              <ResponsiveContainer width="100%" height={260}>
+                <LineChart data={timelineChart}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(102,124,153,0.2)" />
+                  <XAxis dataKey="label" stroke="#7b91ad" />
+                  <YAxis stroke="#7b91ad" />
+                  <Tooltip labelFormatter={(label) => String(label ?? '--')} />
+                  <Line dataKey="optimization_score" name="Optimization" stroke="#49b3ff" strokeWidth={2.5} dot={false} />
+                  <Line dataKey="keyword_score" name="Keyword score" stroke="#ff9966" strokeWidth={2.5} dot={false} />
+                  <Line dataKey="competitor_count" name="Competitors" stroke="#5ed1a3" strokeWidth={2.5} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <p className="inline-note">Comparison runs will appear here once you compare the same gig more than once.</p>
+            )}
+          </div>
+          <div className="table">
+            {timeline.slice(-5).reverse().map((item) => (
+              <div className="row" key={String(item.id)}>
+                <div>
+                  <strong>{item.keyword || 'market compare'}</strong>
+                  <p>{item.top_action || item.top_ranked_title || 'No action summary yet.'}</p>
+                </div>
+                <div className="row-metrics">
+                  <span>{item.optimization_score ?? '--'} score</span>
+                  <span>{item.keyword_difficulty ?? '--'}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </article>
+
+        <article className="card">
+          <div className="card-head"><h2>Latest comparison diff</h2><span>{comparisonDiff.available ? 'ready' : 'pending'}</span></div>
+          <p className="inline-note">{comparisonDiff.summary}</p>
+          <div className="meta-grid">
+            <MetaItem label="Earlier run" value={comparisonDiff.left?.created_at ? shortDate(String(comparisonDiff.left.created_at)) : '--'} />
+            <MetaItem label="Later run" value={comparisonDiff.right?.created_at ? shortDate(String(comparisonDiff.right.created_at)) : '--'} />
+          </div>
+          <div className="table">
+            {comparisonDiff.available && comparisonDiff.changes.length ? comparisonDiff.changes.map((change) => (
+              <div className="row row--stacked" key={`${change.label}-${String(change.before)}-${String(change.after)}`}>
+                <div className="row-topline">
+                  <strong>{change.label}</strong>
+                </div>
+                <div className="diff diff--stacked">
+                  <pre>{displayDiffValue(change.before)}</pre>
+                  <pre>{displayDiffValue(change.after)}</pre>
+                </div>
+              </div>
+            )) : <p className="inline-note">Run another comparison to see how the market recommendations changed over time.</p>}
           </div>
         </article>
       </section>
@@ -1230,6 +1373,38 @@ function human(value: string) {
 function currency(value?: number | null) {
   if (value === null || value === undefined || Number.isNaN(value)) return '--'
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value)
+}
+
+function percent(value?: number | null) {
+  if (value === null || value === undefined || Number.isNaN(value)) return '--'
+  return `${Math.round(Number(value) * 100)}%`
+}
+
+function milliseconds(value?: number | null) {
+  if (value === null || value === undefined || Number.isNaN(value) || Number(value) <= 0) return '--'
+  const numeric = Number(value)
+  if (numeric >= 1000) {
+    return `${(numeric / 1000).toFixed(1)}s`
+  }
+  return `${Math.round(numeric)}ms`
+}
+
+function keywordDifficultyTone(value?: string) {
+  const normalized = String(value ?? '').toLowerCase()
+  if (normalized === 'low') return 'ok'
+  if (normalized === 'medium') return 'queued'
+  if (normalized === 'high') return 'warning'
+  return 'pending'
+}
+
+function displayDiffValue(value: unknown) {
+  if (value === null || value === undefined || value === '') {
+    return '--'
+  }
+  if (typeof value === 'string') {
+    return value
+  }
+  return JSON.stringify(value, null, 2)
 }
 
 function isPlaceholderText(value: string) {

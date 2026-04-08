@@ -51,6 +51,7 @@ def run_pipeline_job(run_id: str, *, use_live_connectors: bool = False) -> dict[
             use_live_connectors=use_live_connectors,
             progress_callback=progress_callback,
             scraper_event_callback=lambda state: runtime["event_bus"].publish("scraper_activity", state),
+            run_id=run_id,
         ),
     )
 
@@ -72,6 +73,7 @@ def run_marketplace_compare_job(
             search_terms=search_terms,
             progress_callback=progress_callback,
             scraper_event_callback=lambda current_state: runtime["event_bus"].publish("scraper_activity", current_state),
+            run_id=run_id,
         ),
     )
 
@@ -95,6 +97,7 @@ def run_manual_compare_job(
             search_terms=search_terms,
             progress_callback=progress_callback,
             scraper_event_callback=lambda current_state: runtime["event_bus"].publish("scraper_activity", current_state),
+            run_id=run_id,
         ),
     )
 
@@ -109,6 +112,7 @@ def run_marketplace_scrape_job(run_id: str, *, search_terms: list[str] | None = 
         runner=lambda progress_callback: runtime["dashboard_service"].run_marketplace_scrape(
             search_terms=search_terms,
             scraper_event_callback=lambda current_state: runtime["event_bus"].publish("scraper_activity", current_state),
+            run_id=run_id,
         ),
     )
 
@@ -164,6 +168,9 @@ def _execute_job(
 ) -> dict[str, Any]:
     repository = runtime["repository"]
     event_bus = runtime["event_bus"]
+    cache_service = runtime.get("cache_service")
+    run = repository.get_agent_run(run_id) or {}
+    dedupe_key = str((run.get("input_payload") or {}).get("dedupe_key", "")).strip()
     repository.update_agent_run(
         run_id,
         status="running",
@@ -202,6 +209,11 @@ def _execute_job(
         _send_job_failure_alert(runtime=runtime, run_id=run_id, run_type=run_type, error=exc)
         raise
     finally:
+        if cache_service is not None and dedupe_key:
+            try:
+                cache_service.delete(dedupe_key)
+            except Exception:
+                pass
         _cleanup_runtime(runtime)
 
 

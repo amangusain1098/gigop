@@ -4,16 +4,20 @@ import asyncio
 import base64
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+import hashlib
 from pathlib import Path
 import threading
 import traceback
+import json
+import secrets
 from urllib.parse import urlsplit, urlunsplit
 
 import logging
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.wsgi import WSGIMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -98,6 +102,17 @@ def summarize_last_run(latest_run: dict | None) -> dict:
     return {key: value for key, value in summary.items() if value not in (None, "", [])}
 
 
+def api_error_response(*, message: str, code: str, status_code: int, details: dict | None = None) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "error": message,
+            "code": code,
+            "details": details or {},
+        },
+    )
+
+
 def create_app() -> FastAPI:
     config = GigOptimizerConfig.from_env()
     if config.sentry_dsn:
@@ -128,7 +143,7 @@ def create_app() -> FastAPI:
     database_manager = dashboard_service.database_manager
     repository = dashboard_service.repository
     event_bus = JobEventBus(config)
-    job_service = JobService(config, repository, event_bus)
+    job_service = JobService(config, repository, event_bus, cache_service=cache_service)
     auth_service = AuthService(config)
     hostinger_service = HostingerService(config, settings_service)
     validation_errors, validation_warnings = auth_service.validate_runtime()
@@ -204,6 +219,30 @@ def create_app() -> FastAPI:
     if frontend_assets_dir.exists():
         app.mount("/dashboard/assets", StaticFiles(directory=str(frontend_assets_dir)), name="dashboard-assets")
 
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(request: Request, exc: HTTPException):
+        if request.url.path.startswith("/api/"):
+            message = str(exc.detail) if isinstance(exc.detail, str) else "Request failed."
+            details = exc.detail if isinstance(exc.detail, dict) else {}
+            return api_error_response(
+                message=message,
+                code=f"http_{exc.status_code}",
+                status_code=exc.status_code,
+                details=details,
+            )
+        return HTMLResponse(str(exc.detail), status_code=exc.status_code)
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(request: Request, exc: RequestValidationError):
+        if request.url.path.startswith("/api/"):
+            return api_error_response(
+                message="Request validation failed.",
+                code="request_validation_error",
+                status_code=422,
+                details={"errors": exc.errors()},
+            )
+        return HTMLResponse("Request validation failed.", status_code=422)
+
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception):
         send_slack_event(
@@ -216,7 +255,12 @@ def create_app() -> FastAPI:
             },
         )
         if request.url.path.startswith("/api/"):
-            return JSONResponse(status_code=500, content={"detail": "Internal server error."})
+            return api_error_response(
+                message="Internal server error.",
+                code="internal_error",
+                status_code=500,
+                details={"path": request.url.path},
+            )
         return HTMLResponse("Internal server error.", status_code=500)
 
     def build_state(
@@ -249,6 +293,7 @@ def create_app() -> FastAPI:
         marketplace_settings = settings_service.get_settings().marketplace
         active_gig_url = str(marketplace_settings.my_gig_url or comparison.get("gig_url") or "").strip()
         gig_id = dashboard_service._gig_identifier(active_gig_url or None)  # noqa: SLF001
+        primary_search_term = str(comparison.get("primary_search_term", "")).strip()
         return {
             "state": state,
             "job_runs": job_service.list_runs(limit=25),
@@ -261,6 +306,10 @@ def create_app() -> FastAPI:
             "security": build_login_security_payload(),
             "workers": job_service.worker_snapshot(),
             "health": build_health_payload(),
+            "scraper_logs": repository.list_scraper_logs(limit=10),
+            "scraper_summary": repository.scraper_log_summary(limit=50),
+            "timeline": dashboard_service.comparison_timeline(gig_id=gig_id, keyword=primary_search_term, limit=16),
+            "comparison_diff": dashboard_service.comparison_diff(gig_id=gig_id),
         }
 
     def build_assistant_context() -> dict:
@@ -335,9 +384,13 @@ def create_app() -> FastAPI:
         db_ok, db_detail = database_manager.healthcheck()
         bus_ok, bus_detail = event_bus.healthcheck()
         latest_run = repository.last_successful_run()
+        last_scrape = repository.last_successful_run(run_type="marketplace_scrape") or repository.last_successful_run(run_type="marketplace_compare")
+        scraper_summary = repository.scraper_log_summary(limit=50)
+        workers = job_service.worker_snapshot()
         frontend_ready = frontend_dist_dir.exists() and (frontend_dist_dir / "index.html").exists()
+        healthy = db_ok and bus_ok and bool(workers)
         return {
-            "status": "ok" if db_ok and bus_ok else "degraded",
+            "status": "ok" if healthy else "degraded",
             "app": app.title,
             "version": app.version,
             "auth_enabled": auth_service.auth_enabled,
@@ -352,7 +405,7 @@ def create_app() -> FastAPI:
                     "ok": bus_ok,
                     "detail": bus_detail,
                 },
-                "workers": job_service.worker_snapshot(),
+                "workers": workers,
                 "frontend": {
                     "ok": frontend_ready or bool(config.frontend_dev_url),
                     "detail": (
@@ -362,6 +415,8 @@ def create_app() -> FastAPI:
                     ),
                 },
                 "last_successful_run": summarize_last_run(latest_run),
+                "last_successful_scrape": summarize_last_run(last_scrape),
+                "scraper_logs": scraper_summary,
             },
         }
 
@@ -370,6 +425,20 @@ def create_app() -> FastAPI:
             return
         if auth_service.get_request_session(request) is None:
             raise HTTPException(status_code=401, detail="Authentication required.")
+
+    def require_extension_token(request: Request) -> None:
+        if not config.extension_enabled:
+            raise HTTPException(status_code=404, detail="Browser extension ingestion is disabled.")
+        expected = str(config.extension_api_token or "").strip()
+        if not expected:
+            raise HTTPException(status_code=503, detail="Browser extension token is not configured.")
+        authorization = str(request.headers.get("authorization", "")).strip()
+        header_token = str(request.headers.get("x-extension-token", "")).strip()
+        actual = header_token
+        if authorization.lower().startswith("bearer "):
+            actual = authorization[7:].strip()
+        if not actual or not secrets.compare_digest(actual, expected):
+            raise HTTPException(status_code=401, detail="Invalid browser extension token.")
 
     def notify_event(event: str, title: str, lines: list[str]) -> None:
         try:
@@ -386,12 +455,9 @@ def create_app() -> FastAPI:
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def scraper_broadcast_factory(loop: asyncio.AbstractEventLoop):
+    def scraper_broadcast_factory(_loop: asyncio.AbstractEventLoop):
         def _push(scraper_state: dict) -> None:
-            asyncio.run_coroutine_threadsafe(
-                websocket_manager.broadcast_json({"type": "scraper_activity", "payload": scraper_state}),
-                loop,
-            )
+            event_bus.publish("scraper_activity", scraper_state)
 
         return _push
 
@@ -646,6 +712,10 @@ def create_app() -> FastAPI:
 
     @app.get("/api/health")
     async def health() -> dict:
+        return build_health_payload()
+
+    @app.get("/health")
+    async def public_health() -> dict:
         return build_health_payload()
 
     @app.get("/api/manhwa/overview")
@@ -970,6 +1040,44 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail=f"Job '{run_id}' was not found.")
         return {"job": run}
 
+    @app.get("/api/scraper/stream/{run_id}")
+    async def scraper_stream(run_id: str, _: None = Depends(require_auth)):
+        if not config.feature_scraper_sse:
+            raise HTTPException(status_code=404, detail="Scraper SSE is disabled.")
+
+        async def event_generator():
+            queue: asyncio.Queue[str | None] = asyncio.Queue()
+            loop = asyncio.get_running_loop()
+
+            def callback(event: dict) -> None:
+                event_type = str(event.get("type", "")).strip()
+                payload = event.get("payload") or {}
+                event_run_id = str(payload.get("run_id") or payload.get("job_id") or payload.get("runId") or "").strip()
+                if event_type in {"job_progress", "job_completed", "job_failed", "job_queued"}:
+                    event_run_id = str(payload.get("run_id", "")).strip()
+                if event_run_id != run_id:
+                    return
+                packet = f"event: {event_type}\ndata: {json.dumps(payload, default=str)}\n\n"
+                loop.call_soon_threadsafe(queue.put_nowait, packet)
+
+            event_bus.subscribe(callback)
+            keepalive_task = asyncio.create_task(asyncio.sleep(0))
+            try:
+                while True:
+                    try:
+                        message = await asyncio.wait_for(queue.get(), timeout=15)
+                    except asyncio.TimeoutError:
+                        yield ": keepalive\n\n"
+                        continue
+                    if message is None:
+                        break
+                    yield message
+            finally:
+                keepalive_task.cancel()
+                event_bus.unsubscribe(callback)
+
+        return StreamingResponse(event_generator(), media_type="text/event-stream")
+
     @app.post("/api/v2/jobs")
     async def enqueue_job(
         request: Request,
@@ -1025,6 +1133,32 @@ def create_app() -> FastAPI:
     @app.get("/api/v2/competitors")
     async def list_competitors(_: None = Depends(require_auth)) -> dict:
         return {"competitors": repository.list_competitor_snapshots(limit=30)}
+
+    @app.get("/api/v2/history/timeline")
+    async def comparison_timeline(
+        gig_url: str = "",
+        keyword: str = "",
+        limit: int = 16,
+        _: None = Depends(require_auth),
+    ) -> dict:
+        gig_id = dashboard_service._gig_identifier(gig_url or None)  # noqa: SLF001
+        return {
+            "timeline": dashboard_service.comparison_timeline(
+                gig_id=gig_id,
+                keyword=keyword,
+                limit=max(1, min(limit, 60)),
+            )
+        }
+
+    @app.get("/api/v2/history/diff")
+    async def comparison_diff(
+        gig_url: str = "",
+        left_id: int | None = None,
+        right_id: int | None = None,
+        _: None = Depends(require_auth),
+    ) -> dict:
+        gig_id = dashboard_service._gig_identifier(gig_url or None)  # noqa: SLF001
+        return {"diff": dashboard_service.comparison_diff(gig_id=gig_id, left_id=left_id, right_id=right_id)}
 
     @app.get("/api/v2/hitl")
     async def list_hitl(_: None = Depends(require_auth)) -> dict:
@@ -1526,6 +1660,64 @@ def create_app() -> FastAPI:
         response_state["setup_health"] = enriched_state.get("setup_health", {})
         await websocket_manager.broadcast_json({"type": "state", "payload": response_state})
         return response_state
+
+    @app.post("/api/extension/import")
+    async def import_extension_marketplace_page(request: Request, payload: dict = Body(...)) -> dict:
+        require_extension_token(request)
+        keyword = str(payload.get("keyword", "")).strip()
+        gig_url = str(payload.get("gig_url", "")).strip()
+        source_url = str(payload.get("page_url", "") or payload.get("source_url", "")).strip()
+        source_label = str(payload.get("source", "browser_extension")).strip() or "browser_extension"
+        gigs = payload.get("gigs") or []
+        if not isinstance(gigs, list):
+            raise HTTPException(status_code=400, detail="gigs must be an array of visible Fiverr cards.")
+        if not gigs:
+            raise HTTPException(status_code=400, detail="No gigs were provided by the browser extension.")
+        if len(gigs) > max(1, config.extension_max_gigs_per_import):
+            gigs = gigs[: max(1, config.extension_max_gigs_per_import)]
+
+        sync_marketplace_context(
+            gig_url=gig_url,
+            search_terms=[keyword] if keyword else [],
+        )
+        fingerprint_payload = {
+            "keyword": keyword,
+            "gig_url": gig_url,
+            "source_url": source_url,
+            "gigs": gigs,
+        }
+        fingerprint = hashlib.sha256(
+            json.dumps(fingerprint_payload, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
+        cache_key = f"gigoptimizer:extension-import:{fingerprint}"
+        cached_state = cache_service.get_json(cache_key)
+        if isinstance(cached_state, dict) and cached_state.get("gig_comparison"):
+            return {
+                "status": "cached",
+                "gig_comparison": cached_state.get("gig_comparison"),
+                "optimization_score": (cached_state.get("latest_report") or {}).get("optimization_score"),
+            }
+
+        response_state = await asyncio.to_thread(
+            dashboard_service.compare_imported_market_data,
+            gig_url=gig_url,
+            keyword=keyword,
+            gigs_payload=gigs,
+            source_url=source_url,
+            source_label=source_label,
+            scraper_event_callback=scraper_broadcast_factory(asyncio.get_running_loop()),
+        )
+        cache_service.set_json(
+            cache_key,
+            response_state,
+            ttl_seconds=max(60, int(config.extension_import_ttl_seconds)),
+        )
+        await websocket_manager.broadcast_json({"type": "state", "payload": response_state})
+        return {
+            "status": "ok",
+            "gig_comparison": response_state.get("gig_comparison"),
+            "optimization_score": (response_state.get("latest_report") or {}).get("optimization_score"),
+        }
 
     @app.get("/api/reports")
     async def reports(request: Request, _: None = Depends(require_auth)) -> dict:

@@ -239,3 +239,18 @@ class FeedSyncRunORM(Base):
     result_json: Mapped[dict] = mapped_column(JSON, default=dict)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+
+
+class ScraperLogORM(Base):
+    __tablename__ = "scraper_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    job_id: Mapped[str] = mapped_column(String(120), index=True, default="")
+    keyword: Mapped[str] = mapped_column(String(255), index=True, default="")
+    status: Mapped[str] = mapped_column(String(32), index=True, default="queued")
+    gigs_found: Mapped[int] = mapped_column(Integer, default=0)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_msg: Mapped[str] = mapped_column(Text, default="")
+    meta_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)

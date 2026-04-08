@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GigOptimizer Capture</title>
+  <style>
+    body {
+      margin: 0;
+      width: 360px;
+      font-family: "Segoe UI", sans-serif;
+      background: #0b1322;
+      color: #ebf4ff;
+    }
+    .shell {
+      display: grid;
+      gap: 12px;
+      padding: 16px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 1rem;
+    }
+    p {
+      margin: 0;
+      color: #9cb0ca;
+      font-size: 0.9rem;
+    }
+    label {
+      display: grid;
+      gap: 6px;
+      font-size: 0.82rem;
+      color: #b9c9dc;
+    }
+    input {
+      width: 100%;
+      box-sizing: border-box;
+      border-radius: 10px;
+      border: 1px solid rgba(145, 177, 211, 0.24);
+      background: rgba(14, 24, 39, 0.96);
+      color: #f4f8ff;
+      padding: 10px 12px;
+    }
+    button {
+      border: 0;
+      border-radius: 999px;
+      padding: 11px 14px;
+      font-weight: 600;
+      cursor: pointer;
+      background: linear-gradient(135deg, #46b1ff 0%, #1789ff 100%);
+      color: white;
+    }
+    .secondary {
+      background: rgba(145, 177, 211, 0.18);
+    }
+    .status {
+      min-height: 40px;
+      border-radius: 12px;
+      padding: 10px 12px;
+      background: rgba(255,255,255,0.06);
+      white-space: pre-wrap;
+    }
+    .row {
+      display: grid;
+      gap: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="row">
+      <h1>GigOptimizer Fiverr Capture</h1>
+      <p>Capture the visible Fiverr page and send it into your live GigOptimizer dashboard.</p>
+    </div>
+
+    <label>
+      API base URL
+      <input id="apiBaseUrl" type="url" placeholder="https://animha.co.in" />
+    </label>
+
+    <label>
+      Extension API token
+      <input id="apiToken" type="password" placeholder="Paste EXTENSION_API_TOKEN" />
+    </label>
+
+    <label>
+      My Fiverr gig URL
+      <input id="gigUrl" type="url" placeholder="https://www.fiverr.com/you/your-gig" />
+    </label>
+
+    <label>
+      Keyword override
+      <input id="keywordOverride" type="text" placeholder="Leave blank to use Fiverr query" />
+    </label>
+
+    <div class="row">
+      <button id="saveSettings" class="secondary" type="button">Save settings</button>
+      <button id="captureNow" type="button">Capture current Fiverr page</button>
+    </div>
+
+    <div id="status" class="status">Ready.</div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
