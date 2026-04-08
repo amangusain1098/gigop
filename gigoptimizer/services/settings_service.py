@@ -26,6 +26,9 @@ class SettingsService:
 
     def get_settings(self) -> NotificationSettings:
         stored = self._read()
+        stored_marketplace = stored.get("marketplace", {})
+        stored_marketplace_terms = self._parse_list(stored_marketplace.get("search_terms", []))
+        configured_marketplace_terms = self._parse_list(self.config.marketplace_search_terms)
         return NotificationSettings(
             events=NotificationEvents(**stored.get("events", {})),
             email=EmailSettings(
@@ -80,7 +83,7 @@ class SettingsService:
             ),
             marketplace=MarketplaceSettings(
                 enabled=self.config.marketplace_enabled or bool(stored.get("marketplace", {}).get("enabled", False)),
-                search_terms=self._parse_list(self.config.marketplace_search_terms) or self._parse_list(stored.get("marketplace", {}).get("search_terms", [])),
+                search_terms=stored_marketplace_terms or configured_marketplace_terms,
                 max_results=int(stored.get("marketplace", {}).get("max_results", self.config.fiverr_marketplace_max_results)),
                 search_url_template=self.config.fiverr_marketplace_search_url_template or str(stored.get("marketplace", {}).get("search_url_template", "https://www.fiverr.com/search/gigs?query={query}")).strip(),
                 reader_enabled=bool(stored.get("marketplace", {}).get("reader_enabled", self.config.marketplace_reader_enabled)),
@@ -88,7 +91,7 @@ class SettingsService:
                     str(stored.get("marketplace", {}).get("reader_base_url", self.config.marketplace_reader_base_url)).strip()
                     or self.config.marketplace_reader_base_url
                 ),
-                my_gig_url=self.config.marketplace_my_gig_url or str(stored.get("marketplace", {}).get("my_gig_url", "")).strip(),
+                my_gig_url=str(stored_marketplace.get("my_gig_url", "")).strip() or self.config.marketplace_my_gig_url,
                 auto_compare_enabled=bool(stored.get("marketplace", {}).get("auto_compare_enabled", False)),
                 auto_compare_interval_minutes=max(
                     5,

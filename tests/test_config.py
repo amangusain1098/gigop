@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from gigoptimizer.config import GigOptimizerConfig
 from gigoptimizer.connectors.fiverr_scraper import FiverrSellerConnector
+from gigoptimizer.services.settings_service import SettingsService
 
 
 class ConfigValidationTests(unittest.TestCase):
@@ -58,6 +59,33 @@ class ConfigValidationTests(unittest.TestCase):
 
         self.assertEqual(status.status, "skipped")
         self.assertIn("FIVERR_ANALYTICS_URL", status.detail)
+
+    def test_marketplace_runtime_settings_override_env_defaults(self) -> None:
+        with TemporaryDirectory() as tmp:
+            temp_root = Path(tmp)
+            with patch.dict(
+                os.environ,
+                {
+                    "INTEGRATION_SETTINGS_PATH": str(temp_root / "integrations.json"),
+                    "MARKETPLACE_MY_GIG_URL": "https://www.fiverr.com/example/old-wordpress-gig",
+                    "MARKETPLACE_SEARCH_TERMS": "wordpress speed,core web vitals",
+                },
+                clear=False,
+            ):
+                config = GigOptimizerConfig.from_env()
+                service = SettingsService(config)
+                service.update_settings(
+                    {
+                        "marketplace": {
+                            "my_gig_url": "https://www.fiverr.com/example/new-anime-logo-gig",
+                            "search_terms": ["anime logo", "mascot logo"],
+                        }
+                    }
+                )
+                settings = service.get_settings()
+
+        self.assertEqual(settings.marketplace.my_gig_url, "https://www.fiverr.com/example/new-anime-logo-gig")
+        self.assertEqual(settings.marketplace.search_terms, ["anime logo", "mascot logo"])
 
 
 if __name__ == "__main__":
