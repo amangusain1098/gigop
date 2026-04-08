@@ -94,6 +94,16 @@ class AuthService:
     def authenticate(self, username: str, password: str) -> bool:
         return username == self.admin_username and self.verify_password(password)
 
+    def build_login_client_key(
+        self,
+        *,
+        client_id: str = "",
+        remote_addr: str = "",
+        user_agent: str = "",
+    ) -> str:
+        seed = str(client_id).strip() or f"{str(remote_addr).strip()}|{str(user_agent).strip()[:180]}"
+        return hashlib.sha256(f"gigoptimizer-login:{seed}".encode("utf-8")).hexdigest()
+
     def validate_runtime(self) -> tuple[list[str], list[str]]:
         errors: list[str] = []
         warnings: list[str] = []

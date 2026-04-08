@@ -227,6 +227,53 @@ button:disabled {
   margin-bottom: 16px;
 }
 
+.security-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.security-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 18px;
+  background: rgba(15, 27, 45, 0.78);
+  border: 1px solid rgba(145, 177, 211, 0.14);
+  min-width: 0;
+}
+
+.security-card__content {
+  min-width: 0;
+}
+
+.security-card__content strong,
+.security-card__content p {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.security-card__content p {
+  margin: 6px 0 0;
+  color: #91a6be;
+}
+
+.security-thumb {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-radius: 16px;
+  background: rgba(4, 9, 18, 0.85);
+  border: 1px solid rgba(145, 177, 211, 0.12);
+}
+
+.security-thumb--empty {
+  display: grid;
+  place-items: center;
+  color: #91a6be;
+  font-weight: 600;
+}
+
 .meta-item {
   padding: 14px;
   border-radius: 16px;

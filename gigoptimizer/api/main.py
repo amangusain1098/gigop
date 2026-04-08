@@ -150,6 +150,8 @@ def create_app() -> FastAPI:
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     frontend_dist_dir = Path(config.frontend_dist_dir).resolve()
     frontend_assets_dir = frontend_dist_dir / "assets"
+    login_capture_dir = (config.data_dir / "security" / "login_attempts").resolve()
+    login_capture_dir.mkdir(parents=True, exist_ok=True)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -256,6 +258,7 @@ def create_app() -> FastAPI:
             "assistant_history": list(reversed(repository.list_assistant_messages(gig_id=gig_id, limit=12))),
             "datasets": knowledge_service.list_documents(gig_id=gig_id, limit=20),
             "hostinger": hostinger_service.get_public_status(),
+            "security": build_login_security_payload(),
             "workers": job_service.worker_snapshot(),
             "health": build_health_payload(),
         }
@@ -425,6 +428,37 @@ def create_app() -> FastAPI:
         else:
             base = str(request.base_url).rstrip("/")
         return f"{base}{path}"
+
+    def request_remote_addr(request: Request) -> str:
+        forwarded_for = str(request.headers.get("x-forwarded-for", "")).split(",")[0].strip()
+        if forwarded_for:
+            return forwarded_for
+        return request.client.host if request.client is not None else ""
+
+    def build_login_security_payload() -> dict:
+        attempts = []
+        for item in repository.list_login_attempts(limit=12):
+            attempts.append(
+                {
+                    "id": item["id"],
+                    "username": item["username"],
+                    "remote_addr": item["remote_addr"],
+                    "user_agent": item["user_agent"],
+                    "failure_count": item["failure_count"],
+                    "capture_required": item["capture_required"],
+                    "capture_status": item["capture_status"],
+                    "capture_error": item["capture_error"],
+                    "created_at": item["created_at"],
+                    "photo_captured_at": item["photo_captured_at"],
+                    "photo_available": bool(item["photo_path"]),
+                    "photo_url": (
+                        f"/api/security/login-attempts/{item['id']}/image"
+                        if item["photo_path"]
+                        else ""
+                    ),
+                }
+            )
+        return {"capture_threshold": 3, "failed_login_attempts": attempts}
 
     def render_manhwa_feed_xml(request: Request, entries: list[dict]) -> str:
         site_url = absolute_url(request, "/manhwa")
@@ -716,15 +750,53 @@ def create_app() -> FastAPI:
         )
 
     @app.post("/api/auth/login")
-    async def login(payload: dict = Body(...)) -> JSONResponse:
+    async def login(request: Request, payload: dict = Body(...)) -> JSONResponse:
         if not auth_service.auth_enabled:
             return JSONResponse({"auth": auth_service.get_auth_state(None)})
 
         username = str(payload.get("username", "")).strip()
         password = str(payload.get("password", ""))
+        client_id = str(payload.get("client_id", "")).strip()
+        remote_addr = request_remote_addr(request)
+        user_agent = str(request.headers.get("user-agent", "")).strip()
+        client_key = auth_service.build_login_client_key(
+            client_id=client_id,
+            remote_addr=remote_addr,
+            user_agent=user_agent,
+        )
         if not auth_service.authenticate(username, password):
-            raise HTTPException(status_code=401, detail="Invalid username or password.")
+            failure_count = repository.count_recent_failed_login_attempts(client_key=client_key, window_minutes=30) + 1
+            attempt = repository.record_login_attempt(
+                username=username,
+                client_key=client_key,
+                remote_addr=remote_addr,
+                user_agent=user_agent,
+                success=False,
+                failure_count=failure_count,
+                capture_required=failure_count >= 3,
+                capture_status="pending_capture" if failure_count >= 3 else "not_requested",
+            )
+            await websocket_manager.broadcast_json({"type": "security_update", "payload": build_login_security_payload()})
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "detail": "Invalid username or password.",
+                    "failed_attempts": failure_count,
+                    "capture_required": failure_count >= 3,
+                    "attempt_id": attempt["id"],
+                },
+            )
 
+        repository.record_login_attempt(
+            username=username,
+            client_key=client_key,
+            remote_addr=remote_addr,
+            user_agent=user_agent,
+            success=True,
+            failure_count=0,
+            capture_required=False,
+            capture_status="success",
+        )
         token = auth_service.create_session_token(username)
         session = auth_service.get_session(token)
         response = JSONResponse({"auth": auth_service.get_auth_state(session)})
@@ -738,6 +810,76 @@ def create_app() -> FastAPI:
             path="/",
         )
         return response
+
+    @app.post("/api/auth/login-attempts/capture")
+    async def capture_login_attempt(request: Request, payload: dict = Body(...)) -> dict:
+        attempt_id = str(payload.get("attempt_id", "")).strip()
+        if not attempt_id:
+            raise HTTPException(status_code=400, detail="Missing attempt_id.")
+        attempt = repository.get_login_attempt(attempt_id)
+        if attempt is None:
+            raise HTTPException(status_code=404, detail="Login attempt not found.")
+
+        client_id = str(payload.get("client_id", "")).strip()
+        remote_addr = request_remote_addr(request)
+        user_agent = str(request.headers.get("user-agent", "")).strip()
+        client_key = auth_service.build_login_client_key(
+            client_id=client_id,
+            remote_addr=remote_addr,
+            user_agent=user_agent,
+        )
+        if attempt["client_key"] != client_key:
+            raise HTTPException(status_code=403, detail="Capture request does not match the original login attempt.")
+
+        image_base64 = str(payload.get("image_base64", "")).strip()
+        content_type = str(payload.get("content_type", "image/jpeg")).strip() or "image/jpeg"
+        capture_error = str(payload.get("capture_error", "")).strip()
+
+        photo_path = ""
+        capture_status = "captured"
+        if image_base64:
+            try:
+                image_bytes = base64.b64decode(image_base64, validate=True)
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail="Invalid capture image payload.") from exc
+            if len(image_bytes) > 5 * 1024 * 1024:
+                raise HTTPException(status_code=400, detail="Capture image is too large.")
+            extension = ".png" if "png" in content_type.lower() else ".jpg"
+            output_path = login_capture_dir / f"{attempt_id}{extension}"
+            output_path.write_bytes(image_bytes)
+            photo_path = str(output_path)
+        else:
+            capture_status = "camera_denied" if capture_error else "not_captured"
+
+        updated = repository.attach_login_attempt_capture(
+            attempt_id=attempt_id,
+            photo_path=photo_path or None,
+            photo_content_type=content_type if photo_path else None,
+            capture_status=capture_status,
+            capture_error=capture_error,
+        )
+        await websocket_manager.broadcast_json({"type": "security_update", "payload": build_login_security_payload()})
+        return {
+            "attempt": {
+                **updated,
+                "photo_available": bool(updated.get("photo_path")),
+                "photo_url": f"/api/security/login-attempts/{attempt_id}/image" if updated.get("photo_path") else "",
+            }
+        }
+
+    @app.get("/api/security/login-attempts/{attempt_id}/image")
+    async def login_attempt_image(attempt_id: str, _: None = Depends(require_auth)) -> FileResponse:
+        attempt = repository.get_login_attempt(attempt_id)
+        if attempt is None or not attempt.get("photo_path"):
+            raise HTTPException(status_code=404, detail="Security capture not found.")
+        photo_path = Path(str(attempt["photo_path"])).resolve()
+        try:
+            photo_path.relative_to(login_capture_dir)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="Security capture not found.") from exc
+        if not photo_path.exists():
+            raise HTTPException(status_code=404, detail="Security capture not found.")
+        return FileResponse(photo_path, media_type=str(attempt.get("photo_content_type", "") or "image/jpeg"))
 
     @app.post("/api/auth/logout")
     async def logout(request: Request, _: None = Depends(require_csrf)) -> JSONResponse:

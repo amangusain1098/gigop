@@ -117,6 +117,21 @@ export interface DatasetRecord {
   updated_at?: string
 }
 
+export interface FailedLoginAttemptRecord {
+  id: string
+  username: string
+  remote_addr: string
+  user_agent: string
+  failure_count: number
+  capture_required: boolean
+  capture_status: string
+  capture_error?: string
+  photo_available?: boolean
+  photo_url?: string
+  created_at?: string
+  photo_captured_at?: string
+}
+
 export interface HealthPayload {
   status: string
   app: string
@@ -135,6 +150,10 @@ export interface BootstrapPayload {
   memory?: Record<string, any>
   assistant_history?: Array<Record<string, any>>
   hostinger?: Record<string, any>
+  security?: {
+    capture_threshold: number
+    failed_login_attempts: FailedLoginAttemptRecord[]
+  }
   workers: WorkerSnapshot
   health: HealthPayload
   queued_job?: JobRun

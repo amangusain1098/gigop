@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 
 from ..models import ApprovalRecord, MarketplaceGig, ValidationIssue
 from ..utils import build_gig_key
@@ -22,6 +22,7 @@ from .models import (
     HITLItemORM,
     KnowledgeChunkORM,
     KnowledgeDocumentORM,
+    LoginAttemptORM,
     UserActionORM,
 )
 
@@ -339,6 +340,101 @@ class BlueprintRepository:
                 query = query.where(AssistantMessageORM.gig_id == build_gig_key(gig_id))
             rows = session.scalars(query).all()
             return [self._assistant_message_to_dict(item) for item in rows]
+
+    def count_recent_failed_login_attempts(self, *, client_key: str, window_minutes: int = 30) -> int:
+        cutoff = utc_now() - timedelta(minutes=max(1, window_minutes))
+        with self.database.session() as session:
+            latest_success_at = session.scalar(
+                select(LoginAttemptORM.created_at)
+                .where(LoginAttemptORM.client_key == client_key)
+                .where(LoginAttemptORM.success.is_(True))
+                .order_by(LoginAttemptORM.created_at.desc())
+                .limit(1)
+            )
+            if latest_success_at is not None and latest_success_at.tzinfo is None:
+                latest_success_at = latest_success_at.replace(tzinfo=timezone.utc)
+            effective_cutoff = max(cutoff, latest_success_at) if latest_success_at is not None else cutoff
+            return int(
+                session.scalar(
+                    select(func.count())
+                    .select_from(LoginAttemptORM)
+                    .where(LoginAttemptORM.client_key == client_key)
+                    .where(LoginAttemptORM.success.is_(False))
+                    .where(LoginAttemptORM.created_at >= effective_cutoff)
+                )
+                or 0
+            )
+
+    def clear_failed_login_attempts(self, *, client_key: str) -> None:
+        with self.database.session() as session:
+            session.execute(
+                delete(LoginAttemptORM)
+                .where(LoginAttemptORM.client_key == client_key)
+                .where(LoginAttemptORM.success.is_(False))
+            )
+
+    def record_login_attempt(
+        self,
+        *,
+        username: str,
+        client_key: str,
+        remote_addr: str = "",
+        user_agent: str = "",
+        success: bool = False,
+        failure_count: int = 1,
+        capture_required: bool = False,
+        capture_status: str = "not_requested",
+    ) -> dict[str, Any]:
+        attempt_id = uuid.uuid4().hex
+        with self.database.session() as session:
+            item = LoginAttemptORM(
+                id=attempt_id,
+                username=str(username).strip(),
+                client_key=str(client_key).strip(),
+                remote_addr=str(remote_addr).strip(),
+                user_agent=str(user_agent).strip(),
+                success=success,
+                failure_count=(max(0, int(failure_count or 0)) if success else max(1, int(failure_count or 1))),
+                capture_required=capture_required,
+                capture_status=str(capture_status).strip() or "not_requested",
+            )
+            session.add(item)
+        return self.get_login_attempt(attempt_id) or {}
+
+    def get_login_attempt(self, attempt_id: str) -> dict[str, Any] | None:
+        with self.database.session() as session:
+            item = session.get(LoginAttemptORM, attempt_id)
+            return self._login_attempt_to_dict(item) if item is not None else None
+
+    def attach_login_attempt_capture(
+        self,
+        *,
+        attempt_id: str,
+        photo_path: str | None = None,
+        photo_content_type: str | None = None,
+        capture_status: str = "captured",
+        capture_error: str = "",
+    ) -> dict[str, Any]:
+        with self.database.session() as session:
+            item = session.get(LoginAttemptORM, attempt_id)
+            if item is None:
+                raise KeyError(attempt_id)
+            item.capture_status = str(capture_status).strip() or item.capture_status
+            item.capture_error = str(capture_error).strip() or None
+            if photo_path:
+                item.photo_path = str(photo_path).strip()
+                item.photo_content_type = str(photo_content_type or "").strip() or item.photo_content_type
+                item.photo_captured_at = utc_now()
+            item.updated_at = utc_now()
+        return self.get_login_attempt(attempt_id) or {}
+
+    def list_login_attempts(self, *, failed_only: bool = True, limit: int = 20) -> list[dict[str, Any]]:
+        with self.database.session() as session:
+            query = select(LoginAttemptORM).order_by(LoginAttemptORM.created_at.desc()).limit(limit)
+            if failed_only:
+                query = query.where(LoginAttemptORM.success.is_(False))
+            rows = session.scalars(query).all()
+            return [self._login_attempt_to_dict(item) for item in rows]
 
     def find_knowledge_document_by_checksum(self, *, gig_id: str, checksum: str) -> dict[str, Any] | None:
         normalized_gig_id = build_gig_key(gig_id)
@@ -708,6 +804,25 @@ class BlueprintRepository:
             "source": item.source,
             "metadata": item.metadata_json or {},
             "created_at": self._iso(item.created_at),
+        }
+
+    def _login_attempt_to_dict(self, item: LoginAttemptORM) -> dict[str, Any]:
+        return {
+            "id": item.id,
+            "username": item.username,
+            "client_key": item.client_key,
+            "remote_addr": item.remote_addr,
+            "user_agent": item.user_agent,
+            "success": item.success,
+            "failure_count": item.failure_count,
+            "capture_required": item.capture_required,
+            "capture_status": item.capture_status,
+            "capture_error": item.capture_error or "",
+            "photo_path": item.photo_path or "",
+            "photo_content_type": item.photo_content_type or "",
+            "photo_captured_at": self._iso(item.photo_captured_at),
+            "created_at": self._iso(item.created_at),
+            "updated_at": self._iso(item.updated_at),
         }
 
     def _knowledge_document_to_dict(self, item: KnowledgeDocumentORM) -> dict[str, Any]:

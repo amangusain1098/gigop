@@ -113,6 +113,26 @@ class ComparisonHistoryORM(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
 
 
+class LoginAttemptORM(Base):
+    __tablename__ = "login_attempts"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    username: Mapped[str] = mapped_column(String(255), default="", index=True)
+    client_key: Mapped[str] = mapped_column(String(128), index=True)
+    remote_addr: Mapped[str] = mapped_column(String(128), default="")
+    user_agent: Mapped[str] = mapped_column(Text, default="")
+    success: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    failure_count: Mapped[int] = mapped_column(Integer, default=1)
+    capture_required: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    capture_status: Mapped[str] = mapped_column(String(32), default="not_requested", index=True)
+    capture_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    photo_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    photo_content_type: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    photo_captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+
 class AssistantMessageORM(Base):
     __tablename__ = "assistant_messages"
 

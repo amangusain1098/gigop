@@ -13,7 +13,7 @@ import {
   YAxis,
 } from 'recharts'
 import { createDashboardSocket, fetchJson, loadBootstrap } from './api'
-import type { BootstrapPayload, CompetitorRecord, DashboardEvent, DatasetRecord, JobRun, LegacyState, QueueRecord } from './types'
+import type { BootstrapPayload, CompetitorRecord, DashboardEvent, DatasetRecord, FailedLoginAttemptRecord, JobRun, LegacyState, QueueRecord } from './types'
 import './App.css'
 
 type TitleOption = { label: string; title: string; rationale: string }
@@ -59,6 +59,7 @@ function App() {
   const datasetInputRef = useRef<HTMLInputElement | null>(null)
   const assistantLogRef = useRef<HTMLDivElement | null>(null)
   const assistantInputRef = useRef<HTMLTextAreaElement | null>(null)
+  const lastMarketplaceSyncRef = useRef({ gigUrl: '', terms: '' })
 
   useEffect(() => {
     let active = true
@@ -107,8 +108,11 @@ function App() {
       : []
     const savedGigUrl = String(marketplace.my_gig_url ?? '').trim()
     const savedTerms = Array.isArray(marketplace.search_terms) ? marketplace.search_terms : []
-    setGigUrl(comparisonGigUrl || savedGigUrl)
-    setTerms((comparisonTerms.length ? comparisonTerms : savedTerms).join(', '))
+    const nextGigUrl = savedGigUrl || comparisonGigUrl
+    const nextTerms = (savedTerms.length ? savedTerms : comparisonTerms).join(', ')
+    setGigUrl((current) => preserveMarketplaceDraft(current, lastMarketplaceSyncRef.current.gigUrl) ? current : nextGigUrl)
+    setTerms((current) => preserveMarketplaceDraft(current, lastMarketplaceSyncRef.current.terms) ? current : nextTerms)
+    lastMarketplaceSyncRef.current = { gigUrl: nextGigUrl, terms: nextTerms }
     setMaxResults(Number(marketplace.max_results ?? 10))
     setAutoCompareEnabled(Boolean(marketplace.auto_compare_enabled ?? false))
     setAutoCompareMinutes(Number(marketplace.auto_compare_interval_minutes ?? 5))
@@ -137,6 +141,13 @@ function App() {
       setData({
         ...data,
         state: { ...data.state, scraper_run: event.payload },
+      })
+      return
+    }
+    if (event.type === 'security_update') {
+      setData({
+        ...data,
+        security: event.payload,
       })
       return
     }
@@ -453,6 +464,7 @@ function App() {
   const aiSettings = (data.state.notifications?.ai ?? {}) as Record<string, any>
   const slackSettings = (data.state.notifications?.slack ?? {}) as Record<string, any>
   const myGig = (comparison.my_gig ?? {}) as Record<string, any>
+  const failedLoginAttempts = (data.security?.failed_login_attempts ?? []) as FailedLoginAttemptRecord[]
   const titleOptions = (blueprint.title_options ?? []) as TitleOption[]
   const descriptionOptions = (blueprint.description_options ?? []) as DescriptionOption[]
   const recommendedPackages = (blueprint.recommended_packages ?? []) as RecommendedPackage[]
@@ -941,6 +953,56 @@ function App() {
         </article>
       </section>
 
+      <section className="content-grid">
+        <article className="card">
+          <div className="card-head">
+            <h2>Login security</h2>
+            <span>{failedLoginAttempts.length} recent failed attempt(s)</span>
+          </div>
+          {failedLoginAttempts.length ? (
+            <div className="security-grid">
+              {failedLoginAttempts.map((attempt) => (
+                <div className="security-card" key={attempt.id}>
+                  {attempt.photo_url ? (
+                    <img
+                      className="security-thumb"
+                      src={attempt.photo_url}
+                      alt={`Failed login attempt for ${attempt.username || 'unknown user'}`}
+                      loading="lazy"
+                    />
+                  ) : (
+                    <div className="security-thumb security-thumb--empty">No photo</div>
+                  )}
+                  <div className="security-card__content">
+                    <strong>{attempt.username || 'Unknown username'}</strong>
+                    <p>{attempt.remote_addr || 'Unknown IP'}</p>
+                    <p>{attempt.failure_count} failed tries</p>
+                    <p>Capture: {human(attempt.capture_status || 'not_requested')}</p>
+                    {attempt.capture_error ? <p>{attempt.capture_error}</p> : null}
+                    <p>{attempt.created_at ? new Date(attempt.created_at).toLocaleString() : '--'}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : <p>No failed login attempts recorded yet.</p>}
+        </article>
+        <article className="card">
+          <div className="card-head">
+            <h2>Active marketplace target</h2>
+            <span>{splitTerms(terms).length} search term(s)</span>
+          </div>
+          <div className="meta-grid">
+            <MetaItem label="Current gig URL" value={gigUrl || '--'} />
+            <MetaItem label="Current search terms" value={terms || '--'} />
+            <MetaItem label="Detected primary term" value={String(comparison.primary_search_term ?? '--')} />
+            <MetaItem label="Top tracked gig" value={String(topRankedGig.title ?? '--')} />
+          </div>
+          <p className="inline-note">
+            The compare and scrape buttons use the exact gig URL and keywords currently shown in the inputs above.
+          </p>
+        </article>
+      </section>
+
       {!assistantOpen ? (
         <button className="assistant-toggle" onClick={() => setAssistantOpen(true)}>
           Open Copilot
@@ -1036,6 +1098,12 @@ function Block({ title, body, action, busy }: { title: string; body: string; act
 
 function splitTerms(value: string) {
   return value.split(',').map((item) => item.trim()).filter(Boolean)
+}
+
+function preserveMarketplaceDraft(currentValue: string, previousSyncedValue: string) {
+  const current = currentValue.trim()
+  const previous = previousSyncedValue.trim()
+  return Boolean(current) && current !== previous
 }
 
 function clamp(value: number) {
