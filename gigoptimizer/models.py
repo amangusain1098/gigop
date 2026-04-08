@@ -190,6 +190,11 @@ class MarketplaceGig:
     matched_term: str = ""
     conversion_proxy_score: float = 0.0
     win_reasons: list[str] = field(default_factory=list)
+    rank_position: int | None = None
+    page_number: int | None = None
+    is_first_page: bool = False
+    search_url: str = ""
+    why_on_page_one: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)

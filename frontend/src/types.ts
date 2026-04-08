@@ -69,6 +69,11 @@ export interface CompetitorRecord {
   matched_term?: string
   conversion_proxy_score?: number
   win_reasons?: string[]
+  rank_position?: number | null
+  page_number?: number | null
+  is_first_page?: boolean
+  search_url?: string
+  why_on_page_one?: string[]
   captured_at?: string
 }
 

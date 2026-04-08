@@ -58,6 +58,42 @@ class SlackServiceTests(unittest.TestCase):
                             "top_action": "Update the gig title to the recommended search-match version.",
                             "top_action_expected_gain": 14,
                             "competitor_count": 12,
+                            "primary_search_term": "wordpress speed",
+                            "top_ranked_gig": {
+                                "rank_position": 1,
+                                "title": "I will do wordpress speed optimization for google pagespeed insight",
+                                "why_on_page_one": ["The title matches the searched phrase directly."],
+                            },
+                            "first_page_top_10": [
+                                {
+                                    "rank_position": 1,
+                                    "title": "I will do wordpress speed optimization for google pagespeed insight",
+                                    "starting_price": 30,
+                                    "rating": 4.9,
+                                    "reviews_count": 1000,
+                                },
+                                {
+                                    "rank_position": 2,
+                                    "title": "I will increase wordpress speed optimization for gtmetrix",
+                                    "starting_price": 60,
+                                    "rating": 5.0,
+                                    "reviews_count": 804,
+                                },
+                            ],
+                            "one_by_one_recommendations": [
+                                {
+                                    "rank_position": 1,
+                                    "primary_recommendation": "Work the exact search phrase into your title.",
+                                    "expected_gain": 16,
+                                    "priority": "high",
+                                },
+                                {
+                                    "rank_position": 2,
+                                    "primary_recommendation": "Add a stronger proof block near the top.",
+                                    "expected_gain": 12,
+                                    "priority": "medium",
+                                },
+                            ],
                         },
                     )
 
@@ -67,6 +103,8 @@ class SlackServiceTests(unittest.TestCase):
         self.assertEqual(payload["blocks"][0]["text"]["text"], "Comparison Complete")
         self.assertIn("Optimization Score", json.dumps(payload))
         self.assertIn("PageSpeed Insights", json.dumps(payload))
+        self.assertIn("Top 10 gigs on Fiverr page one", json.dumps(payload))
+        self.assertIn("What to change against each top-10 gig", json.dumps(payload))
 
     def test_slack_failure_returns_result_without_crashing(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -143,10 +181,13 @@ class DashboardMemoryTests(unittest.TestCase):
                 history = service.repository.list_comparison_history(gig_id=gig_id, limit=5)
 
         blueprint = state["gig_comparison"]["implementation_blueprint"]
+        comparison = state["gig_comparison"]
         self.assertTrue(history)
         self.assertTrue(blueprint["prioritized_actions"])
         self.assertIn("expected_gain", blueprint["top_action"])
         self.assertTrue(blueprint["do_this_first"])
+        self.assertTrue(comparison["first_page_top_10"])
+        self.assertTrue(comparison["one_by_one_recommendations"])
 
 
 if __name__ == "__main__":

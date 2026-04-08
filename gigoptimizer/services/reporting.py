@@ -262,6 +262,25 @@ class WeeklyReportService:
             "## Pricing Strategy",
             *[f"- {item}" for item in blueprint.get("pricing_strategy", [])],
             "",
+            "## Current Page-One Leader",
+            (
+                f"- #{(comparison.get('top_ranked_gig') or {}).get('rank_position', 1)} "
+                f"{(comparison.get('top_ranked_gig') or {}).get('title', 'No live leader captured yet.')}"
+            ),
+            *[f"- {item}" for item in comparison.get("why_top_ranked_gig_is_first", [])],
+            "",
+            "## Top 10 Gigs On Page One",
+            *[
+                f"- #{item.get('rank_position', '?')}: {item.get('title', '')} | ${item.get('starting_price', '--')} | {item.get('reviews_count', '--')} reviews"
+                for item in comparison.get("first_page_top_10", [])
+            ],
+            "",
+            "## One-By-One Recommendations",
+            *[
+                f"- #{item.get('rank_position', '?')}: {item.get('primary_recommendation', '')} ({item.get('expected_gain', '--')}% est.)"
+                for item in comparison.get("one_by_one_recommendations", [])
+            ],
+            "",
             "## What To Implement Next",
             *[f"- {item}" for item in blueprint.get("do_this_first", [])[:3]],
             "",
@@ -393,6 +412,19 @@ class WeeklyReportService:
     <div class="card">
       <h2>Pricing Strategy</h2>
       <ul>{list_html(blueprint.get('pricing_strategy', []))}</ul>
+    </div>
+    <div class="card">
+      <h2>Current Page-One Leader</h2>
+      <p>#{(comparison.get('top_ranked_gig') or {}).get('rank_position', 1)} {(comparison.get('top_ranked_gig') or {}).get('title', 'No live leader captured yet.')}</p>
+      <ul>{list_html(comparison.get('why_top_ranked_gig_is_first', []))}</ul>
+    </div>
+    <div class="card">
+      <h2>Top 10 Gigs On Page One</h2>
+      <ul>{list_html([f"#{item.get('rank_position', '?')}: {item.get('title', '')} | ${item.get('starting_price', '--')} | {item.get('reviews_count', '--')} reviews" for item in comparison.get('first_page_top_10', [])])}</ul>
+    </div>
+    <div class="card">
+      <h2>One-By-One Recommendations</h2>
+      <ul>{list_html([f"#{item.get('rank_position', '?')}: {item.get('primary_recommendation', '')} ({item.get('expected_gain', '--')}% est.)" for item in comparison.get('one_by_one_recommendations', [])])}</ul>
     </div>
     <div class="card">
       <h2>What To Implement Next</h2>

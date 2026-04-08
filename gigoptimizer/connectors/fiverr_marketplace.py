@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from time import monotonic
-from urllib.parse import quote_plus, urljoin, urlparse
+from urllib.parse import parse_qs, quote_plus, urljoin, urlparse
 from urllib.request import Request, urlopen
 
 from ..config import GigOptimizerConfig
@@ -306,7 +306,7 @@ class FiverrMarketplaceConnector:
                     message=f"Running free marketplace reader discovery for '{term}'.",
                 )
                 markdown = self._reader_get_markdown(url)
-                parsed = self._extract_search_gigs_from_markdown(markdown, term)
+                parsed = self._extract_search_gigs_from_markdown(markdown, term, search_url=url)
                 gigs.extend(parsed)
                 self._notify(
                     observer,
@@ -646,7 +646,7 @@ class FiverrMarketplaceConnector:
                 result_count=raw_cards,
                 message=f"Loaded marketplace page for '{term}' with {raw_cards} visible cards before filtering.",
             )
-            term_gigs = self._extract_page_gigs(page, term, observer=observer)
+            term_gigs = self._extract_page_gigs(page, term, search_url=page.url, observer=observer)
             gigs.extend(term_gigs)
             self._notify(
                 observer,
@@ -677,7 +677,7 @@ class FiverrMarketplaceConnector:
                 continue
         return None
 
-    def _extract_page_gigs(self, page, term: str, observer=None) -> list[MarketplaceGig]:
+    def _extract_page_gigs(self, page, term: str, *, search_url: str, observer=None) -> list[MarketplaceGig]:
         cards = page.locator(self.config.fiverr_marketplace_card_selector)
         count = min(cards.count(), self.config.fiverr_marketplace_max_results)
         gigs: list[MarketplaceGig] = []
@@ -687,6 +687,7 @@ class FiverrMarketplaceConnector:
             if not title:
                 continue
             url = self._safe_href(card, self.config.fiverr_marketplace_link_selector, page.url)
+            rank_position, page_number, is_first_page = self._extract_rank_metadata(url, fallback_position=index + 1)
             gig = MarketplaceGig(
                 title=title,
                 url=url,
@@ -698,6 +699,10 @@ class FiverrMarketplaceConnector:
                 badges=self._safe_multi_text(card, self.config.fiverr_marketplace_badge_selector),
                 snippet=self._safe_text(card, self.config.fiverr_marketplace_snippet_selector),
                 matched_term=term,
+                rank_position=rank_position,
+                page_number=page_number,
+                is_first_page=is_first_page,
+                search_url=search_url,
             )
             gigs.append(gig)
             self._notify(
@@ -1069,11 +1074,12 @@ class FiverrMarketplaceConnector:
             tags=self._extract_keywords_from_text(f"{clean_title} {description_excerpt}")[:8],
         )
 
-    def _extract_search_gigs_from_markdown(self, markdown: str, term: str) -> list[MarketplaceGig]:
+    def _extract_search_gigs_from_markdown(self, markdown: str, term: str, *, search_url: str = "") -> list[MarketplaceGig]:
         lines = [line.strip() for line in markdown.splitlines()]
         gigs: list[MarketplaceGig] = []
         current_seller = ""
         recent_badges: list[str] = []
+        current_rank = 0
 
         for index, line in enumerate(lines):
             if not line:
@@ -1101,12 +1107,14 @@ class FiverrMarketplaceConnector:
             url = title_match.group(2).strip()
             if not self._looks_like_marketplace_title(title, url):
                 continue
+            current_rank += 1
 
             rating = None
             reviews_count = None
             starting_price = None
             delivery_days = None
             snippet = ""
+            rank_position, page_number, is_first_page = self._extract_rank_metadata(url, fallback_position=current_rank)
             for look_ahead in lines[index + 1 : index + 8]:
                 if not look_ahead:
                     continue
@@ -1135,9 +1143,30 @@ class FiverrMarketplaceConnector:
                     badges=recent_badges[:],
                     snippet=snippet,
                     matched_term=term,
+                    rank_position=rank_position,
+                    page_number=page_number,
+                    is_first_page=is_first_page,
+                    search_url=search_url,
                 )
             )
         return gigs
+
+    def _extract_rank_metadata(self, url: str, *, fallback_position: int) -> tuple[int | None, int | None, bool]:
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query)
+        rank_position = self._safe_query_int(params, "pos") or fallback_position
+        page_number = self._safe_query_int(params, "page") or 1
+        is_first_page = page_number == 1 and rank_position <= 10
+        return rank_position, page_number, is_first_page
+
+    def _safe_query_int(self, params: dict[str, list[str]], key: str) -> int | None:
+        values = params.get(key) or []
+        if not values:
+            return None
+        try:
+            return int(values[0])
+        except (TypeError, ValueError):
+            return None
 
     def _looks_like_marketplace_title(self, text: str, url: str) -> bool:
         lowered = text.lower()

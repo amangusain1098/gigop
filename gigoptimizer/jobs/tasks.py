@@ -266,6 +266,10 @@ def _send_job_success_alert(*, runtime: dict[str, Any], run_id: str, state: dict
                     "top_action": top_action.get("action_text", ""),
                     "top_action_expected_gain": top_action.get("expected_gain"),
                     "competitor_count": comparison.get("competitor_count", 0),
+                    "primary_search_term": comparison.get("primary_search_term", ""),
+                    "top_ranked_gig": comparison.get("top_ranked_gig") or {},
+                    "first_page_top_10": comparison.get("first_page_top_10", [])[:10],
+                    "one_by_one_recommendations": comparison.get("one_by_one_recommendations", [])[:10],
                 },
             )
             return

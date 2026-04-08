@@ -13,13 +13,29 @@ import {
   YAxis,
 } from 'recharts'
 import { createDashboardSocket, fetchJson, loadBootstrap } from './api'
-import type { BootstrapPayload, DashboardEvent, JobRun, LegacyState, QueueRecord } from './types'
+import type { BootstrapPayload, CompetitorRecord, DashboardEvent, JobRun, LegacyState, QueueRecord } from './types'
 import './App.css'
 
 type TitleOption = { label: string; title: string; rationale: string }
 type DescriptionOption = { label: string; summary: string; text: string; paired_title?: string; notes?: string[] }
 type PersonaFocus = { persona: string; score: number; pain_point: string; emphasis: string[] }
 type RecommendedPackage = { name: string; price: number; delivery_days?: number | null; highlights?: string[] }
+type CompetitorRecommendation = {
+  rank_position?: number
+  competitor_title: string
+  competitor_url?: string
+  seller_name?: string
+  matched_term?: string
+  starting_price?: number | null
+  rating?: number | null
+  reviews_count?: number | null
+  conversion_proxy_score?: number
+  why_it_ranks?: string[]
+  primary_recommendation?: string
+  what_to_change?: string[]
+  expected_gain?: number
+  priority?: string
+}
 
 function App() {
   const [data, setData] = useState<BootstrapPayload | null>(null)
@@ -27,17 +43,20 @@ function App() {
   const [terms, setTerms] = useState('')
   const [manualInput, setManualInput] = useState('')
   const [liveMode, setLiveMode] = useState(false)
-  const [sortKey, setSortKey] = useState<'conversion_proxy_score' | 'reviews_count' | 'starting_price'>('conversion_proxy_score')
+  const [sortKey, setSortKey] = useState<'rank_position' | 'conversion_proxy_score' | 'reviews_count' | 'starting_price'>('rank_position')
   const [busy, setBusy] = useState('')
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+  const [maxResults, setMaxResults] = useState(10)
+  const [autoCompareEnabled, setAutoCompareEnabled] = useState(false)
+  const [autoCompareMinutes, setAutoCompareMinutes] = useState(5)
   const [assistantOpen, setAssistantOpen] = useState(false)
   const [assistantInput, setAssistantInput] = useState('')
   const [assistantBusy, setAssistantBusy] = useState(false)
   const [assistantMessages, setAssistantMessages] = useState<Array<{ role: 'user' | 'assistant'; text: string; suggestions?: string[] }>>([
     {
       role: 'assistant',
-      text: 'Ask me what to change in your title, pricing, tags, trust signals, or competitor positioning. I answer from the app’s current market analysis.',
+      text: "Ask me what to change in your title, pricing, tags, trust signals, or competitor positioning. I answer from the app's current market analysis.",
       suggestions: ['What title should I use now?', 'Why are competitors winning?', 'How should I price my packages?'],
     },
   ])
@@ -73,6 +92,9 @@ function App() {
     const marketplace = payload.state.notifications?.marketplace ?? {}
     setGigUrl(String(marketplace.my_gig_url ?? payload.state.gig_comparison?.gig_url ?? ''))
     setTerms((marketplace.search_terms ?? payload.state.gig_comparison?.detected_search_terms ?? []).join(', '))
+    setMaxResults(Number(marketplace.max_results ?? 10))
+    setAutoCompareEnabled(Boolean(marketplace.auto_compare_enabled ?? false))
+    setAutoCompareMinutes(Number(marketplace.auto_compare_interval_minutes ?? 5))
   }
 
   function applyEvent(event: DashboardEvent) {
@@ -103,9 +125,28 @@ function App() {
     }
   }
 
+  async function withCsrfRetry<T>(operation: (csrfToken: string) => Promise<T>): Promise<T> {
+    if (!data) {
+      throw new Error('Dashboard is still loading.')
+    }
+    try {
+      return await operation(data.state.auth.csrf_token)
+    } catch (reason) {
+      const detail = reason instanceof Error ? reason.message : 'Request failed.'
+      if (!/csrf/i.test(detail)) {
+        throw reason
+      }
+      const payload = await loadBootstrap()
+      startTransition(() => applyBootstrap(payload))
+      return operation(payload.state.auth.csrf_token)
+    }
+  }
+
   async function refresh() {
     try {
       applyBootstrap(await loadBootstrap())
+      setMessage('Dashboard refreshed.')
+      setError('')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Refresh failed.')
     }
@@ -133,13 +174,15 @@ function App() {
     setError('')
     setMessage('')
     try {
-      const response = await fetchJson<BootstrapPayload>(
-        '/api/v2/jobs',
-        {
-          method: 'POST',
-          body: JSON.stringify({ job_type: jobType, ...payload }),
-        },
-        data.state.auth.csrf_token,
+      const response = await withCsrfRetry((csrfToken) =>
+        fetchJson<BootstrapPayload>(
+          '/api/v2/jobs',
+          {
+            method: 'POST',
+            body: JSON.stringify({ job_type: jobType, ...payload }),
+          },
+          csrfToken,
+        ),
       )
       applyBootstrap(response)
       setMessage(`Queued ${jobType.replaceAll('_', ' ')} job.`)
@@ -153,14 +196,18 @@ function App() {
   async function queueRecommendation(actionType: string, proposedValue: unknown) {
     if (!data) return
     setBusy(actionType)
+    setError('')
+    setMessage('')
     try {
-      const nextState = await fetchJson<LegacyState>(
-        '/api/marketplace/recommendations/apply',
-        {
-          method: 'POST',
-          body: JSON.stringify({ action_type: actionType, proposed_value: proposedValue }),
-        },
-        data.state.auth.csrf_token,
+      const nextState = await withCsrfRetry((csrfToken) =>
+        fetchJson<LegacyState>(
+          '/api/marketplace/recommendations/apply',
+          {
+            method: 'POST',
+            body: JSON.stringify({ action_type: actionType, proposed_value: proposedValue }),
+          },
+          csrfToken,
+        ),
       )
       setData({ ...data, state: { ...data.state, ...nextState }, queue: nextState.queue ?? data.queue })
       setMessage('Recommendation added to the HITL queue.')
@@ -174,16 +221,81 @@ function App() {
   async function reviewQueue(recordId: string, action: 'approve' | 'reject') {
     if (!data) return
     setBusy(`${action}-${recordId}`)
+    setError('')
+    setMessage('')
     try {
-      const nextState = await fetchJson<LegacyState>(
-        `/api/queue/${recordId}/${action}`,
-        { method: 'POST', body: JSON.stringify({ reviewer_notes: '' }) },
-        data.state.auth.csrf_token,
+      const nextState = await withCsrfRetry((csrfToken) =>
+        fetchJson<LegacyState>(
+          `/api/queue/${recordId}/${action}`,
+          { method: 'POST', body: JSON.stringify({ reviewer_notes: '' }) },
+          csrfToken,
+        ),
       )
       setData({ ...data, state: { ...data.state, ...nextState }, queue: nextState.queue ?? data.queue })
       setMessage(`Queue item ${action}d.`)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Queue action failed.')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function saveMarketplaceSettings() {
+    if (!data) return
+    setBusy('save-settings')
+    setError('')
+    setMessage('')
+    try {
+      const settings = await withCsrfRetry((csrfToken) =>
+        fetchJson<Record<string, any>>(
+          '/api/settings',
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              marketplace: {
+                enabled: true,
+                my_gig_url: gigUrl,
+                search_terms: splitTerms(terms),
+                max_results: maxResults,
+                auto_compare_enabled: autoCompareEnabled,
+                auto_compare_interval_minutes: autoCompareMinutes,
+              },
+              slack: {
+                enabled: true,
+              },
+            }),
+          },
+          csrfToken,
+        ),
+      )
+      setData({ ...data, state: { ...data.state, notifications: settings } })
+      setMessage('Marketplace settings saved.')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Unable to save settings.')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function runNotificationTest(channel: 'slack') {
+    if (!data) return
+    setBusy(`test-${channel}`)
+    setError('')
+    setMessage('')
+    try {
+      const response = await withCsrfRetry((csrfToken) =>
+        fetchJson<{ result: { detail: string } }>(
+          '/api/settings/notifications/test',
+          {
+            method: 'POST',
+            body: JSON.stringify({ channel }),
+          },
+          csrfToken,
+        ),
+      )
+      setMessage(response.result.detail)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : `Unable to test ${channel}.`)
     } finally {
       setBusy('')
     }
@@ -197,13 +309,15 @@ function App() {
     setAssistantMessages((current) => [...current, { role: 'user', text: question }])
     setAssistantInput('')
     try {
-      const response = await fetchJson<{ assistant: { reply: string; suggestions?: string[] } }>(
-        '/api/assistant/chat',
-        {
-          method: 'POST',
-          body: JSON.stringify({ message: question }),
-        },
-        data.state.auth.csrf_token,
+      const response = await withCsrfRetry((csrfToken) =>
+        fetchJson<{ assistant: { reply: string; suggestions?: string[] } }>(
+          '/api/assistant/chat',
+          {
+            method: 'POST',
+            body: JSON.stringify({ message: question }),
+          },
+          csrfToken,
+        ),
       )
       setAssistantMessages((current) => [
         ...current,
@@ -245,13 +359,22 @@ function App() {
   const scraperRun = data.state.scraper_run ?? {}
   const hostinger = data.hostinger ?? {}
   const aiSettings = (data.state.notifications?.ai ?? {}) as Record<string, any>
+  const slackSettings = (data.state.notifications?.slack ?? {}) as Record<string, any>
   const myGig = (comparison.my_gig ?? {}) as Record<string, any>
   const titleOptions = (blueprint.title_options ?? []) as TitleOption[]
   const descriptionOptions = (blueprint.description_options ?? []) as DescriptionOption[]
   const recommendedPackages = (blueprint.recommended_packages ?? []) as RecommendedPackage[]
   const personaFocus = (blueprint.persona_focus ?? []) as PersonaFocus[]
+  const pageOneTopTen = ((comparison.first_page_top_10 ?? []) as CompetitorRecord[]).slice(0, 10)
+  const oneByOne = (comparison.one_by_one_recommendations ?? []) as CompetitorRecommendation[]
+  const topRankedGig = (comparison.top_ranked_gig ?? pageOneTopTen[0] ?? {}) as Record<string, any>
+  const topRankedReasons = (comparison.why_top_ranked_gig_is_first ?? topRankedGig.why_on_page_one ?? []) as string[]
   const activeJob = data.job_runs.find((job: JobRun) => ['queued', 'running'].includes(job.status)) ?? data.job_runs[0]
-  const competitors = [...data.competitors].sort((a, b) => {
+  const competitorSource = pageOneTopTen.length ? pageOneTopTen : data.competitors
+  const competitors = [...competitorSource].sort((a, b) => {
+    if (sortKey === 'rank_position') {
+      return Number(a.rank_position ?? 999) - Number(b.rank_position ?? 999)
+    }
     const left = Number(a[sortKey] ?? 0)
     const right = Number(b[sortKey] ?? 0)
     return sortKey === 'starting_price' ? left - right : right - left
@@ -275,17 +398,17 @@ function App() {
       <section className="hero">
         <div>
           <p className="eyebrow">GigOptimizer Pro Blueprint</p>
-          <h1>Live Fiverr visibility, market comparison, and exact gig changes to publish next.</h1>
+          <h1>Live Fiverr visibility, page-one competitor tracking, and exact gig changes to publish next.</h1>
           <p className="lede">
-            This dashboard watches the market, compares your gig against public Fiverr results, and turns that into
-            queueable title, description, keyword, pricing, and trust recommendations.
+            This dashboard watches Fiverr page one, compares your gig against the current top 10 public results, and turns
+            that into queueable title, description, keyword, pricing, and trust recommendations.
           </p>
         </div>
         <div className="hero-grid">
           <Metric label="Optimization score" value={String(report.optimization_score ?? '--')} />
           <Metric label="Recommended title" value={blueprint.recommended_title ?? 'Run a market compare'} />
-          <Metric label="Competitors compared" value={String(comparison.competitor_count ?? 0)} />
-          <Metric label="Worker mode" value={`${data.workers.backend}/${data.workers.mode}`} />
+          <Metric label="Page-one gigs tracked" value={String(pageOneTopTen.length || comparison.competitor_count || 0)} />
+          <Metric label="Primary search term" value={String(comparison.primary_search_term ?? '--')} />
         </div>
       </section>
 
@@ -303,10 +426,54 @@ function App() {
         <textarea rows={4} value={manualInput} onChange={(event) => setManualInput(event.target.value)} placeholder="Title | price | rating | reviews | delivery | url" />
         <div className="button-row">
           <button onClick={() => postJob('pipeline', { use_live_connectors: liveMode })} disabled={busy === 'pipeline'}>{busy === 'pipeline' ? 'Queueing...' : 'Run pipeline'}</button>
-          <button onClick={() => postJob('marketplace_compare', { gig_url: gigUrl, search_terms: splitTerms(terms) })} disabled={busy === 'marketplace_compare'}>{busy === 'marketplace_compare' ? 'Queueing...' : 'Compare gig'}</button>
+          <button onClick={() => postJob('marketplace_compare', { gig_url: gigUrl, search_terms: splitTerms(terms) })} disabled={busy === 'marketplace_compare'}>{busy === 'marketplace_compare' ? 'Queueing...' : 'Compare gig vs top 10'}</button>
           <button onClick={() => postJob('marketplace_scrape', { search_terms: splitTerms(terms) })} disabled={busy === 'marketplace_scrape'}>{busy === 'marketplace_scrape' ? 'Queueing...' : 'Scan market'}</button>
           <button onClick={() => postJob('manual_compare', { gig_url: gigUrl, search_terms: splitTerms(terms), competitor_input: manualInput })} disabled={busy === 'manual_compare' || !manualInput.trim()}>{busy === 'manual_compare' ? 'Queueing...' : 'Analyze manual input'}</button>
+          <button onClick={() => postJob('weekly_report', { use_live_connectors: liveMode })} disabled={busy === 'weekly_report'}>{busy === 'weekly_report' ? 'Queueing...' : 'Run weekly report'}</button>
+          <button className="secondary" onClick={() => void refresh()} disabled={busy === 'refresh'}>Refresh dashboard</button>
         </div>
+      </section>
+
+      <section className="content-grid">
+        <article className="card">
+          <div className="card-head"><h2>Marketplace settings</h2><span>{slackSettings.configured ? 'Slack ready' : 'Slack optional'}</span></div>
+          <div className="form-grid">
+            <input value={gigUrl} onChange={(event) => setGigUrl(event.target.value)} placeholder="Default Fiverr gig URL" />
+            <input value={terms} onChange={(event) => setTerms(event.target.value)} placeholder="Search terms used for page-one tracking" />
+            <input type="number" min={10} max={25} value={maxResults} onChange={(event) => setMaxResults(Number(event.target.value || 10))} placeholder="Max competitor results" />
+            <input type="number" min={5} max={240} value={autoCompareMinutes} onChange={(event) => setAutoCompareMinutes(Number(event.target.value || 5))} placeholder="Auto compare interval (minutes)" />
+          </div>
+          <div className="button-row button-row--three">
+            <button className="secondary" onClick={() => setAutoCompareEnabled((current) => !current)}>
+              {autoCompareEnabled ? 'Auto compare: on' : 'Auto compare: off'}
+            </button>
+            <button onClick={() => void saveMarketplaceSettings()} disabled={busy === 'save-settings'}>{busy === 'save-settings' ? 'Saving...' : 'Save settings'}</button>
+            <button className="secondary" onClick={() => void runNotificationTest('slack')} disabled={busy === 'test-slack'}>{busy === 'test-slack' ? 'Testing...' : 'Test Slack'}</button>
+          </div>
+          <p className="inline-note">The page-one leaderboard uses the first search term as the primary Fiverr query, then compares those top 10 gigs against your gig one by one.</p>
+        </article>
+
+        <article className="card">
+          <div className="card-head"><h2>Page-one leader</h2><span className={`status status--${comparison.status ?? 'pending'}`}>{comparison.status ?? 'idle'}</span></div>
+          <div className="meta-grid">
+            <MetaItem label="Leader rank" value={`#${String(topRankedGig.rank_position ?? 1)}`} />
+            <MetaItem label="Leader price" value={currency(topRankedGig.starting_price)} />
+            <MetaItem label="Leader reviews" value={String(topRankedGig.reviews_count ?? '--')} />
+            <MetaItem label="Leader term" value={String(topRankedGig.matched_term ?? comparison.primary_search_term ?? '--')} />
+          </div>
+          <div className="option-card">
+            <p className="eyebrow">Current top gig</p>
+            <strong>{String(topRankedGig.title ?? 'Run a market compare')}</strong>
+            <p>{String(topRankedGig.seller_name ?? 'Unknown seller')}</p>
+            <ul className="bullet-list compact">
+              {topRankedReasons.map((item: string) => <li key={item}>{item}</li>)}
+            </ul>
+          </div>
+          <h3>Why competitors win</h3>
+          <ul className="bullet-list">
+            {((comparison.why_competitors_win ?? report.competitive_gap_analysis?.why_competitors_win ?? []) as string[]).map((item: string) => <li key={item}>{item}</li>)}
+          </ul>
+        </article>
       </section>
 
       <section className="charts">
@@ -342,22 +509,22 @@ function App() {
 
       <section className="content-grid">
         <article className="card">
-          <div className="card-head"><h2>My gig vs market</h2><span className={`status status--${comparison.status ?? 'pending'}`}>{comparison.status ?? 'idle'}</span></div>
+          <div className="card-head"><h2>My gig vs market</h2><span>{comparison.primary_search_term ?? '--'}</span></div>
           <div className="meta-grid">
-            <MetaItem label="My gig title" value={myGig.title ?? '--'} />
+            <MetaItem label="My gig title" value={String(myGig.title ?? '--')} />
             <MetaItem label="My visible price" value={currency(myGig.starting_price)} />
             <MetaItem label="My public reviews" value={String(myGig.reviews_count ?? '--')} />
             <MetaItem label="Market anchor price" value={currency(comparison.market_anchor_price)} />
             <MetaItem label="Detected search terms" value={(comparison.detected_search_terms ?? []).join(', ') || '--'} />
             <MetaItem label="Top title patterns" value={(comparison.title_patterns ?? []).join(', ') || '--'} />
           </div>
-          <h3>Why competitors win</h3>
-          <ul className="bullet-list">
-            {((comparison.why_competitors_win ?? report.competitive_gap_analysis?.why_competitors_win ?? []) as string[]).map((item: string) => <li key={item}>{item}</li>)}
-          </ul>
           <h3>What to implement next</h3>
           <ul className="bullet-list">
             {((comparison.what_to_implement ?? blueprint.weekly_actions ?? []) as string[]).map((item: string) => <li key={item}>{item}</li>)}
+          </ul>
+          <h3>Do this first</h3>
+          <ul className="bullet-list">
+            {((comparison.do_this_first ?? blueprint.do_this_first ?? []) as string[]).map((item: string) => <li key={item}>{item}</li>)}
           </ul>
         </article>
 
@@ -388,7 +555,7 @@ function App() {
                 {((scraperRun.recent_gigs ?? []) as Array<Record<string, any>>).slice(0, 6).map((item: Record<string, any>) => (
                   <div className="row" key={`${item.url}-${item.title}`}>
                     <div>
-                      <strong>{item.title}</strong>
+                      <strong>{item.rank_position ? `#${item.rank_position} ` : ''}{item.title}</strong>
                       <p>{item.seller_name || 'Unknown seller'}</p>
                     </div>
                     <div className="row-metrics">
@@ -399,6 +566,53 @@ function App() {
                 ))}
               </div>
             </div>
+          </div>
+        </article>
+      </section>
+
+      <section className="content-grid">
+        <article className="card">
+          <div className="card-head"><h2>Top 10 gigs on Fiverr page one</h2><span>{pageOneTopTen.length}</span></div>
+          <div className="table">
+            {pageOneTopTen.map((item) => (
+              <div className="row row--stacked" key={`${item.url}-${item.rank_position ?? item.title}`}>
+                <div className="row-topline">
+                  <strong>#{item.rank_position ?? '?'} {item.title}</strong>
+                  <span className={`status status--${item.is_first_page ? 'active' : 'queued'}`}>{item.is_first_page ? 'page one' : 'tracked'}</span>
+                </div>
+                <p>{item.seller_name || 'Unknown seller'}</p>
+                <p>{(item.why_on_page_one ?? item.win_reasons ?? []).join(' ') || 'No ranking reasons captured yet.'}</p>
+                <div className="row-metrics">
+                  <span>{currency(item.starting_price)}</span>
+                  <span>{item.rating ?? '--'} ★</span>
+                  <span>{item.reviews_count ?? '--'} reviews</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </article>
+
+        <article className="card">
+          <div className="card-head"><h2>How to beat each top-10 gig</h2><span>{oneByOne.length}</span></div>
+          <div className="feed-list">
+            {oneByOne.map((item) => (
+              <div className="feed-item" key={`${item.rank_position}-${item.competitor_title}`}>
+                <div className="row-topline">
+                  <strong>#{item.rank_position ?? '?'} {item.competitor_title}</strong>
+                  <span className={`status status--${item.priority === 'high' ? 'warning' : item.priority === 'medium' ? 'queued' : 'ok'}`}>{item.priority ?? 'next'}</span>
+                </div>
+                <p>{(item.why_it_ranks ?? []).join(' ') || 'No rank reason was generated.'}</p>
+                <p><strong>Do this:</strong> {item.primary_recommendation ?? 'No recommendation generated.'}</p>
+                <ul className="bullet-list compact">
+                  {(item.what_to_change ?? []).map((change) => <li key={`${item.rank_position}-${change}`}>{change}</li>)}
+                </ul>
+                <div className="row-metrics">
+                  <span>{currency(item.starting_price)}</span>
+                  <span>{item.reviews_count ?? '--'} reviews</span>
+                  <span>{item.expected_gain ?? '--'}% est. gain</span>
+                </div>
+              </div>
+            ))}
           </div>
         </article>
       </section>
@@ -422,7 +636,7 @@ function App() {
 
         <article className="card">
           <div className="card-head"><h2>Description modes</h2><span>{descriptionOptions.length}</span></div>
-          <Block title="Description blueprint" body={(blueprint.description_blueprint ?? []).join(' • ') || 'No description guidance yet.'} action={() => queueRecommendation('description_update', blueprint.description_full)} busy={busy === 'description_update'} />
+          <Block title="Description blueprint" body={(blueprint.description_blueprint ?? []).join(' | ') || 'No description guidance yet.'} action={() => queueRecommendation('description_update', blueprint.description_full)} busy={busy === 'description_update'} />
           <div className="option-list">
             {descriptionOptions.map((option: DescriptionOption) => (
               <div className="option-card" key={option.label}>
@@ -490,7 +704,7 @@ function App() {
               <div className="progress"><div style={{ width: `${selectedQueue.confidence_score}%` }} /></div>
               <div className="diff"><pre>{pretty(selectedQueue.current_value)}</pre><pre>{pretty(selectedQueue.proposed_value)}</pre></div>
               <div className="pill-row">{(selectedQueue.validator_issues ?? []).map((issue: { code: string; message: string }) => <span className="pill" key={issue.code}>{issue.code}: {issue.message}</span>)}</div>
-              <div className="button-row">
+              <div className="button-row button-row--two">
                 <button onClick={() => reviewQueue(selectedQueue.id, 'approve')} disabled={busy === `approve-${selectedQueue.id}`}>Approve</button>
                 <button className="secondary" onClick={() => reviewQueue(selectedQueue.id, 'reject')} disabled={busy === `reject-${selectedQueue.id}`}>Reject</button>
               </div>
@@ -507,18 +721,28 @@ function App() {
 
       <section className="content-grid">
         <article className="card">
-          <div className="card-head"><h2>Competitors</h2><select value={sortKey} onChange={(event) => setSortKey(event.target.value as typeof sortKey)}><option value="conversion_proxy_score">conversion</option><option value="reviews_count">reviews</option><option value="starting_price">price</option></select></div>
+          <div className="card-head">
+            <h2>Competitors</h2>
+            <select value={sortKey} onChange={(event) => setSortKey(event.target.value as typeof sortKey)}>
+              <option value="rank_position">page rank</option>
+              <option value="conversion_proxy_score">conversion</option>
+              <option value="reviews_count">reviews</option>
+              <option value="starting_price">price</option>
+            </select>
+          </div>
           <div className="table">
             {competitors.map((item) => (
-              <div className="row" key={`${item.url}-${item.title}`}>
-                <div>
-                  <strong>{item.title}</strong>
-                  <p>{item.seller_name || 'Unknown seller'}</p>
-                  <p>{item.matched_term || '--'}</p>
+              <div className="row row--stacked" key={`${item.url}-${item.title}`}>
+                <div className="row-topline">
+                  <strong>{item.rank_position ? `#${item.rank_position} ` : ''}{item.title}</strong>
+                  <span className={`status status--${item.is_first_page ? 'active' : 'queued'}`}>{item.is_first_page ? 'page one' : 'tracked'}</span>
                 </div>
+                <p>{item.seller_name || 'Unknown seller'}</p>
+                <p>{item.matched_term || '--'}</p>
                 <div className="row-metrics">
                   <span>{currency(item.starting_price)}</span>
                   <span>{item.reviews_count ?? '--'} reviews</span>
+                  <span>{item.conversion_proxy_score ?? '--'} score</span>
                 </div>
               </div>
             ))}
@@ -626,7 +850,7 @@ function MetaItem({ label, value }: { label: string; value: string }) {
 }
 
 function Block({ title, body, action, busy }: { title: string; body: string; action: () => void; busy: boolean }) {
-  return <div className="block"><div><p className="eyebrow">{title}</p><strong>{body}</strong></div><button className="secondary" onClick={action} disabled={busy || body.includes('No ')}>Queue</button></div>
+  return <div className="block"><div><p className="eyebrow">{title}</p><strong>{body}</strong></div><button className="secondary" onClick={action} disabled={busy || isPlaceholderText(body)}>Queue</button></div>
 }
 
 function splitTerms(value: string) {
@@ -658,6 +882,11 @@ function human(value: string) {
 function currency(value?: number | null) {
   if (value === null || value === undefined || Number.isNaN(value)) return '--'
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value)
+}
+
+function isPlaceholderText(value: string) {
+  const normalized = value.trim().toLowerCase()
+  return !normalized || normalized === '--' || normalized.startsWith('no ')
 }
 
 export default App

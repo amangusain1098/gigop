@@ -108,33 +108,81 @@ class SlackService:
         score = payload.get("optimization_score", "--")
         gig_url = str(payload.get("gig_url", "")).strip()
         market_count = payload.get("competitor_count", 0)
+        primary_search_term = str(payload.get("primary_search_term", "")).strip()
+        top_ranked_gig = payload.get("top_ranked_gig") or {}
+        first_page_top_10 = payload.get("first_page_top_10") or []
+        one_by_one = payload.get("one_by_one_recommendations") or []
+
+        blocks = [
+            self._header_block("Comparison Complete"),
+            self._section_block(
+                [
+                    f"*Gig URL*\n{gig_url or 'Not provided'}",
+                    f"*Optimization Score*\n{score}",
+                    f"*Competitors Compared*\n{market_count}",
+                    f"*Primary Search Term*\n{primary_search_term or 'Not detected'}",
+                ]
+            ),
+            self._section_block(
+                [f"*Top Recommended Title*\n{recommended_title or 'No title generated yet.'}"]
+            ),
+            self._section_block(
+                [
+                    "*Do This First*\n"
+                    + (top_action or "No top action was generated for this run.")
+                    + (f"\nExpected gain: {top_gain}%" if top_gain is not None else "")
+                ]
+            ),
+        ]
+
+        if top_ranked_gig:
+            blocks.append(
+                self._section_block(
+                    [
+                        f"*Current Page-One Leader*\n#{top_ranked_gig.get('rank_position', 1)} {self._truncate(str(top_ranked_gig.get('title', '')), 100)}",
+                        (
+                            "*Why Fiverr is surfacing it*\n"
+                            + self._bulleted_text(
+                                top_ranked_gig.get("why_on_page_one") or top_ranked_gig.get("win_reasons") or [],
+                                fallback="No visibility reasons captured.",
+                            )
+                        ),
+                    ]
+                )
+            )
+        if first_page_top_10:
+            blocks.append(
+                self._section_block(
+                    [
+                        "*Top 10 gigs on Fiverr page one*\n"
+                        + self._bulleted_text(
+                            [self._format_top_gig_line(item) for item in first_page_top_10[:10]],
+                            fallback="No page-one competitor list was captured.",
+                        )
+                    ]
+                )
+            )
+        if one_by_one:
+            blocks.append(
+                self._section_block(
+                    [
+                        "*What to change against each top-10 gig*\n"
+                        + self._bulleted_text(
+                            [self._format_competitor_recommendation_line(item) for item in one_by_one[:10]],
+                            fallback="No one-by-one competitor recommendations were generated.",
+                        )
+                    ]
+                )
+            )
+
+        blocks.append(self._context_block([f"Generated at {utc_now_iso()}"]))
         text = (
             f"Comparison complete for {gig_url or 'configured gig'} | "
             f"score {score} | title: {recommended_title or 'not generated'}"
         )
         return {
             "text": text,
-            "blocks": [
-                self._header_block("Comparison Complete"),
-                self._section_block(
-                    [
-                        f"*Gig URL*\n{gig_url or 'Not provided'}",
-                        f"*Optimization Score*\n{score}",
-                        f"*Competitors Compared*\n{market_count}",
-                    ]
-                ),
-                self._section_block(
-                    [f"*Top Recommended Title*\n{recommended_title or 'No title generated yet.'}"]
-                ),
-                self._section_block(
-                    [
-                        "*Do This First*\n"
-                        + (top_action or "No top action was generated for this run.")
-                        + (f"\nExpected gain: {top_gain}%" if top_gain is not None else "")
-                    ]
-                ),
-                self._context_block([f"Generated at {utc_now_iso()}"]),
-            ],
+            "blocks": blocks,
         }
 
     def _high_impact_action_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -236,7 +284,35 @@ class SlackService:
         values = [f"- {self._truncate(str(item).strip(), 160)}" for item in items if str(item).strip()]
         return "\n".join(values) if values else fallback
 
+    def _format_top_gig_line(self, item: dict[str, Any]) -> str:
+        rank = item.get("rank_position") or "?"
+        title = self._truncate(str(item.get("title", "")).strip(), 76)
+        price = item.get("starting_price")
+        rating = item.get("rating")
+        reviews = item.get("reviews_count")
+        fragments = [f"#{rank} {title or 'Untitled gig'}"]
+        if price is not None:
+            fragments.append(f"${price}")
+        if rating is not None:
+            fragments.append(f"{rating}★")
+        if reviews is not None:
+            fragments.append(f"{reviews} reviews")
+        return " | ".join(fragments)
+
+    def _format_competitor_recommendation_line(self, item: dict[str, Any]) -> str:
+        rank = item.get("rank_position") or "?"
+        recommendation = self._truncate(str(item.get("primary_recommendation", "")).strip(), 96)
+        gain = item.get("expected_gain")
+        priority = str(item.get("priority", "")).strip()
+        suffix: list[str] = []
+        if gain is not None:
+            suffix.append(f"{gain}% est.")
+        if priority:
+            suffix.append(priority)
+        suffix_text = f" ({', '.join(suffix)})" if suffix else ""
+        return f"#{rank} {recommendation or 'No recommendation generated.'}{suffix_text}"
+
     def _truncate(self, value: str, limit: int) -> str:
         if len(value) <= limit:
             return value
-        return value[: max(0, limit - 1)].rstrip() + "…"
+        return value[: max(0, limit - 3)].rstrip() + "..."

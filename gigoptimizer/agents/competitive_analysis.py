@@ -76,11 +76,16 @@ class CompetitiveAnalysisAgent:
                     matched_term=gig.matched_term,
                     conversion_proxy_score=round(score, 1),
                     win_reasons=reasons[:4],
+                    rank_position=gig.rank_position,
+                    page_number=gig.page_number,
+                    is_first_page=gig.is_first_page,
+                    search_url=gig.search_url,
+                    why_on_page_one=reasons[:4],
                 )
             )
 
         scored.sort(key=lambda item: item.conversion_proxy_score, reverse=True)
-        top_competitors = scored[:5]
+        top_competitors = scored[:10]
         title_patterns = self._title_patterns(top_competitors)
         why_competitors_win = self._why_competitors_win(snapshot, top_competitors, median_price)
         what_to_implement = self._what_to_implement(snapshot, top_competitors, title_patterns, median_price)

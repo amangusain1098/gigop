@@ -134,7 +134,9 @@
 
 .commands textarea,
 .commands input,
-.card select {
+.card select,
+.card input,
+.card textarea {
   width: 100%;
   border: 1px solid rgba(145, 177, 211, 0.22);
   border-radius: 14px;
@@ -151,7 +153,15 @@
 }
 
 .button-row {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.button-row--three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.button-row--two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 button,
@@ -250,6 +260,17 @@ button:disabled {
   border: 1px solid rgba(145, 177, 211, 0.12);
   border-radius: 16px;
   background: rgba(15, 27, 45, 0.72);
+}
+
+.row--stacked {
+  display: grid;
+}
+
+.row-topline {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .option-card p,
@@ -470,7 +491,10 @@ pre {
   .charts,
   .content-grid,
   .form-grid,
-  .button-row {
+  .button-row,
+  .button-row--two,
+  .button-row--three,
+  .diff {
     grid-template-columns: 1fr;
   }
 

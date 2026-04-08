@@ -52,6 +52,7 @@ class SerpApiSearchConnector:
                     url = str(item.get("link", "")).strip()
                     title = str(item.get("title", "")).strip()
                     snippet = str(item.get("snippet", "")).strip()
+                    position = item.get("position")
                     if "fiverr.com" not in url.lower():
                         continue
                     gig = MarketplaceGig(
@@ -63,6 +64,10 @@ class SerpApiSearchConnector:
                         reviews_count=None,
                         matched_term=term,
                         snippet=snippet,
+                        rank_position=int(position) if isinstance(position, (int, float)) else None,
+                        page_number=1,
+                        is_first_page=False,
+                        search_url="https://serpapi.com/search.json",
                     )
                     if gig_page_lookup is not None:
                         try:

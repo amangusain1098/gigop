@@ -920,6 +920,7 @@ class DashboardService:
             LiveResearchBundle(marketplace_gigs=competitor_gigs),
             progress_callback=progress_callback,
         )
+        market_anchor_price = self._market_anchor_price(competitor_gigs)
         implementation_blueprint = self._build_implementation_blueprint(
             my_gig=my_gig,
             base_snapshot=base_snapshot,
@@ -928,22 +929,42 @@ class DashboardService:
             analysis=analysis,
             optimization_report=optimization_report,
         )
+        primary_search_term = derived_terms[0] if derived_terms else ""
+        first_page_top_10 = self._first_page_top_10(
+            competitor_gigs,
+            primary_term=primary_search_term,
+            market_anchor_price=market_anchor_price,
+            analysis=analysis,
+        )
+        one_by_one_recommendations = self._one_by_one_recommendations(
+            my_gig=my_gig,
+            first_page_top_10=first_page_top_10,
+            recommended_title=str(implementation_blueprint.get("recommended_title", "")),
+            recommended_tags=list(implementation_blueprint.get("recommended_tags", [])),
+            market_anchor_price=market_anchor_price,
+        )
+        top_ranked_gig = first_page_top_10[0] if first_page_top_10 else None
         return {
             "status": status,
             "message": message,
             "gig_url": my_gig.url,
             "gig_id": self._gig_identifier(my_gig.url),
             "my_gig": asdict(my_gig),
+            "primary_search_term": primary_search_term,
             "detected_search_terms": derived_terms,
-            "top_search_titles": [gig.title for gig in (analysis.top_competitors if analysis else competitor_gigs[:5])],
+            "top_search_titles": [gig.title for gig in (first_page_top_10 or (analysis.top_competitors if analysis else competitor_gigs[:5]))],
             "title_patterns": analysis.title_patterns if analysis else [],
-            "market_anchor_price": self._market_anchor_price(competitor_gigs),
+            "market_anchor_price": market_anchor_price,
             "competitor_count": len(competitor_gigs),
             "optimization_score": optimization_report.optimization_score,
             "what_to_implement": analysis.what_to_implement if analysis else [],
             "why_competitors_win": analysis.why_competitors_win if analysis else [],
             "my_advantages": analysis.my_advantages if analysis else [],
             "top_competitors": [asdict(gig) for gig in (analysis.top_competitors if analysis else competitor_gigs[:5])],
+            "top_ranked_gig": asdict(top_ranked_gig) if top_ranked_gig is not None else None,
+            "why_top_ranked_gig_is_first": (top_ranked_gig.why_on_page_one or top_ranked_gig.win_reasons) if top_ranked_gig is not None else [],
+            "first_page_top_10": [asdict(gig) for gig in first_page_top_10],
+            "one_by_one_recommendations": one_by_one_recommendations,
             "comparison_source": comparison_source,
             "implementation_blueprint": implementation_blueprint,
             "implementation_summary": self._implementation_summary(implementation_blueprint),
@@ -954,7 +975,12 @@ class DashboardService:
 
     def _comparison_competitors(self, comparison: dict[str, Any] | None) -> list[MarketplaceGig]:
         competitors: list[MarketplaceGig] = []
-        for item in (comparison or {}).get("top_competitors", []):
+        comparison_payload = comparison or {}
+        source_items = (
+            comparison_payload.get("first_page_top_10")
+            or comparison_payload.get("top_competitors", [])
+        )
+        for item in source_items:
             if not isinstance(item, dict):
                 continue
             try:
@@ -962,6 +988,140 @@ class DashboardService:
             except TypeError:
                 continue
         return competitors
+
+    def _first_page_top_10(
+        self,
+        competitor_gigs: list[MarketplaceGig],
+        *,
+        primary_term: str,
+        market_anchor_price: float | None,
+        analysis=None,
+    ) -> list[MarketplaceGig]:
+        normalized_term = primary_term.lower().strip()
+        scored_lookup: dict[str, MarketplaceGig] = {}
+        if analysis is not None:
+            for scored_gig in analysis.top_competitors:
+                key = scored_gig.url or scored_gig.title.lower()
+                scored_lookup[key] = scored_gig
+        ranked = [
+            gig for gig in competitor_gigs
+            if gig.is_first_page and (not normalized_term or gig.matched_term.lower().strip() == normalized_term)
+        ]
+        if len(ranked) < 10:
+            ranked = [gig for gig in competitor_gigs if gig.is_first_page] or competitor_gigs[:]
+        ranked = sorted(
+            ranked,
+            key=lambda gig: (
+                gig.page_number or 1,
+                gig.rank_position or 999,
+                -(gig.conversion_proxy_score or 0.0),
+                -(gig.reviews_count or 0),
+            ),
+        )[:10]
+        for index, gig in enumerate(ranked, start=1):
+            scored_gig = scored_lookup.get(gig.url or gig.title.lower())
+            if scored_gig is not None:
+                gig.conversion_proxy_score = scored_gig.conversion_proxy_score
+                gig.win_reasons = scored_gig.win_reasons[:]
+            gig.rank_position = index
+            if gig.page_number is None:
+                gig.page_number = 1
+            gig.is_first_page = gig.page_number == 1 and index <= 10
+            gig.why_on_page_one = self._market_visibility_reasons(
+                gig,
+                primary_term=primary_term,
+                market_anchor_price=market_anchor_price,
+            )
+        return ranked
+
+    def _market_visibility_reasons(
+        self,
+        gig: MarketplaceGig,
+        *,
+        primary_term: str,
+        market_anchor_price: float | None,
+    ) -> list[str]:
+        reasons: list[str] = []
+        lowered_title = gig.title.lower()
+        normalized_term = primary_term.lower().strip()
+        if gig.rank_position == 1:
+            reasons.append("Fiverr is currently surfacing this gig first for the primary search term on page one.")
+        elif gig.rank_position is not None and gig.rank_position <= 3:
+            reasons.append(f"Fiverr is currently keeping this gig in a top-{gig.rank_position} page-one slot.")
+        if normalized_term and normalized_term in lowered_title:
+            reasons.append(f"The title matches the searched phrase '{primary_term}' directly.")
+        if gig.reviews_count is not None and gig.reviews_count >= 100:
+            reasons.append("It shows strong public review volume, which boosts trust before the click.")
+        if gig.rating is not None and gig.rating >= 4.9:
+            reasons.append("It keeps a very high visible rating.")
+        if market_anchor_price is not None and gig.starting_price is not None:
+            if abs(gig.starting_price - market_anchor_price) <= max(market_anchor_price * 0.2, 5):
+                reasons.append("Its starting price sits close to the current market anchor.")
+        if gig.delivery_days is not None and gig.delivery_days <= 2:
+            reasons.append("It offers a fast delivery window, which strengthens urgency.")
+        if gig.badges:
+            reasons.append("It shows visible seller-level badges or credibility cues.")
+        if not reasons:
+            reasons.append("Its ranking appears to come from a mix of keyword match, trust signals, and competitive positioning.")
+        return reasons[:4]
+
+    def _one_by_one_recommendations(
+        self,
+        *,
+        my_gig: GigPageOverview,
+        first_page_top_10: list[MarketplaceGig],
+        recommended_title: str,
+        recommended_tags: list[str],
+        market_anchor_price: float | None,
+    ) -> list[dict[str, Any]]:
+        my_title = (my_gig.title or "").lower()
+        my_tags = {item.lower() for item in (my_gig.tags or [])}
+        my_review_count = int(my_gig.reviews_count or 0)
+        my_price = my_gig.starting_price
+        results: list[dict[str, Any]] = []
+
+        for fallback_rank, gig in enumerate(first_page_top_10, start=1):
+            changes: list[str] = []
+            if gig.matched_term and gig.matched_term.lower() not in my_title:
+                changes.append(f"Work the exact search phrase '{gig.matched_term}' into your title or first paragraph.")
+            elif recommended_title and recommended_title.lower() != my_title:
+                changes.append(f"Move your title closer to '{recommended_title}'.")
+            if gig.reviews_count is not None and gig.reviews_count > max(my_review_count, 10):
+                changes.append("Add a stronger proof block with a before-and-after result, tool names, and visible deliverables.")
+            if gig.delivery_days is not None and gig.delivery_days <= 2:
+                changes.append("Offer a rush or 48-hour option so buyers see an urgency match.")
+            if market_anchor_price is not None and my_price is not None and gig.starting_price is not None:
+                if my_price > gig.starting_price * 1.2:
+                    changes.append("Tighten the entry package scope or justify premium pricing more clearly near the top.")
+                elif my_price < max(5.0, gig.starting_price * 0.75):
+                    changes.append("Raise the floor slightly or package the offer more tightly so it still looks expert.")
+            if recommended_tags and not any(tag.lower() in my_tags for tag in recommended_tags[:3]):
+                changes.append(f"Rotate tags toward {', '.join(recommended_tags[:3])}.")
+            if not changes:
+                changes.append("Keep the exact-match title strong and stack clearer trust proof above the fold.")
+
+            rank_position = gig.rank_position or fallback_rank
+            expected_gain = min(20, 5 + max(0, 4 - min(rank_position, 4)) + (len(changes) * 2))
+            priority = "high" if rank_position <= 3 else ("medium" if rank_position <= 6 else "low")
+            results.append(
+                {
+                    "rank_position": rank_position,
+                    "competitor_title": gig.title,
+                    "competitor_url": gig.url,
+                    "seller_name": gig.seller_name,
+                    "matched_term": gig.matched_term,
+                    "starting_price": gig.starting_price,
+                    "rating": gig.rating,
+                    "reviews_count": gig.reviews_count,
+                    "conversion_proxy_score": gig.conversion_proxy_score,
+                    "why_it_ranks": gig.why_on_page_one or gig.win_reasons[:3],
+                    "primary_recommendation": changes[0],
+                    "what_to_change": changes[:3],
+                    "expected_gain": expected_gain,
+                    "priority": priority,
+                }
+            )
+        return results
 
     def _build_implementation_blueprint(
         self,
@@ -1572,6 +1732,9 @@ class DashboardService:
             return
         implementation = comparison.get("implementation_blueprint") or {}
         top_action = implementation.get("top_action") or {}
+        top_ranked_gig = comparison.get("top_ranked_gig") or {}
+        first_page_top_10 = comparison.get("first_page_top_10") or []
+        one_by_one = comparison.get("one_by_one_recommendations") or []
         try:
             self.slack_service.send_slack_message(
                 "comparison_complete",
@@ -1582,6 +1745,10 @@ class DashboardService:
                     "top_action": top_action.get("action_text", ""),
                     "top_action_expected_gain": top_action.get("expected_gain"),
                     "competitor_count": comparison.get("competitor_count", 0),
+                    "primary_search_term": comparison.get("primary_search_term", ""),
+                    "top_ranked_gig": top_ranked_gig,
+                    "first_page_top_10": first_page_top_10[:10],
+                    "one_by_one_recommendations": one_by_one[:10],
                 },
             )
         except Exception:
@@ -2034,7 +2201,7 @@ class DashboardService:
     def _snapshot_marketplace_gigs(self, snapshot: GigSnapshot, derived_terms: list[str]) -> list[MarketplaceGig]:
         matched_term = derived_terms[0] if derived_terms else snapshot.niche
         gigs: list[MarketplaceGig] = []
-        for competitor in snapshot.competitors[:8]:
+        for index, competitor in enumerate(snapshot.competitors[:8], start=1):
             gigs.append(
                 MarketplaceGig(
                     title=competitor.title,
@@ -2044,6 +2211,9 @@ class DashboardService:
                     reviews_count=competitor.reviews_count,
                     matched_term=matched_term,
                     snippet=competitor.description_excerpt,
+                    rank_position=index,
+                    page_number=1,
+                    is_first_page=index <= 10,
                 )
             )
         return gigs
@@ -2054,7 +2224,7 @@ class DashboardService:
             return json_competitors[:20]
 
         competitors: list[MarketplaceGig] = []
-        for raw_line in competitor_input.splitlines():
+        for index, raw_line in enumerate(competitor_input.splitlines(), start=1):
             line = raw_line.strip()
             if not line:
                 continue
@@ -2082,6 +2252,9 @@ class DashboardService:
                     delivery_days=delivery_days,
                     matched_term=matched_term,
                     snippet=line,
+                    rank_position=index,
+                    page_number=1,
+                    is_first_page=index <= 10,
                 )
             )
         return competitors[:20]
@@ -2104,7 +2277,7 @@ class DashboardService:
             return []
 
         competitors: list[MarketplaceGig] = []
-        for item in items:
+        for index, item in enumerate(items, start=1):
             if not isinstance(item, dict):
                 continue
             title = str(item.get("title", "")).strip()
@@ -2114,6 +2287,8 @@ class DashboardService:
             rating = self._safe_number(item.get("rating") or "")
             reviews_value = self._safe_number(item.get("reviews_count") or item.get("reviews") or "")
             reviews_count = int(reviews_value) if reviews_value is not None else None
+            rank_value = self._safe_number(item.get("rank_position") or item.get("rank") or item.get("position") or "")
+            rank_position = int(rank_value) if rank_value is not None else index
             delivery_days = self._extract_delivery_days(
                 item.get("delivery_days") or item.get("delivery") or item.get("snippet") or ""
             )
@@ -2131,6 +2306,9 @@ class DashboardService:
                     delivery_days=delivery_days,
                     matched_term=matched_term,
                     snippet=snippet,
+                    rank_position=rank_position,
+                    page_number=1,
+                    is_first_page=rank_position <= 10,
                 )
             )
         return competitors
