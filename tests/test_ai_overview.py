@@ -124,6 +124,52 @@ class AIOverviewFallbackTests(unittest.TestCase):
         self.assertIn("ranking", response["reply"].lower())
         self.assertTrue(response["suggestions"])
 
+    def test_local_chat_uses_current_number_one_for_compare_question(self) -> None:
+        with TemporaryDirectory() as tmp:
+            temp_root = Path(tmp)
+            with patch.dict(
+                os.environ,
+                {
+                    "DATA_DIR": str(temp_root / "data"),
+                    "INTEGRATION_SETTINGS_PATH": str(temp_root / "data" / "integrations.json"),
+                    "AI_PROVIDER": "n8n",
+                    "AI_API_KEY": "",
+                },
+                clear=False,
+            ):
+                config = GigOptimizerConfig.from_env()
+                settings = SettingsService(config)
+                settings.update_settings({"ai": {"enabled": True, "provider": "n8n", "api_base_url": ""}})
+                service = AIOverviewService(settings)
+                response = service.chat(
+                    message="Compare my gig with #1 and tell me exactly what to change first.",
+                    context={
+                        "top_ranked_gig": {
+                            "title": "I will do wordpress speed optimization for google pagespeed insight",
+                        },
+                        "one_by_one_recommendations": [
+                            {
+                                "rank_position": 1,
+                                "primary_recommendation": "Use the exact search phrase in your title and first line.",
+                                "what_to_change": [
+                                    "Use the exact search phrase in your title and first line.",
+                                    "Add stronger proof and deliverables near the top.",
+                                ],
+                            },
+                            {
+                                "rank_position": 2,
+                                "primary_recommendation": "Add more trust badges.",
+                                "what_to_change": ["Add more trust badges."],
+                            },
+                        ],
+                        "do_this_first": ["Use the exact search phrase in your title and first line."],
+                    },
+                )
+
+        self.assertIn("#1 gig", response["reply"].lower())
+        self.assertIn("wordpress speed optimization", response["reply"].lower())
+        self.assertTrue(response["suggestions"])
+
     def test_n8n_overview_uses_webhook_response(self) -> None:
         with TemporaryDirectory() as tmp:
             temp_root = Path(tmp)

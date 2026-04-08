@@ -531,6 +531,20 @@ class AIOverviewService:
             action = latest.get("action") or {}
             reply = f"Your latest tracked review action was {action.get('action_type', 'an action')}."
             suggestions = prioritized[:2] or actions[:2]
+        elif any(word in lower_message for word in ["#1", "beat #1", "compare my gig", "change first"]):
+            leader_change = one_by_one[0] if one_by_one else {}
+            if top_ranked_gig.get("title"):
+                reply = (
+                    f"Against the current #1 gig '{top_ranked_gig.get('title')}', change this first: "
+                    f"{leader_change.get('primary_recommendation') or (prioritized[0] if prioritized else 'tighten the title and proof block near the top.')}"
+                )
+            else:
+                reply = "Run a fresh market compare so the app can compare your gig against the current #1 result."
+            suggestions = (
+                list(leader_change.get("what_to_change", [])[:3])
+                or prioritized[:3]
+                or actions[:3]
+            )
         elif any(word in lower_message for word in ["top 10", "page one", "first page", "competitor", "rank"]):
             if top_ranked_gig.get("title"):
                 reason_bits = list(top_ranked_gig.get("why_on_page_one", []) or [])
