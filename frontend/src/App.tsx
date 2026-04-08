@@ -935,9 +935,11 @@ function App() {
         </article>
       </section>
 
-      <button className="assistant-toggle" onClick={() => setAssistantOpen((current) => !current)}>
-        {assistantOpen ? 'Close Copilot' : 'Open Copilot'}
-      </button>
+      {!assistantOpen ? (
+        <button className="assistant-toggle" onClick={() => setAssistantOpen(true)}>
+          Open Copilot
+        </button>
+      ) : null}
 
       {assistantOpen ? (
         <aside className="assistant-shell">
