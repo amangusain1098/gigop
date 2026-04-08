@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GigOptimizer Pro Login</title>
+  <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body class="login-body">
+  <main class="login-shell">
+    <section class="login-card">
+      <p class="eyebrow">GigOptimizer Pro</p>
+      <h1>Secure dashboard login.</h1>
+      <p class="hero-text">
+        Sign in before connecting the app to your real Fiverr seller data, Slack workspace, or WhatsApp Cloud API credentials.
+      </p>
+      <form id="login-form" class="login-form">
+        <label class="field">
+          <span>Username</span>
+          <input type="text" id="login-username" autocomplete="username" required>
+        </label>
+        <label class="field">
+          <span>Password</span>
+          <input type="password" id="login-password" autocomplete="current-password" required>
+        </label>
+        <button type="submit" class="button button-primary">Sign In</button>
+      </form>
+      <p id="login-status" class="small-text"></p>
+    </section>
+  </main>
+
+  <script src="/static/login.js"></script>
+</body>
+</html>

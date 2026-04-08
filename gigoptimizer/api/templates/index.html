@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0d6e6e">
+  <title>GigOptimizer Pro</title>
+  <link rel="manifest" href="/static/manifest.webmanifest">
+  <link rel="icon" href="/static/icons/icon-192.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/static/icons/icon-512.svg">
+  <link rel="stylesheet" href="/static/dashboard.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body data-csrf-token="{{ csrf_token }}">
+  <div class="page-shell">
+    <header class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">GigOptimizer Pro</p>
+        <h1>WordPress Fiverr performance dashboard.</h1>
+        <p class="hero-text">
+          Run the optimization pipeline, review keyword opportunities, approve gig-facing changes,
+          manage alert channels, and generate weekly reports from one protected dashboard.
+        </p>
+        <div class="hero-actions">
+          <button id="run-pipeline" class="button button-primary">Run Pipeline</button>
+          <button id="generate-report" class="button button-secondary">Generate Weekly Report</button>
+          <label class="checkbox">
+            <input type="checkbox" id="live-connectors-toggle">
+            Use live connectors
+          </label>
+          {% if auth_enabled %}
+          <button id="logout-button" class="button button-ghost">Logout</button>
+          {% endif %}
+        </div>
+      </div>
+      <div class="hero-meta">
+        <div class="meta-card">
+          <span class="meta-label">Snapshot</span>
+          <strong id="snapshot-path">{{ default_snapshot }}</strong>
+        </div>
+        <div class="meta-card">
+          <span class="meta-label">Scheduler</span>
+          <strong>{{ scheduler_status }}</strong>
+        </div>
+        <div class="meta-card">
+          <span class="meta-label">Signed In</span>
+          <strong>{{ auth_username or "Local session" }}</strong>
+        </div>
+        <div class="meta-card status-card">
+          <span class="meta-label">Live Status</span>
+          <strong id="status-banner">Connecting dashboard...</strong>
+        </div>
+      </div>
+    </header>
+
+    <main class="dashboard-grid">
+      {% if security_warnings %}
+      <section class="panel panel-wide">
+        <div class="panel-header">
+          <div>
+            <p class="section-kicker">Security Warnings</p>
+            <h2>Review before public launch</h2>
+          </div>
+        </div>
+        <div class="stacked-list">
+          <article class="action-card">
+            <ul>
+              {% for warning in security_warnings %}
+              <li>{{ warning }}</li>
+              {% endfor %}
+            </ul>
+          </article>
+        </div>
+      </section>
+      {% endif %}
+
+      <section class="panel panel-wide">
+        <div class="panel-header">
+          <div>
+            <p class="section-kicker">Live Gig Metrics</p>
+            <h2>Visibility, CTR, and conversion</h2>
+          </div>
+          <div class="metric-chip-row" id="metric-chips"></div>
+        </div>
+        <div class="chart-wrap">
+          <canvas id="metrics-chart"></canvas>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="section-kicker">Keyword Pulse</p>
+            <h2>Current trend signals</h2>
+          </div>
+        </div>
+        <div id="keyword-pulse" class="keyword-list"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="section-kicker">Agent Health</p>
+            <h2>Execution status</h2>
+          </div>
+        </div>
+        <div id="agent-health" class="health-grid"></div>
+      </section>
+
+      <section class="panel panel-wide">
+        <div class="panel-header">
+          <div>
+            <p class="section-kicker">Setup Health</p>
+            <h2>What is ready and what still needs input</h2>
+          </div>
+        </div>
+        <div id="setup-health" class="comparison-grid"></div>
+      </section>
+
+      <section class="panel panel-wide">
+        <div class="panel-header">
+          <div>
+            <p class="section-kicker">My Gig Vs Market</p>
+            <h2>Paste your Fiverr gig and compare it against the niche</h2>
+          </div>
+          <div class="hero-actions">
+            <button id="compare-my-gig" class="button button-primary">Compare My Gig</button>
+          </div>
+        </div>
+        <div class="comparison-toolbar">
+          <label class="field comparison-field">
+            <span>My Fiverr gig URL</span>
+            <input type="url" id="marketplace-my-gig-url" placeholder="https://www.fiverr.com/...">
+          </label>
+          <div class="comparison-helper">
+            The app will detect likely niche terms from your gig, compare live public Fiverr results, and tell you what title, description, tags, pricing, FAQs, and trust signals to implement next.
+          </div>
+        </div>
+        <div class="manual-compare-card">
+          <div class="manual-compare-header">
+            <div>
+              <p class="section-kicker">Fallback Compare</p>
+              <h3>Paste competitor rows or a browser capture if Fiverr blocks scraping</h3>
+            </div>
+            <div class="hero-actions">
+              <button id="copy-fiverr-capture-script" class="button button-secondary">Copy Fiverr Capture Script</button>
+              <button id="compare-manual-market" class="button button-ghost">Analyze Imported Competitors</button>
+            </div>
+          </div>
+          <label class="field">
+            <span>Imported competitor input</span>
+            <textarea id="manual-competitor-input" rows="7" placeholder='Paste lines like:\nI will fix wordpress speed | 45 | 4.9 | 120 | 2 days | https://www.fiverr.com/...\n\nOr paste JSON captured from your normal Fiverr browser tab.'></textarea>
+          </label>
+          <p class="small-text">
+            You can either paste lines in the format `title | price | rating | reviews | delivery | url`, or run the capture script on a real Fiverr search page in your own browser and paste the copied JSON here.
+          </p>
+          <div class="bookmarklet-guide">
+            <strong>Reliable browser-assisted flow</strong>
+            <ol>
+              <li>Open Fiverr search results in your normal browser and solve any challenge there.</li>
+              <li>Click <code>Copy Fiverr Capture Script</code> in this dashboard.</li>
+              <li>Paste the copied script into the Fiverr page browser console and run it.</li>
+              <li>Return here and paste the copied JSON into the box above.</li>
+              <li>Click <code>Analyze Imported Competitors</code>.</li>
+            </ol>
+          </div>
+        </div>
+        <div id="gig-comparison" class="comparison-grid"></div>
+      </section>
+
+      <section class="panel panel-wide">
+        <div class="panel-header">
+          <div>
+            <p class="section-kicker">Live Competitor Intel</p>
+            <h2>Trending titles and conversion proxy gaps</h2>
+          </div>
+        </div>
+        <div id="competitive-analysis" class="stacked-list"></div>
+      </section>
+
+      <section class="panel panel-wide">
+        <div class="panel-header">
+          <div>
+            <p class="section-kicker">Live Scraper</p>
+            <h2>Watch public Fiverr searches in real time</h2>
+          </div>
+          <div class="hero-actions">
+            <button id="run-marketplace-scraper" class="button button-secondary">Run Live Scraper</button>
+            <button id="start-marketplace-verification" class="button button-ghost">Start Verification</button>
+          </div>
+        </div>
+        <div class="scraper-grid">
+          <article class="action-card">
+            <strong>Current scrape status</strong>
+            <div id="scraper-summary" class="stacked-list"></div>
+          </article>
+          <article class="action-card">
+            <strong>Recent competitor gigs</strong>
+            <div id="scraper-gigs" class="stacked-list"></div>
+          </article>
+        </div>
+        <div class="activity-feed" id="scraper-activity-feed"></div>
+      </section>
+
+      <section class="panel panel-wide">
+        <div class="panel-header">
+          <div>
+            <p class="section-kicker">Deployment & Alerts</p>
+            <h2>Authentication-safe configuration</h2>
+          </div>
+        </div>
+        <form id="settings-form" class="settings-form">
+          <div class="settings-grid">
+            <article class="settings-card">
+              <h3>Email</h3>
+              <label class="checkbox">
+                <input type="checkbox" id="email-enabled">
+                Enable email notifications
+              </label>
+              <label class="field">
+                <span>SMTP host</span>
+                <input type="text" id="email-smtp-host" placeholder="smtp.gmail.com">
+              </label>
+              <label class="field">
+                <span>SMTP port</span>
+                <input type="number" id="email-smtp-port" placeholder="587">
+              </label>
+              <label class="field">
+                <span>SMTP username</span>
+                <input type="text" id="email-smtp-username" placeholder="vpnid259@gmail.com">
+              </label>
+              <label class="field">
+                <span>SMTP password or app password</span>
+                <input type="password" id="email-smtp-password" placeholder="Leave blank to keep the current secret">
+              </label>
+              <label class="field">
+                <span>From address</span>
+                <input type="email" id="email-from-address" placeholder="vpnid259@gmail.com">
+              </label>
+              <label class="field">
+                <span>To addresses</span>
+                <input type="text" id="email-to-addresses" placeholder="reveal4902k@gmail.com">
+              </label>
+              <label class="checkbox">
+                <input type="checkbox" id="email-use-tls">
+                Use STARTTLS
+              </label>
+              <p id="email-config-status" class="small-text">Email is not configured yet.</p>
+              <button type="button" id="test-email" class="button button-ghost">Send Email Test</button>
+            </article>
+
+            <article class="settings-card">
+              <h3>Slack</h3>
+              <label class="checkbox">
+                <input type="checkbox" id="slack-enabled">
+                Enable Slack notifications
+              </label>
+              <label class="field">
+                <span>Incoming webhook URL</span>
+                <input type="password" id="slack-webhook-url" placeholder="Leave blank to keep the current secret">
+              </label>
+              <p id="slack-config-status" class="small-text">Slack is not configured yet.</p>
+              <button type="button" id="test-slack" class="button button-ghost">Send Slack Test</button>
+            </article>
+
+            <article class="settings-card">
+              <h3>WhatsApp</h3>
+              <label class="checkbox">
+                <input type="checkbox" id="whatsapp-enabled">
+                Enable WhatsApp notifications
+              </label>
+              <label class="field">
+                <span>Access token</span>
+                <input type="password" id="whatsapp-access-token" placeholder="Leave blank to keep the current secret">
+              </label>
+              <label class="field">
+                <span>Phone number ID</span>
+                <input type="text" id="whatsapp-phone-number-id" placeholder="Meta Cloud API phone number ID">
+              </label>
+              <label class="field">
+                <span>Recipient number</span>
+                <input type="text" id="whatsapp-recipient-number" placeholder="+15551234567">
+              </label>
+              <label class="field">
+                <span>API version</span>
+                <input type="text" id="whatsapp-api-version" placeholder="v23.0">
+              </label>
+              <p id="whatsapp-config-status" class="small-text">WhatsApp is not configured yet.</p>
+              <button type="button" id="test-whatsapp" class="button button-ghost">Send WhatsApp Test</button>
+            </article>
+
+            <article class="settings-card">
+              <h3>Marketplace Scraper</h3>
+              <label class="checkbox">
+                <input type="checkbox" id="marketplace-enabled">
+                Enable live public Fiverr competitor scraping
+              </label>
+              <label class="field">
+                <span>Search terms</span>
+                <input type="text" id="marketplace-search-terms" placeholder="wordpress speed, core web vitals, woocommerce speed">
+              </label>
+              <label class="field">
+                <span>Max results</span>
+                <input type="number" id="marketplace-max-results" min="3" max="40" placeholder="12">
+              </label>
+              <label class="field">
+                <span>Search URL template</span>
+                <input type="text" id="marketplace-search-url-template" placeholder="https://www.fiverr.com/search/gigs?query={query}">
+              </label>
+              <label class="checkbox">
+                <input type="checkbox" id="marketplace-reader-enabled">
+                Enable free reader fallback for public Fiverr pages
+              </label>
+              <label class="field">
+                <span>Free reader base URL</span>
+                <input type="url" id="marketplace-reader-base-url" placeholder="https://r.jina.ai/http://">
+              </label>
+              <label class="field">
+                <span>My Fiverr gig URL</span>
+                <input type="url" id="settings-marketplace-my-gig-url" placeholder="https://www.fiverr.com/...">
+              </label>
+              <label class="checkbox">
+                <input type="checkbox" id="marketplace-auto-compare-enabled">
+                Auto-compare my gig every few minutes
+              </label>
+              <label class="field">
+                <span>Auto-compare interval in minutes</span>
+                <input type="number" id="marketplace-auto-compare-interval" min="5" step="5" placeholder="5">
+              </label>
+              <label class="field">
+                <span>SerpApi key for search fallback</span>
+                <input type="password" id="marketplace-serpapi-api-key" placeholder="Leave blank to keep the current secret">
+              </label>
+              <label class="field">
+                <span>SerpApi engine</span>
+                <input type="text" id="marketplace-serpapi-engine" placeholder="google">
+              </label>
+              <label class="field">
+                <span>SerpApi result count</span>
+                <input type="number" id="marketplace-serpapi-num-results" min="1" max="20" placeholder="10">
+              </label>
+              <p id="marketplace-config-status" class="small-text">Marketplace competitor scraping is disabled.</p>
+            </article>
+
+            <article class="settings-card">
+              <h3>AI Overview</h3>
+              <label class="checkbox">
+                <input type="checkbox" id="ai-enabled">
+                Enable low-cost AI operations summary
+              </label>
+              <label class="field">
+                <span>Provider</span>
+                <input type="text" id="ai-provider" placeholder="openai">
+              </label>
+              <label class="field">
+                <span>Model</span>
+                <input type="text" id="ai-model" placeholder="gpt-5.4-mini">
+              </label>
+              <label class="field">
+                <span>API base URL</span>
+                <input type="text" id="ai-api-base-url" placeholder="https://api.openai.com/v1">
+              </label>
+              <label class="field">
+                <span>API key</span>
+                <input type="password" id="ai-api-key" placeholder="Leave blank to keep the current secret">
+              </label>
+              <p id="ai-config-status" class="small-text">AI overview is disabled.</p>
+            </article>
+
+            <article class="settings-card settings-card-wide">
+              <h3>Alert Events</h3>
+              <div class="event-grid">
+                <label class="checkbox"><input type="checkbox" id="event-pipeline-run"> Pipeline completed</label>
+                <label class="checkbox"><input type="checkbox" id="event-queue-pending"> Queue item created</label>
+                <label class="checkbox"><input type="checkbox" id="event-approval-decision"> Approval decision</label>
+                <label class="checkbox"><input type="checkbox" id="event-report-generated"> Weekly report generated</label>
+                <label class="checkbox"><input type="checkbox" id="event-error"> Error alerts</label>
+              </div>
+              <p class="small-text">
+                Secret values are never sent back to the browser after save. Leave secret fields blank if you want to keep the currently stored values.
+              </p>
+              <div class="settings-actions">
+                <button type="submit" class="button button-primary">Save Settings</button>
+              </div>
+            </article>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel panel-wide">
+        <div class="panel-header">
+          <div>
+            <p class="section-kicker">Approval Queue</p>
+            <h2>Pending and recent changes</h2>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Agent</th>
+                <th>Action</th>
+                <th>Status</th>
+                <th>Confidence</th>
+                <th>Current</th>
+                <th>Proposed</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="approval-queue"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="section-kicker">AI Overview</p>
+            <h2>Hosted operations summary</h2>
+          </div>
+        </div>
+        <div id="ai-overview" class="stacked-list"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="section-kicker">Latest Optimizer Output</p>
+            <h2>Action plan</h2>
+          </div>
+        </div>
+        <div id="latest-report" class="stacked-list"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="section-kicker">Reports</p>
+            <h2>Generated weekly and market-watch files</h2>
+          </div>
+        </div>
+        <div id="reports-list" class="report-list"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="section-kicker">Compare History</p>
+            <h2>Recent market-watch snapshots</h2>
+          </div>
+        </div>
+        <div id="comparison-history" class="report-list"></div>
+      </section>
+
+      <section class="panel panel-wide">
+        <div class="panel-header">
+          <div>
+            <p class="section-kicker">Mobile App</p>
+            <h2>Installable phone dashboard</h2>
+          </div>
+        </div>
+        <div class="action-card">
+          <strong>Progressive Web App</strong>
+          <p class="small-text">
+            Open this dashboard on your phone browser and use "Add to Home Screen" to install it as a lightweight mobile app.
+            Live status, queue changes, reports, and alerts stay connected to the same hosted backend.
+          </p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/dashboard.js"></script>
+</body>
+</html>

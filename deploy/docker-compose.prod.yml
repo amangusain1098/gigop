@@ -1,0 +1,186 @@
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: gigoptimizer-pro:latest
+    env_file:
+      - ../.env.production
+    command:
+      [
+        "gunicorn",
+        "-k",
+        "uvicorn.workers.UvicornWorker",
+        "-w",
+        "2",
+        "--threads",
+        "4",
+        "-b",
+        "0.0.0.0:8001",
+        "--timeout",
+        "120",
+        "--graceful-timeout",
+        "30",
+        "gigoptimizer.api.main:app"
+      ]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    environment:
+      APP_ENV: production
+    volumes:
+      - app_data:/app/data
+      - app_reports:/app/reports
+      - playwright_data:/app/playwright
+    expose:
+      - "8001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/api/health', timeout=5).read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    networks:
+      - gigoptimizer_net
+
+  worker:
+    image: gigoptimizer-pro:latest
+    env_file:
+      - ../.env.production
+    command: ["python", "-m", "gigoptimizer.jobs.worker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes:
+      - app_data:/app/data
+      - app_reports:/app/reports
+      - playwright_data:/app/playwright
+    networks:
+      - gigoptimizer_net
+
+  scheduler:
+    image: gigoptimizer-pro:latest
+    env_file:
+      - ../.env.production
+    command: ["python", "-m", "gigoptimizer.jobs.scheduler_worker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes:
+      - app_data:/app/data
+      - app_reports:/app/reports
+      - playwright_data:/app/playwright
+    networks:
+      - gigoptimizer_net
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file:
+      - ../.env.production
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    command:
+      [
+        "postgres",
+        "-c",
+        "max_connections=80",
+        "-c",
+        "shared_buffers=256MB",
+        "-c",
+        "effective_cache_size=1024MB",
+        "-c",
+        "work_mem=4MB",
+        "-c",
+        "maintenance_work_mem=64MB"
+      ]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - gigoptimizer_net
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "yes",
+        "--save",
+        "60",
+        "1000",
+        "--maxmemory",
+        "256mb",
+        "--maxmemory-policy",
+        "allkeys-lru"
+      ]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - gigoptimizer_net
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    env_file:
+      - ../.env.production
+    depends_on:
+      app:
+        condition: service_healthy
+    command: ["/bin/sh", "/docker-entrypoint-custom.sh"]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/entrypoint.sh:/docker-entrypoint-custom.sh:ro
+      - ./nginx/app.http.conf.template:/etc/nginx/custom-templates/app.http.conf.template:ro
+      - ./nginx/app.https.conf.template:/etc/nginx/custom-templates/app.https.conf.template:ro
+      - certbot_www:/var/www/certbot
+      - letsencrypt:/etc/letsencrypt
+    networks:
+      - gigoptimizer_net
+
+  certbot:
+    image: certbot/certbot:latest
+    restart: unless-stopped
+    volumes:
+      - certbot_www:/var/www/certbot
+      - letsencrypt:/etc/letsencrypt
+    entrypoint: /bin/sh -c "trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $$!; done"
+    networks:
+      - gigoptimizer_net
+
+volumes:
+  app_data:
+  app_reports:
+  playwright_data:
+  postgres_data:
+  redis_data:
+  certbot_www:
+  letsencrypt:
+
+networks:
+  gigoptimizer_net:
+    driver: bridge

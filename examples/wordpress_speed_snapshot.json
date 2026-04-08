@@ -1,0 +1,116 @@
+{
+  "niche": "WordPress Insights & Page Speed",
+  "title": "I will fix WordPress page speed and Core Web Vitals",
+  "description": "Is your WooCommerce checkout slow and costing sales? I manually optimize WordPress stores, reduce bottlenecks caused by themes and plugins, and deliver a clear speed audit with fixes.",
+  "tags": [
+    "wordpress speed",
+    "woocommerce",
+    "site speed",
+    "speed optimization",
+    "core web vitals",
+    "gtmetrix",
+    "pagespeed",
+    "woocommerce speed",
+    "pagespeed insights",
+    "wordpress speed optimization"
+  ],
+  "faq": [
+    {
+      "question": "What access do you need before starting?",
+      "answer": "WordPress admin and hosting or CDN access if relevant."
+    },
+    {
+      "question": "Do you work on WooCommerce stores?",
+      "answer": "Yes, especially stores slowed down by plugins, heavy themes, and checkout bottlenecks."
+    }
+  ],
+  "packages": [
+    {
+      "name": "Basic",
+      "price": 45.0,
+      "delivery_days": 2,
+      "revisions": null,
+      "highlights": [
+        "Core speed audit",
+        "Basic fixes"
+      ]
+    },
+    {
+      "name": "Standard",
+      "price": 95.0,
+      "delivery_days": 3,
+      "revisions": null,
+      "highlights": [
+        "Manual optimization",
+        "Performance report"
+      ]
+    },
+    {
+      "name": "Premium",
+      "price": 160.0,
+      "delivery_days": 2,
+      "revisions": null,
+      "highlights": [
+        "Priority delivery",
+        "WooCommerce tuning"
+      ]
+    }
+  ],
+  "analytics": {
+    "impressions": 840,
+    "clicks": 22,
+    "orders": 2,
+    "saves": 9,
+    "average_response_time_hours": 4.5,
+    "package_mix": {
+      "basic": 1,
+      "standard": 1,
+      "premium": 0
+    }
+  },
+  "competitors": [
+    {
+      "title": "I will fix WordPress Core Web Vitals and GTmetrix score",
+      "starting_price": 55.0,
+      "tags": [
+        "core web vitals",
+        "gtmetrix",
+        "wordpress speed"
+      ],
+      "rating": null,
+      "reviews_count": null,
+      "description_excerpt": "Manual WordPress speed optimization for mobile and desktop scores."
+    },
+    {
+      "title": "I will optimize WooCommerce speed and PageSpeed Insights",
+      "starting_price": 65.0,
+      "tags": [
+        "woocommerce speed",
+        "pagespeed insights",
+        "speed audit"
+      ],
+      "rating": null,
+      "reviews_count": null,
+      "description_excerpt": "Checkout and product-page performance fixes for WordPress stores."
+    }
+  ],
+  "reviews": [
+    {
+      "text": "Went from 47 to 93 on PageSpeed and the checkout feels much faster now.",
+      "rating": 5
+    },
+    {
+      "text": "Great communication and real GTmetrix improvements for our WooCommerce store.",
+      "rating": 5
+    }
+  ],
+  "buyer_messages": [
+    "My WooCommerce checkout is slow and I think it is killing conversions.",
+    "Can you improve Core Web Vitals without breaking the design?"
+  ],
+  "goals": [
+    "Increase clicks from Fiverr search",
+    "Raise conversion rate",
+    "Attract more WooCommerce buyers"
+  ]
+}

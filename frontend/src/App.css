@@ -1,0 +1,310 @@
+.shell {
+  min-height: 100vh;
+  padding: 28px;
+  background:
+    radial-gradient(circle at top right, rgba(73, 179, 255, 0.12), transparent 28%),
+    radial-gradient(circle at top left, rgba(255, 153, 102, 0.1), transparent 24%),
+    linear-gradient(180deg, #08111f 0%, #0f1b2d 55%, #13243b 100%);
+  color: #dce7f4;
+}
+
+.loading {
+  display: grid;
+  place-items: center;
+  font-size: 1.1rem;
+}
+
+.hero,
+.commands,
+.charts,
+.content-grid {
+  max-width: 1380px;
+  margin: 0 auto 22px;
+}
+
+.hero {
+  display: grid;
+  gap: 22px;
+  grid-template-columns: 1.4fr 1fr;
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  color: #70c6ff;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+.lede {
+  margin: 0;
+  color: #9fb2c9;
+  max-width: 840px;
+}
+
+.hero-grid,
+.charts,
+.content-grid,
+.form-grid,
+.button-row,
+.diff {
+  display: grid;
+  gap: 16px;
+}
+
+.hero-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.metric,
+.card {
+  border: 1px solid rgba(145, 177, 211, 0.18);
+  border-radius: 22px;
+  background: rgba(8, 17, 31, 0.78);
+  box-shadow: 0 24px 50px rgba(0, 0, 0, 0.25);
+  backdrop-filter: blur(16px);
+}
+
+.metric {
+  padding: 18px;
+}
+
+.metric span,
+.card-head span,
+.row p,
+.block p,
+.health p {
+  color: #91a6be;
+}
+
+.metric strong {
+  display: block;
+  margin-top: 10px;
+  color: #f8fbff;
+  font-size: 1rem;
+  line-height: 1.45;
+}
+
+.flash {
+  max-width: 1380px;
+  margin: 0 auto 20px;
+  padding: 14px 18px;
+  border-radius: 16px;
+  background: rgba(94, 209, 163, 0.16);
+  color: #dffbf0;
+}
+
+.flash--error {
+  background: rgba(255, 107, 107, 0.16);
+  color: #ffe8e8;
+}
+
+.card {
+  padding: 22px;
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.card h2,
+.hero h1,
+.card h3 {
+  margin: 0;
+  color: #f7fbff;
+}
+
+.hero h1 {
+  font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+  font-size: clamp(2rem, 4vw, 3.4rem);
+  line-height: 1.05;
+  letter-spacing: -0.04em;
+}
+
+.form-grid,
+.charts,
+.content-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.commands textarea,
+.commands input,
+.card select {
+  width: 100%;
+  border: 1px solid rgba(145, 177, 211, 0.22);
+  border-radius: 14px;
+  background: rgba(15, 27, 45, 0.9);
+  color: #eef5ff;
+  padding: 13px 14px;
+  box-sizing: border-box;
+}
+
+.commands textarea {
+  resize: vertical;
+  min-height: 110px;
+  margin-bottom: 16px;
+}
+
+.button-row {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+button,
+.card a,
+.card select {
+  font: inherit;
+}
+
+button {
+  border: none;
+  border-radius: 999px;
+  padding: 12px 16px;
+  background: linear-gradient(135deg, #46b1ff 0%, #1789ff 100%);
+  color: white;
+  cursor: pointer;
+  transition: transform 140ms ease, opacity 140ms ease;
+}
+
+button.secondary {
+  background: rgba(145, 177, 211, 0.16);
+  color: #eef5ff;
+}
+
+button:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.chart-shell {
+  height: 280px;
+}
+
+.stack,
+.table,
+.pill-row {
+  display: grid;
+  gap: 12px;
+}
+
+.block,
+.row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 0;
+  border-top: 1px solid rgba(145, 177, 211, 0.12);
+}
+
+.block:first-child,
+.row:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.progress {
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+
+.progress > div {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #46b1ff 0%, #62ddb0 100%);
+}
+
+.diff {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+pre,
+.row strong,
+.block strong {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+pre {
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(4, 9, 18, 0.72);
+  color: #dce7f4;
+}
+
+.row p,
+.block p {
+  margin: 6px 0 0;
+}
+
+.pill,
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 11px;
+  border-radius: 999px;
+  background: rgba(145, 177, 211, 0.16);
+  color: #eef5ff;
+  font-size: 0.84rem;
+}
+
+.status--ok,
+.status--completed,
+.status--active {
+  background: rgba(94, 209, 163, 0.18);
+}
+
+.status--error,
+.status--failed,
+.status--rejected {
+  background: rgba(255, 107, 107, 0.18);
+}
+
+.status--warning,
+.status--pending,
+.status--queued,
+.status--degraded {
+  background: rgba(255, 179, 71, 0.18);
+}
+
+.bullet-list {
+  margin: 16px 0 0;
+  padding-left: 20px;
+  color: #dce7f4;
+}
+
+.bullet-list li + li {
+  margin-top: 8px;
+}
+
+.job p,
+.job strong {
+  margin: 8px 0 0;
+}
+
+@media (max-width: 1100px) {
+  .hero,
+  .charts,
+  .content-grid,
+  .form-grid,
+  .button-row {
+    grid-template-columns: 1fr;
+  }
+
+  .hero-grid {
+    grid-template-columns: 1fr;
+  }
+}

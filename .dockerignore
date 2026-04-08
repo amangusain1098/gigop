@@ -1,0 +1,14 @@
+.git
+.gitignore
+.env
+.env.production
+__pycache__/
+*.pyc
+artifacts/
+data/
+reports/
+playwright/.auth/
+server.out.log
+server.err.log
+cloudflared.out.log
+cloudflared.err.log
