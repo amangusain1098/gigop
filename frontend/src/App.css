@@ -64,6 +64,7 @@
   background: rgba(8, 17, 31, 0.78);
   box-shadow: 0 24px 50px rgba(0, 0, 0, 0.25);
   backdrop-filter: blur(16px);
+  min-width: 0;
 }
 
 .metric {
@@ -110,6 +111,16 @@
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 18px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.card-head h2,
+.card-head a,
+.card-head span,
+.card-head button,
+.card-head select {
+  min-width: 0;
 }
 
 .card h2,
@@ -245,6 +256,7 @@ button:disabled {
   gap: 12px;
   padding: 14px 0;
   border-top: 1px solid rgba(145, 177, 211, 0.12);
+  min-width: 0;
 }
 
 .block:first-child,
@@ -264,6 +276,7 @@ button:disabled {
 
 .row--stacked {
   display: grid;
+  min-width: 0;
 }
 
 .row-topline {
@@ -271,17 +284,28 @@ button:disabled {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.row-topline strong,
+.row-topline span {
+  min-width: 0;
 }
 
 .option-card p,
 .feed-item p {
   margin: 0;
   color: #91a6be;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .option-card strong,
 .feed-item strong {
   color: #f8fbff;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .package-grid {
@@ -328,6 +352,7 @@ pre,
 .block strong {
   margin: 0;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   word-break: break-word;
 }
 
@@ -425,6 +450,8 @@ pre {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+  min-width: 0;
+  flex-wrap: wrap;
 }
 
 .assistant-log {
@@ -432,12 +459,15 @@ pre {
   display: grid;
   gap: 12px;
   padding-right: 4px;
+  min-width: 0;
 }
 
 .assistant-bubble {
   padding: 14px;
   border-radius: 18px;
   border: 1px solid rgba(145, 177, 211, 0.14);
+  min-width: 0;
+  overflow: hidden;
 }
 
 .assistant-bubble--assistant {
@@ -456,6 +486,31 @@ pre {
 .assistant-bubble p {
   margin: 0;
   line-height: 1.55;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.assistant-bubble strong,
+.assistant-subtitle,
+.metric strong,
+.inline-note,
+.bullet-list li,
+.meta-item strong,
+.meta-item span,
+.pill,
+.status {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.block > div,
+.row > div,
+.assistant-head > div,
+.meta-item,
+.package-card,
+.option-card,
+.feed-item {
+  min-width: 0;
 }
 
 .assistant-subtitle {
