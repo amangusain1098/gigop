@@ -415,6 +415,11 @@ class DashboardApiTests(unittest.TestCase):
                     "APP_ADMIN_PASSWORD": "super-secret-password",
                     "APP_ADMIN_PASSWORD_HASH": "",
                     "APP_SESSION_SECRET": "test-session-secret",
+                    "HOSTINGER_ENABLED": "false",
+                    "HOSTINGER_API_TOKEN": "",
+                    "HOSTINGER_VIRTUAL_MACHINE_ID": "",
+                    "HOSTINGER_PROJECT_NAME": "",
+                    "HOSTINGER_DOMAIN": "",
                 },
                 clear=False,
             ):
