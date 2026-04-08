@@ -377,7 +377,7 @@ class GigOptimizerConfig:
                 status="active",
                 detail=f"active (sqlite fallback: {self.database_url})",
             )
-        if self.database_url.startswith(("postgresql://", "postgres://")):
+        if self.database_url.startswith(("postgresql://", "postgres://", "postgresql+", "postgres+")):
             return ConnectorStatus(
                 connector="database",
                 status="active",

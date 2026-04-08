@@ -530,6 +530,60 @@ class DashboardApiTests(unittest.TestCase):
                     post_logout_state = client.get("/api/state")
                     self.assertEqual(post_logout_state.status_code, 401)
 
+    def test_hostinger_status_and_assistant_routes_work(self) -> None:
+        root = Path(__file__).resolve().parent.parent
+        example_snapshot = root / "examples" / "wordpress_speed_snapshot.json"
+
+        with TemporaryDirectory() as tmp:
+            temp_root = Path(tmp)
+            with patch.dict(
+                os.environ,
+                {
+                    "DATA_DIR": str(temp_root / "data"),
+                    "REPORTS_DIR": str(temp_root / "reports"),
+                    "DASHBOARD_STATE_PATH": str(temp_root / "data" / "dashboard_state.json"),
+                    "METRICS_HISTORY_PATH": str(temp_root / "data" / "metrics_history.json"),
+                    "AGENT_HEALTH_PATH": str(temp_root / "data" / "agent_health.json"),
+                    "APPROVAL_QUEUE_DB_PATH": str(temp_root / "data" / "approval_queue.db"),
+                    "INTEGRATION_SETTINGS_PATH": str(temp_root / "data" / "integrations.json"),
+                    "DEFAULT_SNAPSHOT_PATH": str(example_snapshot),
+                    "APP_AUTH_ENABLED": "false",
+                    "APP_ADMIN_PASSWORD": "",
+                    "APP_ADMIN_PASSWORD_HASH": "",
+                    "APP_SESSION_SECRET": "",
+                },
+                clear=False,
+            ):
+                from gigoptimizer.api.main import create_app
+
+                with TestClient(create_app()) as client:
+                    with patch.object(
+                        client.app.state.hostinger_service,
+                        "get_public_status",
+                        return_value={
+                            "status": "ok",
+                            "enabled": True,
+                            "configured": True,
+                            "domain": "animha.co.in",
+                            "project_name": "deploy",
+                            "virtual_machines": [],
+                            "metrics": {"cpu": 28},
+                            "project_logs": [],
+                        },
+                    ):
+                        hostinger = client.get("/api/hostinger/status")
+                    self.assertEqual(hostinger.status_code, 200)
+                    self.assertEqual(hostinger.json()["hostinger"]["status"], "ok")
+
+                    assistant = client.post(
+                        "/api/assistant/chat",
+                        json={"message": "What title should I use now?"},
+                    )
+                    self.assertEqual(assistant.status_code, 200)
+                    payload = assistant.json()["assistant"]
+                    self.assertTrue(payload["reply"])
+                    self.assertIn("title", payload["reply"].lower())
+
     def test_hostinger_status_and_assistant_chat_routes_work(self) -> None:
         root = Path(__file__).resolve().parent.parent
         example_snapshot = root / "examples" / "wordpress_speed_snapshot.json"
@@ -579,6 +633,68 @@ class DashboardApiTests(unittest.TestCase):
 
                     self.assertEqual(assistant.status_code, 200)
                     self.assertEqual(assistant.json()["assistant"]["reply"], "Use the recommended title.")
+
+    def test_health_endpoint_redacts_database_url_and_summarizes_last_run(self) -> None:
+        root = Path(__file__).resolve().parent.parent
+        example_snapshot = root / "examples" / "wordpress_speed_snapshot.json"
+
+        with TemporaryDirectory() as tmp:
+            temp_root = Path(tmp)
+            with patch.dict(
+                os.environ,
+                {
+                    "DATA_DIR": str(temp_root / "data"),
+                    "REPORTS_DIR": str(temp_root / "reports"),
+                    "DASHBOARD_STATE_PATH": str(temp_root / "data" / "dashboard_state.json"),
+                    "METRICS_HISTORY_PATH": str(temp_root / "data" / "metrics_history.json"),
+                    "AGENT_HEALTH_PATH": str(temp_root / "data" / "agent_health.json"),
+                    "APPROVAL_QUEUE_DB_PATH": str(temp_root / "data" / "approval_queue.db"),
+                    "INTEGRATION_SETTINGS_PATH": str(temp_root / "data" / "integrations.json"),
+                    "DEFAULT_SNAPSHOT_PATH": str(example_snapshot),
+                    "APP_AUTH_ENABLED": "false",
+                    "APP_ADMIN_PASSWORD": "",
+                    "APP_ADMIN_PASSWORD_HASH": "",
+                    "APP_SESSION_SECRET": "",
+                },
+                clear=False,
+            ):
+                from gigoptimizer.api.main import create_app
+
+                with TestClient(create_app()) as client:
+                    client.app.state.config.database_url = "postgresql+psycopg://gigoptimizer:super-secret@postgres:5432/gigoptimizer"
+                    fake_run = {
+                        "run_id": "run-123",
+                        "run_type": "marketplace_compare",
+                        "status": "completed",
+                        "progress": 1.0,
+                        "result_payload": {
+                            "optimization_score": 94,
+                            "recommended_title": "I will optimize WordPress speed",
+                            "state": {
+                                "gig_comparison": {
+                                    "competitor_count": 12,
+                                    "implementation_blueprint": {
+                                        "recommended_title": "I will optimize WordPress speed"
+                                    },
+                                }
+                            },
+                        },
+                    }
+                    with patch.object(client.app.state.repository, "last_successful_run", return_value=fake_run):
+                        response = client.get("/api/health")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(
+            payload["components"]["database"]["url"],
+            "postgresql+psycopg://<credentials>@postgres:5432/gigoptimizer",
+        )
+        last_run = payload["components"]["last_successful_run"]
+        self.assertEqual(last_run["run_id"], "run-123")
+        self.assertEqual(last_run["optimization_score"], 94)
+        self.assertEqual(last_run["recommended_title"], "I will optimize WordPress speed")
+        self.assertEqual(last_run["competitor_count"], 12)
+        self.assertNotIn("result_payload", last_run)
 
 
 if __name__ == "__main__":

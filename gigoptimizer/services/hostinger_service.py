@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import copy
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -14,9 +17,15 @@ def utc_now_iso() -> str:
 
 
 class HostingerService:
+    CACHE_TTL_SECONDS = 30
+
     def __init__(self, config: GigOptimizerConfig, settings_service: SettingsService) -> None:
         self.config = config
         self.settings_service = settings_service
+        self._cache_lock = threading.Lock()
+        self._cache_key: tuple[Any, ...] | None = None
+        self._cache_expires_at = 0.0
+        self._cache_payload: dict[str, Any] | None = None
 
     def get_public_status(self) -> dict[str, Any]:
         settings = self.settings_service.get_settings().hostinger
@@ -46,8 +55,14 @@ class HostingerService:
             base_payload["error_message"] = "Hostinger API token is not configured."
             return base_payload
 
+        cached = self._load_cached_snapshot(settings)
+        if cached is not None:
+            return cached
+
         try:
-            return self.fetch_snapshot()
+            snapshot = self.fetch_snapshot()
+            self._store_cached_snapshot(settings, snapshot)
+            return snapshot
         except Exception as exc:
             base_payload["status"] = "error"
             base_payload["error_message"] = str(exc)
@@ -138,6 +153,36 @@ class HostingerService:
             "domain_portfolio": domain_portfolio[:5],
             "warnings": warnings,
         }
+
+    def _settings_cache_key(self, settings) -> tuple[Any, ...]:
+        return (
+            settings.enabled,
+            settings.api_base_url.rstrip("/"),
+            bool(settings.api_token),
+            settings.virtual_machine_id,
+            settings.project_name,
+            settings.domain,
+            settings.metrics_window_minutes,
+        )
+
+    def _load_cached_snapshot(self, settings) -> dict[str, Any] | None:
+        cache_key = self._settings_cache_key(settings)
+        now = time.monotonic()
+        with self._cache_lock:
+            if self._cache_payload is None:
+                return None
+            if self._cache_key != cache_key:
+                return None
+            if now >= self._cache_expires_at:
+                self._cache_payload = None
+                return None
+            return copy.deepcopy(self._cache_payload)
+
+    def _store_cached_snapshot(self, settings, snapshot: dict[str, Any]) -> None:
+        with self._cache_lock:
+            self._cache_key = self._settings_cache_key(settings)
+            self._cache_expires_at = time.monotonic() + self.CACHE_TTL_SECONDS
+            self._cache_payload = copy.deepcopy(snapshot)
 
     def _safe_get(self, client: httpx.Client, path: str, params: dict[str, Any] | None = None) -> Any:
         response = client.get(path, params=params)

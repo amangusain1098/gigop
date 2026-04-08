@@ -136,6 +136,42 @@ class HostingerServiceTests(unittest.TestCase):
         self.assertIn("date_from", metric_call)
         self.assertIn("date_to", metric_call)
 
+    def test_get_public_status_reuses_cached_snapshot_within_ttl(self) -> None:
+        with TemporaryDirectory() as tmp:
+            temp_root = Path(tmp)
+            with patch.dict(
+                os.environ,
+                {
+                    "DATA_DIR": str(temp_root / "data"),
+                    "INTEGRATION_SETTINGS_PATH": str(temp_root / "data" / "integrations.json"),
+                    "HOSTINGER_ENABLED": "true",
+                    "HOSTINGER_API_TOKEN": "token-value",
+                    "HOSTINGER_DOMAIN": "animha.co.in",
+                    "HOSTINGER_PROJECT_NAME": "deploy",
+                },
+                clear=False,
+            ):
+                config = GigOptimizerConfig.from_env()
+                settings = SettingsService(config)
+                settings.update_settings(
+                    {
+                        "hostinger": {
+                            "enabled": True,
+                            "api_token": "token-value",
+                            "domain": "animha.co.in",
+                            "project_name": "deploy",
+                        }
+                    }
+                )
+                service = HostingerService(config, settings)
+                _FakeClient.calls = []
+                with patch("gigoptimizer.services.hostinger_service.httpx.Client", _FakeClient):
+                    first = service.get_public_status()
+                    second = service.get_public_status()
+
+        self.assertEqual(first["status"], second["status"])
+        self.assertEqual(len(_FakeClient.calls), 5)
+
 
 if __name__ == "__main__":
     unittest.main()

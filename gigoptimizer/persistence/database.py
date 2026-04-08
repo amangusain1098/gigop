@@ -4,6 +4,7 @@ from contextlib import contextmanager
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import NullPool
 
 from ..config import GigOptimizerConfig
 from .models import Base
@@ -12,12 +13,18 @@ from .models import Base
 class DatabaseManager:
     def __init__(self, config: GigOptimizerConfig) -> None:
         self.config = config
-        connect_args = {"check_same_thread": False} if config.database_url.startswith("sqlite") else {}
+        is_sqlite = config.database_url.startswith("sqlite")
+        connect_args = {"check_same_thread": False} if is_sqlite else {}
+        engine_kwargs = {
+            "future": True,
+            "pool_pre_ping": True,
+            "connect_args": connect_args,
+        }
+        if is_sqlite:
+            engine_kwargs["poolclass"] = NullPool
         self.engine = create_engine(
             config.database_url,
-            future=True,
-            pool_pre_ping=True,
-            connect_args=connect_args,
+            **engine_kwargs,
         )
         self._session_factory = sessionmaker(
             bind=self.engine,

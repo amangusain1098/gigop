@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
 import threading
+from urllib.parse import urlsplit, urlunsplit
 
 import logging
 
@@ -36,6 +37,59 @@ from .websocket_manager import DashboardWebSocketManager
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
+
+
+def redact_database_url(database_url: str) -> str:
+    if not database_url:
+        return ""
+    if database_url.startswith("sqlite"):
+        return "sqlite:///configured"
+    parsed = urlsplit(database_url)
+    if not parsed.scheme:
+        return "configured"
+    hostname = parsed.hostname or ""
+    if parsed.port:
+        hostname = f"{hostname}:{parsed.port}" if hostname else str(parsed.port)
+    if parsed.username or parsed.password:
+        hostname = f"<credentials>@{hostname}" if hostname else "<credentials>"
+    return urlunsplit((parsed.scheme, hostname, parsed.path, "", ""))
+
+
+def summarize_last_run(latest_run: dict | None) -> dict:
+    if not latest_run:
+        return {}
+    result_payload = latest_run.get("result_payload") or {}
+    state = result_payload.get("state") or {}
+    latest_report = state.get("latest_report") or {}
+    comparison = state.get("gig_comparison") or {}
+    recommended_title = (
+        result_payload.get("recommended_title")
+        or latest_report.get("recommended_title")
+        or (comparison.get("implementation_blueprint") or {}).get("recommended_title")
+        or ""
+    )
+    optimization_score = (
+        result_payload.get("optimization_score")
+        or latest_report.get("optimization_score")
+    )
+    competitor_count = comparison.get("competitor_count")
+    summary = {
+        "run_id": latest_run.get("run_id"),
+        "job_id": latest_run.get("job_id"),
+        "run_type": latest_run.get("run_type"),
+        "status": latest_run.get("status"),
+        "current_stage": latest_run.get("current_stage"),
+        "progress": latest_run.get("progress"),
+        "output_summary": latest_run.get("output_summary", ""),
+        "error_message": latest_run.get("error_message", ""),
+        "created_at": latest_run.get("created_at"),
+        "started_at": latest_run.get("started_at"),
+        "finished_at": latest_run.get("finished_at"),
+        "optimization_score": optimization_score,
+        "recommended_title": recommended_title,
+        "competitor_count": competitor_count,
+    }
+    return {key: value for key, value in summary.items() if value not in (None, "", [])}
 
 
 def create_app() -> FastAPI:
@@ -203,7 +257,7 @@ def create_app() -> FastAPI:
                 "database": {
                     "ok": db_ok,
                     "detail": db_detail,
-                    "url": config.database_url,
+                    "url": redact_database_url(config.database_url),
                 },
                 "events": {
                     "ok": bus_ok,
@@ -218,7 +272,7 @@ def create_app() -> FastAPI:
                         else f"waiting for a Vite build or dev server at {config.frontend_dev_url}"
                     ),
                 },
-                "last_successful_run": latest_run or {},
+                "last_successful_run": summarize_last_run(latest_run),
             },
         }
 
