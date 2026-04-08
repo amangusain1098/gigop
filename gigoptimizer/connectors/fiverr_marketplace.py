@@ -13,6 +13,23 @@ from ..config import GigOptimizerConfig
 from ..models import ConnectorStatus, GigPageOverview, MarketplaceGig
 
 
+MARKETPLACE_TITLE_STOPWORDS = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "your",
+    "you",
+    "will",
+    "this",
+    "that",
+    "from",
+    "fiverr",
+    "service",
+    "gig",
+}
+
+
 class FiverrMarketplaceConnector:
     name = "fiverr_marketplace"
 
@@ -1176,10 +1193,39 @@ class FiverrMarketplaceConnector:
         path_parts = [part for part in parsed.path.split("/") if part]
         if len(path_parts) < 2:
             return False
-        return any(
-            token in lowered
-            for token in ["wordpress", "speed", "pagespeed", "page speed", "core web vitals", "gtmetrix", "woocommerce"]
-        )
+        if parsed.netloc and "fiverr.com" not in parsed.netloc:
+            return False
+        if len(lowered) < 12 or len(lowered) > 180:
+            return False
+        if any(
+            marker in lowered
+            for marker in [
+                "search results",
+                "url source",
+                "markdown content",
+                "fiverr / search",
+                "seller details",
+            ]
+        ):
+            return False
+        if not re.search(r"[a-z]", lowered):
+            return False
+
+        slug_tokens = {
+            token
+            for token in re.split(r"[-_/]+", path_parts[1].lower())
+            if len(token) > 2 and token not in MARKETPLACE_TITLE_STOPWORDS
+        }
+        title_tokens = {
+            token
+            for token in re.split(r"[^a-z0-9]+", lowered)
+            if len(token) > 2 and token not in MARKETPLACE_TITLE_STOPWORDS
+        }
+        if slug_tokens and slug_tokens.intersection(title_tokens):
+            return True
+        if lowered.startswith("i will "):
+            return True
+        return len(title_tokens) >= 3
 
     def _parse_reviews_count_from_text(self, text: str) -> int | None:
         cleaned = str(text or "").strip().lower().replace(",", "")

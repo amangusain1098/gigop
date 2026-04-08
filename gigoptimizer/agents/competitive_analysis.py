@@ -1,21 +1,32 @@
 from __future__ import annotations
 
 from collections import Counter
+import re
 from statistics import median
 
 from ..models import CompetitiveGapAnalysis, GigSnapshot, MarketplaceGig
 
 
-HIGH_INTENT_TERMS = [
-    "wordpress",
-    "speed",
-    "pagespeed",
-    "core web vitals",
-    "woocommerce",
-    "gtmetrix",
-    "audit",
-    "performance",
-]
+COMMON_STOPWORDS = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "your",
+    "you",
+    "will",
+    "this",
+    "that",
+    "from",
+    "into",
+    "using",
+    "make",
+    "create",
+    "design",
+    "offer",
+    "service",
+    "gig",
+}
 
 
 class CompetitiveAnalysisAgent:
@@ -31,13 +42,14 @@ class CompetitiveAnalysisAgent:
         my_review_count = len(snapshot.reviews)
         priced = [gig.starting_price for gig in marketplace_gigs if gig.starting_price is not None]
         median_price = median(priced) if priced else None
+        intent_terms = self._intent_terms(snapshot, marketplace_gigs)
 
         scored: list[MarketplaceGig] = []
         for gig in marketplace_gigs:
             reasons: list[str] = []
             score = 0.0
             title_lower = gig.title.lower()
-            title_term_hits = sum(1 for term in HIGH_INTENT_TERMS if term in title_lower)
+            title_term_hits = sum(1 for term in intent_terms if term and term in title_lower)
             score += title_term_hits * 8
             if title_term_hits >= 4:
                 reasons.append("Their title matches multiple buyer-intent keywords directly.")
@@ -87,7 +99,7 @@ class CompetitiveAnalysisAgent:
         scored.sort(key=lambda item: item.conversion_proxy_score, reverse=True)
         top_competitors = scored[:10]
         title_patterns = self._title_patterns(top_competitors)
-        why_competitors_win = self._why_competitors_win(snapshot, top_competitors, median_price)
+        why_competitors_win = self._why_competitors_win(snapshot, top_competitors, median_price, intent_terms)
         what_to_implement = self._what_to_implement(snapshot, top_competitors, title_patterns, median_price)
         my_advantages = self._my_advantages(snapshot, median_price)
 
@@ -104,29 +116,24 @@ class CompetitiveAnalysisAgent:
     def _title_patterns(self, gigs: list[MarketplaceGig]) -> list[str]:
         phrases = Counter()
         for gig in gigs:
-            title = gig.title.lower()
-            for phrase in [
-                "core web vitals",
-                "pagespeed insights",
-                "woocommerce speed",
-                "wordpress speed",
-                "speed optimization",
-                "gtmetrix",
-                "manual audit",
-            ]:
-                if phrase in title:
-                    phrases[phrase] += 1
-        return [phrase for phrase, _ in phrases.most_common(5)]
+            matched = (gig.matched_term or "").strip().lower()
+            if matched:
+                phrases[matched] += 3
+            for phrase in self._title_phrases(gig.title):
+                phrases[phrase] += 1
+        return [phrase for phrase, count in phrases.most_common(6) if count >= 2][:5]
 
     def _why_competitors_win(
         self,
         snapshot: GigSnapshot,
         gigs: list[MarketplaceGig],
         median_price: float | None,
+        intent_terms: list[str],
     ) -> list[str]:
         reasons: list[str] = []
         my_title = snapshot.title.lower()
-        if sum(1 for term in HIGH_INTENT_TERMS if term in my_title) < 3:
+        minimum_hits = 2 if len(intent_terms) >= 3 else 1
+        if sum(1 for term in intent_terms[:6] if term in my_title) < minimum_hits:
             reasons.append("Your title is less keyword-dense than the strongest public gigs, so competitors likely win more search clicks before buyers even open your offer.")
         top_review_count = max((gig.reviews_count or 0 for gig in gigs), default=0)
         if top_review_count > len(snapshot.reviews):
@@ -151,10 +158,14 @@ class CompetitiveAnalysisAgent:
         median_price: float | None,
     ) -> list[str]:
         actions: list[str] = []
+        target_phrase = title_patterns[0] if title_patterns else next(
+            (gig.matched_term for gig in gigs if gig.matched_term),
+            snapshot.niche,
+        )
         if title_patterns:
             actions.append(f"Mirror one of the strongest live title patterns in your own first line, especially terms like '{title_patterns[0]}'.")
-        if not any("pagespeed insights" in item.lower() for item in [snapshot.title, *snapshot.tags]):
-            actions.append("Add 'PageSpeed Insights' or another exact buyer phrase to the visible title and early description copy.")
+        if target_phrase and not any(target_phrase.lower() in item.lower() for item in [snapshot.title, *snapshot.tags]):
+            actions.append(f"Add '{target_phrase}' or another exact buyer phrase to the visible title and early description copy.")
         if median_price is not None:
             my_price = min((package.price for package in snapshot.packages), default=0.0)
             if my_price and my_price < median_price * 0.7:
@@ -173,8 +184,43 @@ class CompetitiveAnalysisAgent:
             my_price = min((package.price for package in snapshot.packages), default=0.0)
             if my_price and my_price <= median_price:
                 advantages.append("You already have room to compete on value without racing to the bottom.")
-        if any("woocommerce" in message.lower() for message in snapshot.buyer_messages):
-            advantages.append("You already attract WooCommerce-flavored demand, which is one of the clearest high-intent buyer segments in this niche.")
+        if snapshot.tags:
+            advantages.append("You already have a starting keyword footprint, so the next gains should come from better search alignment and clearer trust proof.")
         if not advantages:
             advantages.append("Your best advantage is that the current offer appears to close well once a qualified buyer clicks in.")
         return advantages[:4]
+
+    def _intent_terms(self, snapshot: GigSnapshot, gigs: list[MarketplaceGig]) -> list[str]:
+        ordered: list[str] = []
+        seen: set[str] = set()
+
+        def add(term: str) -> None:
+            cleaned = re.sub(r"\s+", " ", str(term or "").strip().lower())
+            if len(cleaned) < 3 or cleaned in seen:
+                return
+            seen.add(cleaned)
+            ordered.append(cleaned)
+
+        for gig in gigs:
+            add(gig.matched_term)
+        for item in [snapshot.niche, snapshot.title, *snapshot.tags]:
+            for phrase in self._title_phrases(item):
+                add(phrase)
+        for gig in gigs[:10]:
+            for phrase in self._title_phrases(gig.title):
+                add(phrase)
+        return ordered[:8]
+
+    def _title_phrases(self, text: str) -> list[str]:
+        tokens = [
+            token
+            for token in re.split(r"[^a-z0-9]+", str(text or "").lower())
+            if len(token) > 2 and token not in COMMON_STOPWORDS
+        ]
+        phrases: list[str] = []
+        for size in (2, 3):
+            for index in range(len(tokens) - size + 1):
+                phrase = " ".join(tokens[index : index + size]).strip()
+                if phrase and phrase not in phrases:
+                    phrases.append(phrase)
+        return phrases[:8]

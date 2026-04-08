@@ -123,6 +123,7 @@ class DashboardService:
             settings_marketplace.my_gig_url if settings_marketplace is not None else ""
         )
         gig_id = self._gig_identifier(target_url)
+        explicit_terms = [item.strip() for item in (search_terms or []) if item and item.strip()]
         if not target_url:
             self._save_gig_comparison(
                 {
@@ -196,7 +197,7 @@ class DashboardService:
         else:
             comparison_message_prefix = ""
 
-        derived_terms = search_terms or self._derive_gig_search_terms(my_gig, snapshot)
+        derived_terms = explicit_terms or self._derive_gig_search_terms(my_gig, snapshot)
         self._record_scraper_event(
             {
                 "stage": "comparison_terms",
@@ -226,16 +227,31 @@ class DashboardService:
                     observer=lambda event: self._record_scraper_event(event, scraper_event_callback),
                 )
             if not competitor_gigs:
-                competitor_gigs = self._snapshot_marketplace_gigs(snapshot, derived_terms)
+                allow_snapshot_fallback = self._should_use_snapshot_marketplace_fallback(
+                    explicit_terms=explicit_terms,
+                    my_gig=my_gig,
+                    snapshot=snapshot,
+                    derived_terms=derived_terms,
+                )
+                competitor_gigs = self._snapshot_marketplace_gigs(snapshot, derived_terms) if allow_snapshot_fallback else []
                 if competitor_gigs:
                     market_status = ConnectorStatus(
                         connector="marketplace_fallback",
                         status="partial",
                         detail="Live Fiverr competitor scraping was blocked, so GigOptimizer used the local benchmark set to keep the optimization plan available.",
                     )
+                elif explicit_terms:
+                    market_status = ConnectorStatus(
+                        connector="marketplace_compare",
+                        status="warning",
+                        detail=(
+                            f"Live Fiverr scraping did not return competitor gigs for '{explicit_terms[0]}', "
+                            "so GigOptimizer kept the comparison empty instead of reusing unrelated niche data."
+                        ),
+                    )
             if competitor_gigs:
                 self._cache_competitors(derived_terms, competitor_gigs)
-        comparison_snapshot = self._build_snapshot_from_gig(my_gig, snapshot)
+        comparison_snapshot = self._build_snapshot_from_gig(my_gig, snapshot, derived_terms=derived_terms)
         analysis = (
             self.orchestrator.competitive_analysis.analyze(comparison_snapshot, competitor_gigs)
             if competitor_gigs
@@ -256,17 +272,27 @@ class DashboardService:
             my_gig=my_gig,
             competitor_gigs=competitor_gigs,
         )
-        comparison = self._load_cached_comparison(comparison_signature) or self._build_market_comparison(
-            my_gig=my_gig,
-            base_snapshot=snapshot,
-            comparison_snapshot=comparison_snapshot,
-            derived_terms=derived_terms,
-            competitor_gigs=competitor_gigs,
-            analysis=analysis,
-            status=("partial" if comparison_message_prefix and market_status.status == "ok" else market_status.status),
-            message=comparison_message,
-            comparison_source="live" if not comparison_message_prefix else "live_fallback",
-            progress_callback=progress_callback,
+        comparison = self._load_cached_comparison(comparison_signature) or (
+            self._build_market_comparison(
+                my_gig=my_gig,
+                base_snapshot=snapshot,
+                comparison_snapshot=comparison_snapshot,
+                derived_terms=derived_terms,
+                competitor_gigs=competitor_gigs,
+                analysis=analysis,
+                status=("partial" if comparison_message_prefix and market_status.status == "ok" else market_status.status),
+                message=comparison_message,
+                comparison_source="live" if not comparison_message_prefix else "live_fallback",
+                progress_callback=progress_callback,
+            )
+            if competitor_gigs
+            else self._build_empty_market_comparison(
+                my_gig=my_gig,
+                derived_terms=derived_terms,
+                status=market_status.status,
+                message=comparison_message,
+                comparison_source="live_no_results",
+            )
         )
         if comparison.get("message") != comparison_message:
             comparison["message"] = comparison_message
@@ -275,7 +301,8 @@ class DashboardService:
             comparison["last_compared_at"] = utc_now_iso()
         self._cache_comparison(comparison_signature, comparison)
         self._save_gig_comparison(comparison)
-        self._create_market_comparison_drafts(comparison_snapshot, comparison)
+        if competitor_gigs:
+            self._create_market_comparison_drafts(comparison_snapshot, comparison)
 
         state = self._load_dashboard_state()
         latest_report = dict(state.latest_report or {})
@@ -381,7 +408,7 @@ class DashboardService:
             detail = "Used your local snapshot as the 'my gig' baseline because no public gig URL was provided."
 
         derived_terms = search_terms or self._derive_gig_search_terms(my_gig, snapshot)
-        comparison_snapshot = self._build_snapshot_from_gig(my_gig, snapshot)
+        comparison_snapshot = self._build_snapshot_from_gig(my_gig, snapshot, derived_terms=derived_terms)
         analysis = self.orchestrator.competitive_analysis.analyze(
             comparison_snapshot,
             manual_competitors,
@@ -974,6 +1001,45 @@ class DashboardService:
             "last_compared_at": utc_now_iso(),
         }
 
+    def _build_empty_market_comparison(
+        self,
+        *,
+        my_gig: GigPageOverview,
+        derived_terms: list[str],
+        status: str,
+        message: str,
+        comparison_source: str,
+    ) -> dict[str, Any]:
+        primary_search_term = derived_terms[0] if derived_terms else ""
+        return {
+            "status": status,
+            "message": message,
+            "gig_url": my_gig.url,
+            "gig_id": self._gig_identifier(my_gig.url),
+            "my_gig": asdict(my_gig),
+            "primary_search_term": primary_search_term,
+            "detected_search_terms": derived_terms,
+            "top_search_titles": [],
+            "title_patterns": [],
+            "market_anchor_price": None,
+            "competitor_count": 0,
+            "optimization_score": None,
+            "what_to_implement": [],
+            "why_competitors_win": [],
+            "my_advantages": [],
+            "top_competitors": [],
+            "top_ranked_gig": None,
+            "why_top_ranked_gig_is_first": [],
+            "first_page_top_10": [],
+            "one_by_one_recommendations": [],
+            "comparison_source": comparison_source,
+            "implementation_blueprint": {},
+            "implementation_summary": "",
+            "do_this_first": [],
+            "top_action": None,
+            "last_compared_at": utc_now_iso(),
+        }
+
     def _comparison_competitors(self, comparison: dict[str, Any] | None) -> list[MarketplaceGig]:
         competitors: list[MarketplaceGig] = []
         comparison_payload = comparison or {}
@@ -1135,10 +1201,16 @@ class DashboardService:
         optimization_report: OptimizationReport,
     ) -> dict[str, Any]:
         title_patterns = analysis.title_patterns if analysis else []
+        market_context = self._market_copy_context(
+            my_gig=my_gig,
+            derived_terms=derived_terms,
+            title_patterns=title_patterns,
+        )
         recommended_title = self._select_market_ready_title(
             optimization_report.title_variants,
             title_patterns=title_patterns,
             derived_terms=derived_terms,
+            market_context=market_context,
         )
         recommended_tags = self._recommended_market_tags(
             current_tags=my_gig.tags or base_snapshot.tags,
@@ -1150,6 +1222,7 @@ class DashboardService:
             title_variants=optimization_report.title_variants,
             title_patterns=title_patterns,
             derived_terms=derived_terms,
+            market_context=market_context,
         )
         description_pack = self._build_description_pack(
             recommended_title=recommended_title,
@@ -1158,6 +1231,7 @@ class DashboardService:
             title_patterns=title_patterns,
             optimization_report=optimization_report,
             analysis=analysis,
+            market_context=market_context,
         )
         description_options = self._build_description_options(
             title_options=title_options,
@@ -1165,6 +1239,7 @@ class DashboardService:
             optimization_report=optimization_report,
             derived_terms=derived_terms,
             title_patterns=title_patterns,
+            market_context=market_context,
         )
         prioritized_actions = self._prioritized_actions(
             my_gig=my_gig,
@@ -1174,17 +1249,21 @@ class DashboardService:
             analysis=analysis,
             market_anchor_price=self._market_anchor_price(competitor_gigs),
             optimization_report=optimization_report,
+            market_context=market_context,
         )
         return {
             "recommended_title": recommended_title,
-            "title_variants": optimization_report.title_variants[:5],
+            "title_variants": self._dedupe_strings([recommended_title, *optimization_report.title_variants])[:5],
             "title_options": title_options,
             "recommended_tags": recommended_tags,
             "description_opening": description_pack["opening"],
             "description_blueprint": description_pack["blueprint"],
             "description_full": description_pack["full_text"],
             "description_options": description_options,
-            "faq_recommendations": optimization_report.faq_recommendations[:5],
+            "faq_recommendations": self._faq_recommendations_for_market(
+                market_context=market_context,
+                fallback=optimization_report.faq_recommendations,
+            ),
             "pricing_strategy": self._market_pricing_strategy(
                 current_price=my_gig.starting_price,
                 market_anchor_price=self._market_anchor_price(competitor_gigs),
@@ -1193,8 +1272,9 @@ class DashboardService:
             "recommended_packages": self._recommended_packages(
                 market_anchor_price=self._market_anchor_price(competitor_gigs),
                 current_price=my_gig.starting_price,
+                market_context=market_context,
             ),
-            "trust_boosters": self._trust_boosters(analysis, optimization_report),
+            "trust_boosters": self._trust_boosters(analysis, optimization_report, market_context=market_context),
             "weekly_actions": optimization_report.weekly_action_plan[:5],
             "review_actions": optimization_report.review_actions[:4],
             "review_follow_up_template": optimization_report.review_follow_up_template,
@@ -1214,14 +1294,98 @@ class DashboardService:
             "caution_notes": optimization_report.caution_notes[:3],
         }
 
+    def _market_copy_context(
+        self,
+        *,
+        my_gig: GigPageOverview,
+        derived_terms: list[str],
+        title_patterns: list[str],
+    ) -> dict[str, Any]:
+        preferred_phrases = self._prioritized_market_phrases(
+            title_patterns=title_patterns,
+            derived_terms=derived_terms,
+        )
+        primary_phrase = preferred_phrases[0] if preferred_phrases else (derived_terms[0] if derived_terms else self._normalize_query(my_gig.title) or "service")
+        secondary_phrase = preferred_phrases[1] if len(preferred_phrases) > 1 else ""
+        haystack = " ".join([primary_phrase, secondary_phrase, *preferred_phrases, my_gig.title, *my_gig.tags]).lower()
+        if any(token in haystack for token in ["logo", "branding", "brand", "mascot", "anime", "esports", "stream"]):
+            mode = "design"
+        elif any(token in haystack for token in ["speed", "pagespeed", "page speed", "core web vitals", "gtmetrix", "woocommerce", "wordpress", "performance", "lcp", "cls"]):
+            mode = "performance"
+        else:
+            mode = "generic"
+        return {
+            "mode": mode,
+            "primary_phrase": primary_phrase,
+            "secondary_phrase": secondary_phrase,
+            "preferred_phrases": preferred_phrases,
+        }
+
+    def _generated_title_candidates(self, market_context: dict[str, Any]) -> list[str]:
+        primary_phrase = str(market_context["primary_phrase"]).strip()
+        secondary_phrase = str(market_context["secondary_phrase"]).strip()
+        mode = market_context["mode"]
+        if mode == "design":
+            service_phrase = primary_phrase if "logo" in primary_phrase.lower() else f"{primary_phrase} logo"
+            return self._dedupe_strings(
+                [
+                    f"I will design a custom {service_phrase}",
+                    f"I will create a professional {service_phrase} for your brand",
+                    f"I will make a clean {service_phrase} with a strong visual identity",
+                ]
+            )
+        if mode == "performance":
+            secondary_label = secondary_phrase.title() if secondary_phrase else "performance"
+            return self._dedupe_strings(
+                [
+                    f"I will optimize {primary_phrase} and improve {secondary_label}",
+                    f"I will fix {primary_phrase} issues with a clear audit and implementation plan",
+                    f"I will improve {primary_phrase} results with a manual optimization service",
+                ]
+            )
+        secondary_label = secondary_phrase.title() if secondary_phrase else "clear deliverables"
+        return self._dedupe_strings(
+            [
+                f"I will help with {primary_phrase}",
+                f"I will deliver {primary_phrase} with clear scope and fast turnaround",
+                f"I will improve your {primary_phrase} offer with {secondary_label}",
+            ]
+        )
+
+    def _faq_recommendations_for_market(
+        self,
+        *,
+        market_context: dict[str, Any],
+        fallback: list[str],
+    ) -> list[str]:
+        if market_context["mode"] == "design":
+            return [
+                "How many concepts or revision rounds are included?",
+                "Do you provide transparent PNG or source files?",
+                "Can you match a reference style or brand brief?",
+                "What do you need from me before starting the design?",
+                "Do you include commercial-use-ready delivery files?",
+            ]
+        if market_context["mode"] == "performance":
+            return fallback[:5]
+        return [
+            "What do you need from me before starting?",
+            "What exactly is included in this package?",
+            "How many revisions or refinements are included?",
+            "What turnaround should I expect after ordering?",
+            "What deliverables will I receive at the end?",
+        ]
+
     def _select_market_ready_title(
         self,
         title_variants: list[str],
         *,
         title_patterns: list[str],
         derived_terms: list[str],
+        market_context: dict[str, Any],
     ) -> str:
-        candidates = title_variants or ["I will optimize WordPress speed and improve Core Web Vitals"]
+        generated_candidates = self._generated_title_candidates(market_context)
+        candidates = self._dedupe_strings([*generated_candidates, *title_variants]) or generated_candidates
         preferred_phrases = self._prioritized_market_phrases(title_patterns=title_patterns, derived_terms=derived_terms)
         best_title = candidates[0]
         best_score = -1
@@ -1230,16 +1394,15 @@ class DashboardService:
             score = sum(4 for pattern in title_patterns if pattern and pattern.lower() in lowered)
             score += sum(2 for term in derived_terms if term and term.lower() in lowered)
             score += sum(3 for phrase in preferred_phrases[:3] if phrase and phrase.lower() in lowered)
-            if "wordpress" in lowered:
+            if market_context["mode"] == "performance" and "wordpress" in lowered:
                 score += 1
-            if "pagespeed" in lowered or "page speed" in lowered:
+            if market_context["mode"] == "performance" and ("pagespeed" in lowered or "page speed" in lowered):
                 score += 1
             if score > best_score:
                 best_score = score
                 best_title = candidate
-        if best_score <= 0 and preferred_phrases:
-            primary_term = preferred_phrases[0]
-            return f"I will optimize WordPress speed and improve {primary_term.title()}"
+        if best_score <= 0:
+            return generated_candidates[0]
         return best_title
 
     def _build_title_options(
@@ -1248,33 +1411,36 @@ class DashboardService:
         title_variants: list[str],
         title_patterns: list[str],
         derived_terms: list[str],
+        market_context: dict[str, Any],
     ) -> list[dict[str, str]]:
-        labels = [
-            ("Search Match", "Best for exact-match visibility against current market phrases."),
-            ("Trust Builder", "Best for stronger buyer confidence and before-and-after framing."),
-            ("Store Focus", "Best if you want to attract WooCommerce buyers and revenue-minded clients."),
-        ]
-        fallback_titles = [
-            "I will fix WordPress page speed and Core Web Vitals",
-            "I will speed up your WordPress site and improve PageSpeed Insights",
-            "I will optimize WooCommerce speed and improve checkout performance",
-        ]
-        candidates = title_variants[:]
+        if market_context["mode"] == "design":
+            labels = [
+                ("Search Match", "Best for exact-match visibility against the live design search term."),
+                ("Brand Fit", "Best for clients who care about style match and identity."),
+                ("Commercial Angle", "Best for buyers who want clear files, revisions, and ready-to-use delivery."),
+            ]
+        elif market_context["mode"] == "performance":
+            labels = [
+                ("Search Match", "Best for exact-match visibility against current market phrases."),
+                ("Trust Builder", "Best for stronger buyer confidence and before-and-after framing."),
+                ("Premium Angle", "Best for buyers who want clearer high-end scope and faster handling."),
+            ]
+        else:
+            labels = [
+                ("Search Match", "Best for exact-match visibility against the current market phrase."),
+                ("Trust Builder", "Best for stronger buyer confidence and scope clarity."),
+                ("Offer Clarity", "Best for buyers who need a clearer deliverable promise."),
+            ]
+        candidates = self._generated_title_candidates(market_context)
+        for variant in title_variants:
+            if variant and variant not in candidates:
+                candidates.append(variant)
         while len(candidates) < 3:
-            candidates.append(fallback_titles[len(candidates)])
-        preferred_phrases = self._prioritized_market_phrases(title_patterns=title_patterns, derived_terms=derived_terms)
-        primary_phrase = preferred_phrases[0] if preferred_phrases else "PageSpeed Insights"
-        secondary_phrase = preferred_phrases[1] if len(preferred_phrases) > 1 else "Core Web Vitals"
+            candidates.append(candidates[-1])
 
         options: list[dict[str, str]] = []
         for index, (label, rationale) in enumerate(labels):
             title = candidates[index]
-            if label == "Search Match" and primary_phrase.lower() not in title.lower():
-                title = f"I will optimize WordPress speed and improve {primary_phrase.title()}"
-            if label == "Trust Builder" and secondary_phrase.lower() not in title.lower():
-                title = f"I will optimize WordPress speed, {secondary_phrase.lower()}, and GTmetrix results"
-            if label == "Store Focus" and not any("woocommerce" in item.lower() for item in [title, *derived_terms, *title_patterns]):
-                title = "I will optimize WooCommerce speed and improve Core Web Vitals"
             options.append(
                 {
                     "label": label,
@@ -1308,8 +1474,8 @@ class DashboardService:
                 f"Your visible starting price sits close to the live market anchor of about ${market_anchor_price:.0f}; compete on proof and clarity instead of discounting."
             )
 
-        recommendations.append("Use the Standard package as the value anchor by bundling fixes with a before-and-after verification report.")
-        recommendations.append("Give Premium a stronger reason to exist, such as rush delivery, WooCommerce focus, or post-fix monitoring.")
+        recommendations.append("Use the Standard package as the value anchor by spelling out clearer deliverables, revisions, or reporting.")
+        recommendations.append("Give Premium a stronger reason to exist, such as faster turnaround, more complete delivery, or deeper scope.")
         return self._dedupe_strings(recommendations)[:4]
 
     def _recommended_market_tags(
@@ -1343,42 +1509,86 @@ class DashboardService:
         title_patterns: list[str],
         optimization_report: OptimizationReport,
         analysis,
+        market_context: dict[str, Any],
     ) -> dict[str, Any]:
-        preferred_phrases = self._prioritized_market_phrases(title_patterns=title_patterns, derived_terms=derived_terms)
-        keyword_primary = preferred_phrases[0] if preferred_phrases else "PageSpeed Insights"
-        keyword_secondary = preferred_phrases[1] if len(preferred_phrases) > 1 else "Core Web Vitals"
-        hook = (
-            f"Need a faster WordPress site with stronger {keyword_primary.title()} and {keyword_secondary.title()} results? "
-            f"I will audit and optimize the issues slowing your site so you can improve speed, user experience, and conversions."
-        )
-        blueprint = [
-            hook,
-            "Lead with the business impact: explain that slow WordPress pages hurt rankings, leads, and checkout completions.",
-            "List the exact problems you fix: render-blocking assets, image bloat, plugin overhead, cache issues, and Core Web Vitals gaps like LCP and CLS.",
-            "Spell out deliverables: manual speed audit, fixes within scope, before-and-after report, and clear notes on hosting or server limits.",
-            "Add a trust block: mention the types of sites you handle, required access, and what score improvements are realistic without making guarantees.",
-        ]
-        if optimization_report.description_recommendations:
-            blueprint.extend(optimization_report.description_recommendations[:2])
+        primary_phrase = market_context["primary_phrase"].title()
+        secondary_phrase = market_context["secondary_phrase"].title()
+        if market_context["mode"] == "design":
+            hook = (
+                f"Need a standout {primary_phrase.lower()} that feels custom instead of generic? "
+                "I will design a concept that matches your brand, channel, or project style."
+            )
+            blueprint = [
+                hook,
+                "Lead with the style and identity outcome buyers want, not just the process.",
+                "Spell out concepts, revision scope, file types, and whether commercial-use-ready delivery is included.",
+                "Explain what references, colors, or brand details the buyer should send before work starts.",
+                "Use one short trust block about turnaround, revision flow, and final delivery.",
+            ]
+            description_lines = [
+                hook,
+                "",
+                "What you get:",
+                f"- A custom {primary_phrase.lower()} concept built around your brand or audience",
+                f"- Clear style direction that matches {secondary_phrase.lower() if secondary_phrase else 'the current market demand'}",
+                "- Transparent delivery details for revisions, file types, and final handoff",
+                "",
+                "Before I start, send your brand name, preferred colors, reference styles, and where the design will be used.",
+            ]
+        elif market_context["mode"] == "performance":
+            hook = (
+                f"Need a faster site with stronger {primary_phrase} and {secondary_phrase or 'performance'} results? "
+                "I will audit and improve the issues slowing your pages so the offer feels faster, clearer, and easier to trust."
+            )
+            blueprint = [
+                hook,
+                "Lead with the business impact: explain how slow pages hurt clicks, trust, and conversions.",
+                "List the exact bottlenecks you fix, the scope you handle, and any hosting or platform limits.",
+                "Spell out deliverables clearly: diagnosis, implementation scope, and a before-and-after summary.",
+                "Add a trust block that explains access needs, realistic outcomes, and what is included.",
+            ]
+            if optimization_report.description_recommendations:
+                blueprint.extend(optimization_report.description_recommendations[:2])
+            description_lines = [
+                hook,
+                "",
+                "What I improve:",
+                "- Technical and front-end bottlenecks affecting load speed and buyer experience",
+                f"- Search-facing issues tied to {primary_phrase} and {secondary_phrase or 'site performance'}",
+                "- Clear reporting, deliverables, and scope so buyers know what is changing",
+                "",
+                "What you get:",
+                "- A clear audit or diagnosis of the biggest bottlenecks",
+                "- Hands-on implementation within the agreed scope",
+                "- Before-and-after notes so the result is easy to understand",
+                "",
+                "Before I start, send the access needed for the work and note any hosting or platform limits.",
+            ]
+        else:
+            hook = (
+                f"Need help with {primary_phrase.lower()} and want a clearer, more confidence-building offer? "
+                "I will position the gig around buyer intent, deliverables, and a cleaner first impression."
+            )
+            blueprint = [
+                hook,
+                "Lead with the buyer outcome instead of generic process language.",
+                "List the scope, deliverables, turnaround, and any key exclusions in plain English.",
+                "Bring the exact search phrase higher in the title and opening paragraph.",
+                "Add trust signals such as proof, revisions, process clarity, or concrete outcomes.",
+            ]
+            description_lines = [
+                hook,
+                "",
+                "What I cover:",
+                f"- The exact buyer need behind {primary_phrase.lower()}",
+                "- Clear deliverables, scope, and turnaround expectations",
+                "- A stronger first paragraph that answers what buyers get and why it matters",
+                "",
+                "Before I start, send the details, references, or access needed to complete the work well.",
+            ]
         if analysis and analysis.what_to_implement:
             blueprint.extend(analysis.what_to_implement[:2])
         deduped_blueprint = self._dedupe_strings(blueprint)[:6]
-        description_lines = [
-            hook,
-            "",
-            "What I improve:",
-            "- WordPress speed bottlenecks affecting mobile and desktop performance",
-            "- Core Web Vitals issues like LCP, CLS, and render-blocking assets",
-            "- PageSpeed Insights and GTmetrix issues caused by theme, plugin, image, or script bloat",
-            "",
-            "What you get:",
-            "- A manual performance audit with clear issue mapping",
-            "- Speed optimization work within the agreed scope",
-            "- Before-and-after reporting so you can see what changed",
-            "- Clear guidance on anything limited by hosting or server-side constraints",
-            "",
-            "Before I start, send the access needed for WordPress, cache/CDN, and hosting when relevant.",
-        ]
         if my_gig.description_excerpt:
             description_lines.extend(
                 [
@@ -1400,56 +1610,124 @@ class DashboardService:
         optimization_report: OptimizationReport,
         derived_terms: list[str],
         title_patterns: list[str],
+        market_context: dict[str, Any],
     ) -> list[dict[str, Any]]:
-        preferred_phrases = self._prioritized_market_phrases(title_patterns=title_patterns, derived_terms=derived_terms)
-        primary_pattern = preferred_phrases[0].title() if preferred_phrases else "PageSpeed Insights"
-        secondary_pattern = preferred_phrases[1].title() if len(preferred_phrases) > 1 else "Core Web Vitals"
-        description_recommendations = optimization_report.description_recommendations[:3]
-        base_access_line = "Before I start, send WordPress, cache/CDN, and hosting access if server-level changes are needed."
-        options = [
-            {
-                "label": "Conversion Focus",
-                "summary": "Use this if you want the gig to speak to business owners who care about leads and lost visitors.",
-                "text": (
-                    f"Is your slow WordPress site costing you visitors, leads, or sales? I will improve {primary_pattern} and {secondary_pattern} performance so your site feels faster and converts better.\n\n"
-                    "What I improve:\n"
-                    "- Slow-loading pages, images, scripts, and plugin bottlenecks\n"
-                    "- Core Web Vitals issues hurting user experience and trust\n"
-                    "- PageSpeed and GTmetrix issues that keep your site feeling heavy\n\n"
-                    "What you get:\n"
-                    "- A manual speed audit\n"
-                    "- Fixes within the agreed scope\n"
-                    "- Before-and-after reporting so you can see the result\n\n"
-                    f"{base_access_line}"
-                ),
-            },
-            {
-                "label": "Technical Proof",
-                "summary": "Use this if you want to attract buyers searching for exact tools and metrics like PageSpeed Insights, LCP, or GTmetrix.",
-                "text": (
-                    f"I will audit and optimize WordPress speed issues affecting {primary_pattern}, {secondary_pattern}, GTmetrix, LCP, CLS, and overall front-end performance.\n\n"
-                    "This service is ideal for plugin-heavy WordPress sites, Elementor builds, and sites slowed down by asset bloat, cache conflicts, or poor media handling.\n\n"
-                    "Deliverables:\n"
-                    "- Performance diagnosis\n"
-                    "- Optimization fixes within scope\n"
-                    "- Before-and-after benchmark summary\n\n"
-                    f"{base_access_line}"
-                ),
-            },
-            {
-                "label": "WooCommerce Angle",
-                "summary": "Use this if you want to lean into product-page speed, cart flow, and checkout performance.",
-                "text": (
-                    "I help WooCommerce store owners fix slow product pages, category pages, cart flow, and checkout performance so the site loads faster and the buying experience feels smoother.\n\n"
-                    f"I will improve WordPress speed, {secondary_pattern}, and buyer-facing performance issues caused by heavy themes, apps, scripts, or image weight.\n\n"
-                    "What you get:\n"
-                    "- Store-focused speed audit\n"
-                    "- Optimization work for the highest-impact bottlenecks\n"
-                    "- Clear before-and-after reporting and next-step notes\n\n"
-                    f"{base_access_line}"
-                ),
-            },
-        ]
+        primary_pattern = market_context["primary_phrase"].title()
+        secondary_pattern = market_context["secondary_phrase"].title()
+        description_recommendations = (
+            optimization_report.description_recommendations[:3]
+            if market_context["mode"] == "performance"
+            else []
+        )
+        if market_context["mode"] == "design":
+            base_access_line = "Before I start, send your brand name, color ideas, reference styles, and where the design will be used."
+            options = [
+                {
+                    "label": "Brand Fit",
+                    "summary": "Use this if you want buyers to feel the design will match their identity and audience.",
+                    "text": (
+                        f"I will design a custom {primary_pattern.lower()} that fits your brand, audience, and visual direction.\n\n"
+                        "What you get:\n"
+                        "- A structured brief review\n"
+                        "- Concept work within the selected package\n"
+                        "- Clear revision and delivery expectations\n\n"
+                        f"{base_access_line}"
+                    ),
+                },
+                {
+                    "label": "Streamer Style",
+                    "summary": "Use this if you want to attract creators, gaming brands, or anime-styled channels.",
+                    "text": (
+                        f"I create {primary_pattern.lower()} concepts for creators, streamers, and brands that want a stronger stylized identity.\n\n"
+                        "Deliverables:\n"
+                        "- Style-matched concept work\n"
+                        "- Revision structure explained up front\n"
+                        "- Final file delivery clarified before order\n\n"
+                        f"{base_access_line}"
+                    ),
+                },
+                {
+                    "label": "Commercial Clarity",
+                    "summary": "Use this if you want buyers to understand the deliverables before they order.",
+                    "text": (
+                        f"I will create a clean {primary_pattern.lower()} and spell out the exact files, revision scope, and usage details so there is no confusion before checkout.\n\n"
+                        f"{base_access_line}"
+                    ),
+                },
+            ]
+        elif market_context["mode"] == "performance":
+            base_access_line = "Before I start, send the access needed for the work and note any hosting or platform limits."
+            options = [
+                {
+                    "label": "Conversion Focus",
+                    "summary": "Use this if you want the gig to speak to buyers who care about business impact and clarity.",
+                    "text": (
+                        f"Is a slow site costing you clicks, leads, or trust? I will improve {primary_pattern} and {secondary_pattern or 'performance'} signals so the experience feels faster and cleaner.\n\n"
+                        "What I improve:\n"
+                        "- Technical and front-end bottlenecks affecting load speed and user experience\n"
+                        f"- Issues tied to {primary_pattern} and {secondary_pattern or 'site performance'}\n"
+                        "- Clear reporting, deliverables, and scope so the buyer knows what is changing\n\n"
+                        "What you get:\n"
+                        "- Audit or diagnosis\n"
+                        "- Fixes within the agreed scope\n"
+                        "- Before-and-after notes\n\n"
+                        f"{base_access_line}"
+                    ),
+                },
+                {
+                    "label": "Technical Proof",
+                    "summary": "Use this if you want to attract buyers searching for exact technical phrases and deliverables.",
+                    "text": (
+                        f"I will diagnose and improve problems affecting {primary_pattern}, {secondary_pattern or 'site performance'}, and buyer-facing load speed.\n\n"
+                        "This service is positioned for buyers who want exact deliverables, clear scope, and proof of what changed.\n\n"
+                        "Deliverables:\n"
+                        "- Diagnosis of the bottlenecks\n"
+                        "- Implementation work within scope\n"
+                        "- Clear result summary\n\n"
+                        f"{base_access_line}"
+                    ),
+                },
+                {
+                    "label": "Premium Angle",
+                    "summary": "Use this if you want the higher package to feel more valuable and outcome-driven.",
+                    "text": (
+                        f"I position this offer around {primary_pattern}, stronger trust proof, and faster delivery so the higher packages feel justified instead of vague.\n\n"
+                        "What you get:\n"
+                        "- Priority handling\n"
+                        "- Clearer premium deliverables\n"
+                        "- Stronger before-and-after proof language\n\n"
+                        f"{base_access_line}"
+                    ),
+                },
+            ]
+        else:
+            base_access_line = "Before I start, send the details, references, or access needed to complete the work well."
+            options = [
+                {
+                    "label": "Search Match",
+                    "summary": "Use this if you want the opening paragraph to align tightly with the exact market phrase.",
+                    "text": (
+                        f"I help buyers who are searching for {primary_pattern.lower()} by making the offer clearer, more specific, and easier to trust.\n\n"
+                        f"{base_access_line}"
+                    ),
+                },
+                {
+                    "label": "Trust Builder",
+                    "summary": "Use this if you want stronger proof, clearer scope, and less buyer hesitation.",
+                    "text": (
+                        f"I will position this service around {primary_pattern.lower()}, clear deliverables, and visible buyer reassurance so the offer feels easier to order.\n\n"
+                        f"{base_access_line}"
+                    ),
+                },
+                {
+                    "label": "Offer Clarity",
+                    "summary": "Use this if you want the gig to explain exactly what buyers get and what happens next.",
+                    "text": (
+                        f"I will rewrite this offer around the buyer need, exact deliverables, and a stronger first impression for {primary_pattern.lower()}.\n\n"
+                        f"{base_access_line}"
+                    ),
+                },
+            ]
         for option, title_option in zip(options, title_options):
             option["paired_title"] = title_option["title"]
         if description_recommendations:
@@ -1458,17 +1736,27 @@ class DashboardService:
         return options
 
     def _prioritized_market_phrases(self, *, title_patterns: list[str], derived_terms: list[str]) -> list[str]:
-        priority = [
-            "pagespeed insights",
-            "core web vitals",
-            "wordpress speed",
-            "woocommerce speed",
-            "gtmetrix",
-            "page speed",
-            "speed optimization",
-            "performance audit",
-        ]
         combined = self._dedupe_strings([*title_patterns, *derived_terms])
+        if not combined:
+            return []
+        is_performance = any(
+            token in " ".join(combined).lower()
+            for token in ["speed", "pagespeed", "page speed", "core web vitals", "gtmetrix", "woocommerce", "wordpress"]
+        )
+        priority = (
+            [
+                "pagespeed insights",
+                "core web vitals",
+                "wordpress speed",
+                "woocommerce speed",
+                "gtmetrix",
+                "page speed",
+                "speed optimization",
+                "performance audit",
+            ]
+            if is_performance
+            else []
+        )
         ranked: list[str] = []
         for preferred in priority:
             for candidate in combined:
@@ -1484,38 +1772,82 @@ class DashboardService:
                 ranked.append(candidate)
         return ranked[:5]
 
-    def _recommended_packages(self, *, market_anchor_price: float | None, current_price: float | None) -> list[dict[str, Any]]:
+    def _recommended_packages(
+        self,
+        *,
+        market_anchor_price: float | None,
+        current_price: float | None,
+        market_context: dict[str, Any],
+    ) -> list[dict[str, Any]]:
         anchor = market_anchor_price or current_price or 55.0
         basic_price = max(25.0, round(anchor * 0.75))
         standard_price = max(basic_price + 10, round(anchor))
         premium_price = max(standard_price + 20, round(anchor * 1.6))
+        if market_context["mode"] == "design":
+            focuses = [
+                "A starter concept with clearly defined revision scope and final delivery details.",
+                "A more polished concept package with stronger refinement and cleaner asset delivery.",
+                "A brand-ready package with priority handling, deeper scope, or extra deliverables.",
+            ]
+        elif market_context["mode"] == "performance":
+            focuses = [
+                "A starter package for the highest-impact issues buyers care about first.",
+                "A fuller implementation package with clearer reporting and stronger deliverables.",
+                "A deeper premium scope with priority handling and extra implementation depth.",
+            ]
+        else:
+            focuses = [
+                "A simple starter offer with clear scope and a fast entry point.",
+                "A stronger value package with clearer deliverables and more complete work.",
+                "A premium package with faster turnaround or higher-touch delivery.",
+            ]
         return [
             {
                 "name": "Basic",
                 "price": basic_price,
-                "focus": "Audit plus the highest-impact quick wins for PageSpeed Insights and Core Web Vitals.",
+                "focus": focuses[0],
             },
             {
                 "name": "Standard",
                 "price": standard_price,
-                "focus": "Full WordPress speed optimization with before-and-after reporting.",
+                "focus": focuses[1],
             },
             {
                 "name": "Premium",
                 "price": premium_price,
-                "focus": "Deeper optimization for plugin-heavy or WooCommerce sites plus priority turnaround.",
+                "focus": focuses[2],
             },
         ]
 
-    def _trust_boosters(self, analysis, optimization_report: OptimizationReport) -> list[str]:
-        items = [
-            "Add one concrete before-and-after result near the top of the gig.",
-            "Mention the exact tools buyers recognize, especially PageSpeed Insights and GTmetrix.",
-            "Show what access is needed and what deliverables buyers receive after the optimization.",
-        ]
+    def _trust_boosters(
+        self,
+        analysis,
+        optimization_report: OptimizationReport,
+        *,
+        market_context: dict[str, Any],
+    ) -> list[str]:
+        if market_context["mode"] == "design":
+            items = [
+                "Show one strong sample or style reference near the top of the gig.",
+                "State revision scope, file delivery, and commercial-use details clearly.",
+                "Explain how buyers should brief you so the order feels lower risk.",
+            ]
+        elif market_context["mode"] == "performance":
+            items = [
+                "Add one concrete before-and-after result near the top of the gig.",
+                "Mention the exact tools or metrics buyers recognize in this niche.",
+                "Show what access is needed and what deliverables buyers receive after the work.",
+            ]
+        else:
+            items = [
+                "Add one concrete proof point near the top of the gig.",
+                "Spell out deliverables, timeline, and revision or support scope clearly.",
+                "Reduce buyer hesitation by explaining exactly how the work starts and what is included.",
+            ]
         if analysis and analysis.why_competitors_win:
             items.extend(analysis.why_competitors_win[:2])
-        items.extend(optimization_report.review_actions[:2])
+        if market_context["mode"] == "performance":
+            items.extend(optimization_report.review_actions[:2])
         return self._dedupe_strings(items)[:5]
 
     def _prioritized_actions(
@@ -1528,10 +1860,21 @@ class DashboardService:
         analysis,
         market_anchor_price: float | None,
         optimization_report: OptimizationReport,
+        market_context: dict[str, Any],
     ) -> list[dict[str, Any]]:
         action_specs: list[dict[str, Any]] = []
         current_price = my_gig.starting_price
         review_count = int(my_gig.reviews_count or 0)
+        primary_phrase = str(market_context["primary_phrase"]).strip()
+        if market_context["mode"] == "design":
+            description_action_text = "Rewrite the first paragraph around style fit, deliverables, and clear revision/file expectations."
+            trust_action_text = "Add portfolio proof, revision clarity, and delivery-file details near the top of the gig."
+        elif market_context["mode"] == "performance":
+            description_action_text = "Rewrite the first paragraph around business impact, exact search phrases, and clear deliverables."
+            trust_action_text = "Add before-and-after proof, tool names, and clearer deliverables near the top of the gig."
+        else:
+            description_action_text = f"Rewrite the first paragraph around '{primary_phrase}', buyer outcome, and clear deliverables."
+            trust_action_text = "Add stronger proof, clearer scope, and visible buyer reassurance near the top of the gig."
 
         action_specs.append(
             self._scored_action(
@@ -1561,7 +1904,7 @@ class DashboardService:
         action_specs.append(
             self._scored_action(
                 action_type="description_update",
-                action_text="Rewrite the first paragraph around business impact, PageSpeed Insights, and exact deliverables.",
+                action_text=description_action_text,
                 proposed_value=description_pack.get("full_text", ""),
                 base_gain=9,
                 confidence_base=81,
@@ -1588,7 +1931,7 @@ class DashboardService:
         action_specs.append(
             self._scored_action(
                 action_type="trust_booster",
-                action_text="Add before-and-after proof, tool names, and clearer deliverables near the top of the gig.",
+                action_text=trust_action_text,
                 proposed_value=optimization_report.review_actions[:3],
                 base_gain=13 if review_count <= 5 else 7,
                 confidence_base=79,
@@ -1636,7 +1979,7 @@ class DashboardService:
         top_text = top_action.get("action_text", "")
         top_gain = top_action.get("expected_gain")
         summary = (
-            f"Update the gig title to '{title}', align the first paragraph around speed + business impact, "
+            f"Update the gig title to '{title}', align the first paragraph around buyer intent + clear deliverables, "
             f"and rotate tags toward {', '.join(tags[:3]) or 'market-intent keywords'}."
         )
         if top_text and top_gain is not None:
@@ -2137,17 +2480,50 @@ class DashboardService:
         cleaned = re.sub(r"\s+", " ", cleaned)
         return cleaned[:80].strip()
 
-    def _build_snapshot_from_gig(self, my_gig: GigPageOverview, base_snapshot: GigSnapshot) -> GigSnapshot:
+    def _should_use_snapshot_marketplace_fallback(
+        self,
+        *,
+        explicit_terms: list[str],
+        my_gig: GigPageOverview,
+        snapshot: GigSnapshot,
+        derived_terms: list[str],
+    ) -> bool:
+        if not explicit_terms:
+            return True
+        haystack = " ".join(
+            [
+                snapshot.niche,
+                snapshot.title,
+                snapshot.description,
+                *snapshot.tags,
+                my_gig.title,
+                my_gig.description_excerpt,
+                *my_gig.tags,
+            ]
+        ).lower()
+        normalized_terms = [self._normalize_query(item).lower() for item in explicit_terms if self._normalize_query(item)]
+        if not normalized_terms:
+            return True
+        return any(term in haystack for term in normalized_terms[:3])
+
+    def _build_snapshot_from_gig(
+        self,
+        my_gig: GigPageOverview,
+        base_snapshot: GigSnapshot,
+        *,
+        derived_terms: list[str] | None = None,
+    ) -> GigSnapshot:
         package_price = my_gig.starting_price if my_gig.starting_price is not None else (
             min((package.price for package in base_snapshot.packages), default=39.0)
         )
         review_count = min(max(int(my_gig.reviews_count or len(base_snapshot.reviews) or 0), 0), 25)
         review_rating = int(round(my_gig.rating or 5))
+        merged_tags = self._dedupe_strings([*(derived_terms or []), *my_gig.tags, *base_snapshot.tags])
         return GigSnapshot(
-            niche=base_snapshot.niche,
+            niche=(derived_terms[0] if derived_terms else base_snapshot.niche),
             title=my_gig.title or base_snapshot.title,
             description=my_gig.description_excerpt or base_snapshot.description,
-            tags=my_gig.tags or base_snapshot.tags,
+            tags=merged_tags or base_snapshot.tags,
             faq=base_snapshot.faq,
             packages=[GigPackage(name="My Gig", price=package_price)],
             analytics=base_snapshot.analytics,
