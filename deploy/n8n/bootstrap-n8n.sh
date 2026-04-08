@@ -20,5 +20,21 @@ until docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" exec -T n8n w
   sleep 5
 done
 
-docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" exec -T n8n n8n import:workflow --input="${WORKFLOW_FILE}"
+workflow_id="$(
+  docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" exec -T n8n n8n list:workflow \
+    | awk -F'|' '$2 ~ /GigOptimizer Assistant Webhook/ {print $1; exit}'
+)"
+
+if [ -z "${workflow_id}" ]; then
+  docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" exec -T n8n n8n import:workflow --input="${WORKFLOW_FILE}"
+  workflow_id="$(
+    docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" exec -T n8n n8n list:workflow \
+      | awk -F'|' '$2 ~ /GigOptimizer Assistant Webhook/ {print $1; exit}'
+  )"
+fi
+
+if [ -n "${workflow_id}" ]; then
+  docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" exec -T n8n n8n update:workflow --id="${workflow_id}" --active=true
+fi
+
 docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" restart n8n
