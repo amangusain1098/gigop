@@ -377,10 +377,10 @@ class WhatsAppSettings:
 @dataclass(slots=True)
 class AISettings:
     enabled: bool = False
-    provider: str = "openai"
-    model: str = "gpt-5.4-mini"
+    provider: str = "n8n"
+    model: str = "webhook"
     api_key: str = ""
-    api_base_url: str = "https://api.openai.com/v1"
+    api_base_url: str = ""
 
 
 @dataclass(slots=True)

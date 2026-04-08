@@ -389,20 +389,21 @@ The app includes a lightweight AI overview connector for executive summaries and
 
 Current provider wiring:
 
-- OpenAI-compatible `Responses` API endpoint
+- `n8n` webhook mode for the floating copilot
+- OpenAI-compatible `Responses` API endpoint for direct in-app summaries when you want it
 
 Recommended low-cost setup:
 
-- provider: `openai`
-- model: `gpt-5.4-mini`
+- provider: `n8n`
+- model: `webhook`
 
 Relevant `.env` values:
 
 ```powershell
-AI_PROVIDER=openai
-AI_MODEL=gpt-5.4-mini
+AI_PROVIDER=n8n
+AI_MODEL=webhook
 AI_API_KEY=
-AI_API_BASE_URL=https://api.openai.com/v1
+AI_API_BASE_URL=https://your-n8n-domain/webhook/gigoptimizer-assistant
 ```
 
 You can also manage these from the protected dashboard configuration panel.

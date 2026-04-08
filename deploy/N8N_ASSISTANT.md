@@ -5,7 +5,17 @@ GigOptimizer Pro now supports an `n8n` assistant mode through the existing AI se
 Use these settings:
 
 - `AI_PROVIDER=n8n`
-- `AI_API_BASE_URL=https://your-n8n-domain/webhook/gigoptimizer-assistant`
+- `AI_API_BASE_URL=http://n8n:5678/webhook/gigoptimizer-assistant`
+
+For the production Docker stack in this repo, the `n8n` service runs on the private Docker network, so the app can call it without exposing the webhook publicly.
+
+Bootstrap the bundled workflow with:
+
+```bash
+bash deploy/n8n/bootstrap-n8n.sh
+```
+
+That imports [deploy/n8n/gigoptimizer-assistant-workflow.json](./n8n/gigoptimizer-assistant-workflow.json), which provides a lightweight webhook-based copilot for the floating assistant.
 
 GigOptimizer sends:
 
@@ -46,11 +56,10 @@ Your n8n webhook should respond with:
 }
 ```
 
-Suggested n8n flow:
+Bundled n8n flow:
 
 1. `Webhook` node receives the GigOptimizer payload.
-2. `Code` node compresses the context into a short working summary.
-3. `OpenAI` or other LLM node generates the answer.
-4. `Respond to Webhook` returns `reply` and `suggestions`.
+2. `Code` node turns the market context into a short actionable answer.
+3. `Respond to Webhook` returns `reply` and `suggestions`.
 
-Use this mode when you want the assistant orchestration outside the app while keeping the same floating copilot UI inside GigOptimizer.
+Use this mode when you want the assistant orchestration outside the app while keeping the same floating copilot UI inside GigOptimizer. You can later swap the `Code` node for OpenAI, Anthropic, a vector-search step, or your future in-app training workflow without changing the dashboard UI.

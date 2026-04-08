@@ -88,6 +88,37 @@ services:
     networks:
       - gigoptimizer_net
 
+  n8n:
+    image: n8nio/n8n:1.91.3
+    restart: unless-stopped
+    env_file:
+      - ../.env.production
+    environment:
+      N8N_HOST: n8n
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      WEBHOOK_URL: http://n8n:5678/
+      N8N_EDITOR_BASE_URL: http://n8n:5678/
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      N8N_SECURE_COOKIE: "false"
+      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
+      N8N_RUNNERS_ENABLED: "true"
+      DB_TYPE: sqlite
+      DB_SQLITE_DATABASE: /home/node/.n8n/database.sqlite
+      GENERIC_TIMEZONE: Asia/Calcutta
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n:/imports:ro
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:5678/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    networks:
+      - gigoptimizer_net
+
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -184,6 +215,7 @@ volumes:
   playwright_data:
   postgres_data:
   redis_data:
+  n8n_data:
   certbot_www:
   letsencrypt:
 

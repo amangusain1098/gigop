@@ -437,6 +437,12 @@ pre {
   line-height: 1.55;
 }
 
+.assistant-subtitle {
+  margin: 8px 0 0;
+  color: #91a6be;
+  font-size: 0.84rem;
+}
+
 .assistant-compose {
   display: grid;
   gap: 12px;

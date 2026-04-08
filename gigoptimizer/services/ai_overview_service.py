@@ -21,6 +21,8 @@ class AIOverviewService:
                 "summary": "",
                 "next_steps": [],
             }
+        if settings.provider == "n8n":
+            return self._n8n_overview(report, settings.api_base_url)
         if settings.provider != "openai":
             return self._local_overview(
                 report,
@@ -272,6 +274,55 @@ class AIOverviewService:
             "model": "webhook",
             "reply": reply,
             "suggestions": suggestions[:3],
+        }
+
+    def _n8n_overview(self, report: dict, webhook_url: str) -> dict:
+        url = webhook_url.strip()
+        if not url:
+            return self._local_overview(
+                report,
+                provider="n8n",
+                model="webhook",
+                reason="n8n mode is enabled but the webhook URL is not configured, so the app generated a local fallback summary.",
+            )
+        payload = {
+            "mode": "overview",
+            "report": report,
+        }
+        request = Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json; charset=utf-8"},
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=30) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except (HTTPError, URLError) as exc:
+            return self._local_overview(
+                report,
+                provider="n8n",
+                model="webhook",
+                reason=f"n8n overview request failed, so the app generated a local fallback summary. {exc}",
+            )
+
+        summary = str(data.get("summary", "")).strip() or str(data.get("reply", "")).strip()
+        next_steps = [str(item).strip() for item in data.get("next_steps", []) if str(item).strip()]
+        if not next_steps:
+            next_steps = [str(item).strip() for item in data.get("suggestions", []) if str(item).strip()]
+        if not summary:
+            return self._local_overview(
+                report,
+                provider="n8n",
+                model="webhook",
+                reason="n8n overview returned no summary, so the app generated a local fallback summary.",
+            )
+        return {
+            "status": "ok",
+            "provider": "n8n",
+            "model": "webhook",
+            "summary": summary,
+            "next_steps": next_steps[:3],
         }
 
     def _local_overview(self, report: dict, *, provider: str, model: str, reason: str) -> dict:

@@ -139,7 +139,7 @@ class SettingsService:
             },
             "ai": {
                 "enabled": settings.ai.enabled,
-                "configured": bool(settings.ai.api_key),
+                "configured": self._ai_is_configured(settings.ai),
                 "provider": settings.ai.provider,
                 "model": settings.ai.model,
                 "api_base_url": settings.ai.api_base_url,
@@ -343,6 +343,13 @@ class SettingsService:
                 serpapi_num_results=self.config.serpapi_num_results,
             ),
         )
+
+    def _ai_is_configured(self, settings: AISettings) -> bool:
+        if settings.provider == "n8n":
+            return bool(settings.api_base_url)
+        if settings.provider == "openai":
+            return bool(settings.api_key)
+        return bool(settings.api_base_url or settings.api_key)
 
     def _parse_list(self, value) -> list[str]:
         if not value:

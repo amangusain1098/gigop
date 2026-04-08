@@ -8,7 +8,7 @@ ENV_FILE="${ROOT_DIR}/.env.production"
 cd "${ROOT_DIR}"
 
 docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" build app worker scheduler
-docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" up -d postgres redis
+docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" up -d postgres redis n8n
 
 if docker ps --format '{{.Names}}' | grep -q '^traefik-'; then
   docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" rm -sf nginx certbot >/dev/null 2>&1 || true

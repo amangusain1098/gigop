@@ -126,10 +126,10 @@ class GigOptimizerConfig:
     whatsapp_phone_number_id: str = ""
     whatsapp_recipient_number: str = ""
     whatsapp_api_version: str = "v23.0"
-    ai_provider: str = "openai"
-    ai_model: str = "gpt-5.4-mini"
+    ai_provider: str = "n8n"
+    ai_model: str = "webhook"
     ai_api_key: str = ""
-    ai_api_base_url: str = "https://api.openai.com/v1"
+    ai_api_base_url: str = ""
     hostinger_enabled: bool = False
     hostinger_api_base_url: str = "https://developers.hostinger.com"
     hostinger_api_token: str = ""
@@ -322,10 +322,10 @@ class GigOptimizerConfig:
             whatsapp_phone_number_id=os.getenv("WHATSAPP_PHONE_NUMBER_ID", "").strip(),
             whatsapp_recipient_number=os.getenv("WHATSAPP_RECIPIENT_NUMBER", "").strip(),
             whatsapp_api_version=os.getenv("WHATSAPP_API_VERSION", "v23.0").strip() or "v23.0",
-            ai_provider=os.getenv("AI_PROVIDER", "openai").strip() or "openai",
-            ai_model=os.getenv("AI_MODEL", "gpt-5.4-mini").strip() or "gpt-5.4-mini",
+            ai_provider=os.getenv("AI_PROVIDER", "n8n").strip() or "n8n",
+            ai_model=os.getenv("AI_MODEL", "webhook").strip() or "webhook",
             ai_api_key=os.getenv("AI_API_KEY", "").strip(),
-            ai_api_base_url=os.getenv("AI_API_BASE_URL", "https://api.openai.com/v1").strip() or "https://api.openai.com/v1",
+            ai_api_base_url=os.getenv("AI_API_BASE_URL", "").strip(),
             hostinger_enabled=_get_bool("HOSTINGER_ENABLED", False),
             hostinger_api_base_url=(
                 os.getenv("HOSTINGER_API_BASE_URL", "https://developers.hostinger.com").strip()

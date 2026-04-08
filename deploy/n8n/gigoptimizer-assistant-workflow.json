@@ -1,0 +1,77 @@
+{
+  "name": "GigOptimizer Assistant Webhook",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "gigoptimizer-assistant",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-node",
+      "name": "Assistant Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        260,
+        300
+      ],
+      "webhookId": "gigoptimizer-assistant"
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = $json.body ?? $json;\nconst message = String(payload.message ?? '').trim();\nconst context = payload.context ?? {};\nconst recommendedTitle = String(context.recommended_title ?? '').trim();\nconst recommendedTags = Array.isArray(context.recommended_tags) ? context.recommended_tags.filter(Boolean) : [];\nconst why = Array.isArray(context.why_competitors_win) ? context.why_competitors_win.filter(Boolean) : [];\nconst actions = Array.isArray(context.what_to_implement) ? context.what_to_implement.filter(Boolean) : [];\nconst pricing = Array.isArray(context.pricing_strategy) ? context.pricing_strategy.filter(Boolean) : [];\nconst trust = Array.isArray(context.trust_boosters) ? context.trust_boosters.filter(Boolean) : [];\nconst faqs = Array.isArray(context.faq_recommendations) ? context.faq_recommendations.filter(Boolean) : [];\nlet reply = 'Use the current market gaps to tighten your gig before changing anything else.';\nlet suggestions = [];\nconst lower = message.toLowerCase();\nif (lower.includes('title') || lower.includes('headline')) {\n  reply = recommendedTitle ? `Your strongest current title option is: ${recommendedTitle}` : 'Run a fresh market compare so the app can generate a stronger title.';\n  suggestions = actions.slice(0, 2);\n} else if (lower.includes('tag') || lower.includes('keyword')) {\n  reply = recommendedTags.length ? `Your current market-aligned tags are: ${recommendedTags.slice(0, 5).join(', ')}.` : 'Run a fresh market compare so the app can generate updated keyword tags.';\n  suggestions = actions.slice(0, 2);\n} else if (lower.includes('price') || lower.includes('pricing') || lower.includes('package')) {\n  reply = pricing[0] || 'Your current pricing needs a fresh compare run before it can be scored against the market anchor.';\n  suggestions = pricing.slice(1, 4);\n} else if (lower.includes('trust') || lower.includes('review') || lower.includes('proof')) {\n  reply = trust[0] || why[0] || 'The clearest visible gap is still proof and review density compared with stronger competitors.';\n  suggestions = trust.slice(1, 4);\n} else if (lower.includes('faq') || lower.includes('question')) {\n  reply = faqs[0] || 'The app has not generated FAQ recommendations yet.';\n  suggestions = faqs.slice(1, 4);\n} else {\n  reply = why[0] || reply;\n  suggestions = actions.slice(0, 2);\n  if (trust[0]) suggestions.push(trust[0]);\n}\nreturn [{ json: { reply, suggestions: suggestions.slice(0, 3) } }];"
+      },
+      "id": "code-node",
+      "name": "Build Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "respond-node",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        860,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Assistant Webhook": {
+      "main": [
+        [
+          {
+            "node": "Build Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Reply": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "pinData": {},
+  "active": true
+}

@@ -1,4 +1,4 @@
-import { startTransition, useEffect, useState } from 'react'
+import { startTransition, useEffect, useState, type KeyboardEvent } from 'react'
 import {
   CartesianGrid,
   Line,
@@ -228,6 +228,13 @@ function App() {
     }
   }
 
+  function handleAssistantKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault()
+      void sendAssistantMessage()
+    }
+  }
+
   if (!data) {
     return <main className="shell loading">Preparing the blueprint dashboard...</main>
   }
@@ -237,6 +244,7 @@ function App() {
   const blueprint = comparison.implementation_blueprint ?? {}
   const scraperRun = data.state.scraper_run ?? {}
   const hostinger = data.hostinger ?? {}
+  const aiSettings = (data.state.notifications?.ai ?? {}) as Record<string, any>
   const myGig = (comparison.my_gig ?? {}) as Record<string, any>
   const titleOptions = (blueprint.title_options ?? []) as TitleOption[]
   const descriptionOptions = (blueprint.description_options ?? []) as DescriptionOption[]
@@ -257,6 +265,10 @@ function App() {
     { name: 'Actions', value: clamp((blueprint.weekly_actions?.length ?? 0) * 18) },
     { name: 'Trust', value: clamp(report.optimization_score ?? 0) },
   ]
+  const assistantProviderLabel = aiSettings.provider === 'n8n' ? 'n8n webhook' : String(aiSettings.provider ?? 'local fallback')
+  const assistantStatusLabel = aiSettings.enabled
+    ? (aiSettings.configured ? `${assistantProviderLabel} configured` : `${assistantProviderLabel} fallback`)
+    : 'local market fallback'
 
   return (
     <main className="shell">
@@ -561,6 +573,7 @@ function App() {
             <div>
               <p className="eyebrow">Gig Copilot</p>
               <strong>Ask from live app data</strong>
+              <p className="assistant-subtitle">{assistantStatusLabel}</p>
             </div>
             <button className="secondary" onClick={() => setAssistantOpen(false)}>Hide</button>
           </div>
@@ -591,6 +604,7 @@ function App() {
               rows={3}
               value={assistantInput}
               onChange={(event) => setAssistantInput(event.target.value)}
+              onKeyDown={handleAssistantKeyDown}
               placeholder="Ask what to change in your gig right now..."
             />
             <button onClick={() => void sendAssistantMessage()} disabled={assistantBusy || !assistantInput.trim()}>

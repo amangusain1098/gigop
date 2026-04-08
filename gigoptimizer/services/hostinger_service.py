@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -36,6 +36,7 @@ class HostingerService:
             "metrics": {},
             "project_logs": [],
             "domain_portfolio": [],
+            "warnings": [],
         }
         if not settings.enabled:
             base_payload["error_message"] = "Hostinger monitoring is disabled."
@@ -61,6 +62,7 @@ class HostingerService:
         }
         base_url = settings.api_base_url.rstrip("/")
         timeout = max(5, int(self.config.hostinger_request_timeout_seconds))
+        warnings: list[str] = []
 
         with httpx.Client(base_url=base_url, headers=headers, timeout=timeout) as client:
             virtual_machines_payload = self._safe_get(client, "/api/vps/v1/virtual-machines")
@@ -76,22 +78,42 @@ class HostingerService:
                     or settings.virtual_machine_id
                 ).strip()
                 if vm_id:
+                    selected_vm = self._optional_get(
+                        client,
+                        f"/api/vps/v1/virtual-machines/{vm_id}",
+                        warnings=warnings,
+                        description="virtual machine details",
+                    ) or selected_vm
                     metrics = self._safe_get(
                         client,
                         f"/api/vps/v1/virtual-machines/{vm_id}/metrics",
+                        params=self._metrics_params(settings.metrics_window_minutes),
                     )
 
             project_logs: list[dict[str, Any]] = []
-            if settings.project_name:
-                logs_payload = self._safe_get(
+            if selected_vm is not None:
+                vm_id = str(
+                    selected_vm.get("id")
+                    or selected_vm.get("virtualMachineId")
+                    or selected_vm.get("identifier")
+                    or settings.virtual_machine_id
+                ).strip()
+                logs_payload = self._optional_get(
                     client,
-                    f"/api/billing/v1/projects/{settings.project_name}/projects-logs",
+                    f"/api/vps/v1/virtual-machines/{vm_id}/actions",
+                    warnings=warnings,
+                    description="virtual machine actions",
                 )
                 project_logs = self._extract_items(logs_payload)[:8]
 
             domain_portfolio: list[dict[str, Any]] = []
             if settings.domain:
-                domains_payload = self._safe_get(client, "/api/domains/v1/portfolio")
+                domains_payload = self._optional_get(
+                    client,
+                    "/api/domains/v1/portfolio",
+                    warnings=warnings,
+                    description="domain portfolio",
+                )
                 domain_portfolio = [
                     item
                     for item in self._extract_items(domains_payload)
@@ -99,7 +121,7 @@ class HostingerService:
                 ]
 
         return {
-            "status": "ok",
+            "status": "warning" if warnings else "ok",
             "enabled": settings.enabled,
             "configured": True,
             "base_url": base_url,
@@ -114,12 +136,30 @@ class HostingerService:
             "metrics": metrics,
             "project_logs": project_logs,
             "domain_portfolio": domain_portfolio[:5],
+            "warnings": warnings,
         }
 
-    def _safe_get(self, client: httpx.Client, path: str) -> Any:
-        response = client.get(path)
+    def _safe_get(self, client: httpx.Client, path: str, params: dict[str, Any] | None = None) -> Any:
+        response = client.get(path, params=params)
         response.raise_for_status()
         return response.json()
+
+    def _optional_get(
+        self,
+        client: httpx.Client,
+        path: str,
+        *,
+        warnings: list[str],
+        description: str,
+        params: dict[str, Any] | None = None,
+    ) -> Any:
+        try:
+            return self._safe_get(client, path, params=params)
+        except httpx.HTTPStatusError as exc:
+            warnings.append(f"{description} unavailable ({exc.response.status_code}).")
+        except Exception as exc:
+            warnings.append(f"{description} unavailable ({exc}).")
+        return {}
 
     def _extract_items(self, payload: Any) -> list[dict[str, Any]]:
         if isinstance(payload, list):
@@ -147,3 +187,11 @@ class HostingerService:
             if candidate_id == selected_id:
                 return item
         return virtual_machines[0]
+
+    def _metrics_params(self, window_minutes: int) -> dict[str, str]:
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        start = now - timedelta(minutes=max(5, window_minutes))
+        return {
+            "date_from": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "date_to": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
