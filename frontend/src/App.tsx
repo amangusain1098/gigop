@@ -53,13 +53,8 @@ function App() {
   const [assistantOpen, setAssistantOpen] = useState(false)
   const [assistantInput, setAssistantInput] = useState('')
   const [assistantBusy, setAssistantBusy] = useState(false)
-  const [assistantMessages, setAssistantMessages] = useState<Array<{ role: 'user' | 'assistant'; text: string; suggestions?: string[] }>>([
-    {
-      role: 'assistant',
-      text: "Ask me what to change in your title, pricing, tags, trust signals, or competitor positioning. I answer from the app's current market analysis.",
-      suggestions: ['What title should I use now?', 'Why are competitors winning?', 'How should I price my packages?'],
-    },
-  ])
+  const [assistantMessages, setAssistantMessages] = useState<Array<{ role: 'user' | 'assistant'; text: string; suggestions?: string[] }>>([])
+  const [assistantInitialized, setAssistantInitialized] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -95,6 +90,10 @@ function App() {
     setMaxResults(Number(marketplace.max_results ?? 10))
     setAutoCompareEnabled(Boolean(marketplace.auto_compare_enabled ?? false))
     setAutoCompareMinutes(Number(marketplace.auto_compare_interval_minutes ?? 5))
+    if (!assistantInitialized) {
+      setAssistantMessages(buildAssistantMessages(payload))
+      setAssistantInitialized(true)
+    }
   }
 
   function applyEvent(event: DashboardEvent) {
@@ -310,7 +309,7 @@ function App() {
     setAssistantInput('')
     try {
       const response = await withCsrfRetry((csrfToken) =>
-        fetchJson<{ assistant: { reply: string; suggestions?: string[] } }>(
+        fetchJson<{ assistant: { reply: string; suggestions?: string[] }; assistant_history?: Array<Record<string, any>> }>(
           '/api/assistant/chat',
           {
             method: 'POST',
@@ -319,14 +318,19 @@ function App() {
           csrfToken,
         ),
       )
-      setAssistantMessages((current) => [
-        ...current,
-        {
-          role: 'assistant',
-          text: response.assistant.reply,
-          suggestions: response.assistant.suggestions ?? [],
-        },
-      ])
+      const nextMessages = mapAssistantHistory(response.assistant_history ?? [], data)
+      if (nextMessages.length) {
+        setAssistantMessages(nextMessages)
+      } else {
+        setAssistantMessages((current) => [
+          ...current,
+          {
+            role: 'assistant',
+            text: response.assistant.reply,
+            suggestions: response.assistant.suggestions ?? [],
+          },
+        ])
+      }
     } catch (reason) {
       const detail = reason instanceof Error ? reason.message : 'Assistant request failed.'
       setAssistantMessages((current) => [
@@ -369,6 +373,7 @@ function App() {
   const oneByOne = (comparison.one_by_one_recommendations ?? []) as CompetitorRecommendation[]
   const topRankedGig = (comparison.top_ranked_gig ?? pageOneTopTen[0] ?? {}) as Record<string, any>
   const topRankedReasons = (comparison.why_top_ranked_gig_is_first ?? topRankedGig.why_on_page_one ?? []) as string[]
+  const assistantQuickPrompts = buildAssistantQuickPrompts(comparison, blueprint, scraperRun)
   const activeJob = data.job_runs.find((job: JobRun) => ['queued', 'running'].includes(job.status)) ?? data.job_runs[0]
   const competitorSource = pageOneTopTen.length ? pageOneTopTen : data.competitors
   const competitors = [...competitorSource].sort((a, b) => {
@@ -798,8 +803,25 @@ function App() {
               <p className="eyebrow">Gig Copilot</p>
               <strong>Ask from live app data</strong>
               <p className="assistant-subtitle">{assistantStatusLabel}</p>
+              <div className="pill-row">
+                <span className="pill">{String(comparison.primary_search_term ?? 'no primary term')}</span>
+                <span className="pill">{topRankedGig.title ? `#1 ${topRankedGig.seller_name || 'leader'}` : 'no live leader yet'}</span>
+                <span className="pill">{scraperRun.status ?? 'idle'} feed</span>
+              </div>
             </div>
             <button className="secondary" onClick={() => setAssistantOpen(false)}>Hide</button>
+          </div>
+          <div className="pill-row">
+            {assistantQuickPrompts.map((suggestion) => (
+              <button
+                className="secondary pill-button"
+                key={suggestion}
+                onClick={() => void sendAssistantMessage(suggestion)}
+                disabled={assistantBusy}
+              >
+                {suggestion}
+              </button>
+            ))}
           </div>
           <div className="assistant-log">
             {assistantMessages.map((entry, index) => (
@@ -829,7 +851,7 @@ function App() {
               value={assistantInput}
               onChange={(event) => setAssistantInput(event.target.value)}
               onKeyDown={handleAssistantKeyDown}
-              placeholder="Ask what to change in your gig right now..."
+              placeholder="Ask anything about your gig, page-one competitors, title, pricing, trust, keywords, or what to change next..."
             />
             <button onClick={() => void sendAssistantMessage()} disabled={assistantBusy || !assistantInput.trim()}>
               {assistantBusy ? 'Thinking...' : 'Send'}
@@ -887,6 +909,53 @@ function currency(value?: number | null) {
 function isPlaceholderText(value: string) {
   const normalized = value.trim().toLowerCase()
   return !normalized || normalized === '--' || normalized.startsWith('no ')
+}
+
+function buildAssistantMessages(payload: BootstrapPayload) {
+  const history = mapAssistantHistory(payload.assistant_history ?? payload.memory?.assistant_history ?? [], payload)
+  if (history.length) return history
+  return [
+    {
+      role: 'assistant' as const,
+      text: "Ask me anything about your live Fiverr market position. I answer from the current page-one leaderboard, your gig comparison, and your recent scraper feed.",
+      suggestions: buildAssistantQuickPrompts(payload.state.gig_comparison ?? {}, (payload.state.gig_comparison ?? {}).implementation_blueprint ?? {}, payload.state.scraper_run ?? {}),
+    },
+  ]
+}
+
+function mapAssistantHistory(items: Array<Record<string, any>>, payload: BootstrapPayload | null) {
+  const quickPrompts = payload
+    ? buildAssistantQuickPrompts(payload.state.gig_comparison ?? {}, (payload.state.gig_comparison ?? {}).implementation_blueprint ?? {}, payload.state.scraper_run ?? {})
+    : []
+  const mapped = [...items]
+    .reverse()
+    .map((item) => ({
+      role: (item.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
+      text: String(item.content ?? '').trim(),
+      suggestions: item.role === 'assistant' ? ((item.metadata?.suggestions as string[] | undefined) ?? []) : undefined,
+    }))
+    .filter((item) => item.text)
+  if (!mapped.length) return []
+  const last = mapped[mapped.length - 1]
+  if (last.role === 'assistant' && !last.suggestions?.length) {
+    last.suggestions = quickPrompts
+  }
+  return mapped
+}
+
+function buildAssistantQuickPrompts(comparison: Record<string, any>, blueprint: Record<string, any>, scraperRun: Record<string, any>) {
+  const primaryTerm = String(comparison.primary_search_term ?? '').trim()
+  const topGig = comparison.top_ranked_gig ?? {}
+  const topAction = blueprint.top_action ?? {}
+  const prompts = [
+    primaryTerm ? `Why is #1 ranking for ${primaryTerm}?` : '',
+    topGig.title ? `How do I beat #1 ${String(topGig.seller_name ?? 'competitor')}?` : '',
+    blueprint.recommended_title ? 'Rewrite my title using the current market demand.' : 'What title should I use now?',
+    topAction.action_text ? 'What should I do first and why?' : '',
+    scraperRun.last_status_message ? 'What is the live Fiverr feed showing right now?' : '',
+    'How should I price my packages now?',
+  ]
+  return Array.from(new Set(prompts.filter(Boolean))).slice(0, 5)
 }
 
 export default App

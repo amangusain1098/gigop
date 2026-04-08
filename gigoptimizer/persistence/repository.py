@@ -12,6 +12,7 @@ from ..utils import build_gig_key
 from .database import DatabaseManager
 from .models import (
     AgentRunORM,
+    AssistantMessageORM,
     ComparisonHistoryORM,
     CompetitorSnapshotORM,
     GigStateORM,
@@ -301,6 +302,39 @@ class BlueprintRepository:
             rows = session.scalars(query).all()
             return [self._comparison_history_to_dict(item) for item in rows]
 
+    def record_assistant_message(
+        self,
+        *,
+        gig_id: str,
+        role: str,
+        content: str,
+        source: str = "assistant",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        normalized_gig_id = build_gig_key(gig_id)
+        with self.database.session() as session:
+            item = AssistantMessageORM(
+                gig_id=normalized_gig_id,
+                role=str(role).strip() or "assistant",
+                content=str(content).strip(),
+                source=str(source).strip() or "assistant",
+                metadata_json=metadata or {},
+            )
+            session.add(item)
+        return self.latest_assistant_message(gig_id=normalized_gig_id) or {}
+
+    def latest_assistant_message(self, *, gig_id: str | None = None) -> dict[str, Any] | None:
+        rows = self.list_assistant_messages(gig_id=gig_id, limit=1)
+        return rows[0] if rows else None
+
+    def list_assistant_messages(self, *, gig_id: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
+        with self.database.session() as session:
+            query = select(AssistantMessageORM).order_by(AssistantMessageORM.created_at.desc()).limit(limit)
+            if gig_id:
+                query = query.where(AssistantMessageORM.gig_id == build_gig_key(gig_id))
+            rows = session.scalars(query).all()
+            return [self._assistant_message_to_dict(item) for item in rows]
+
     def _agent_run_to_dict(self, item: AgentRunORM) -> dict[str, Any]:
         return {
             "run_id": item.run_id,
@@ -371,6 +405,17 @@ class BlueprintRepository:
             "score_before": item.score_before,
             "score_after": item.score_after,
             "result_json": item.result_json or {},
+            "created_at": self._iso(item.created_at),
+        }
+
+    def _assistant_message_to_dict(self, item: AssistantMessageORM) -> dict[str, Any]:
+        return {
+            "id": item.id,
+            "gig_id": item.gig_id,
+            "role": item.role,
+            "content": item.content,
+            "source": item.source,
+            "metadata": item.metadata_json or {},
             "created_at": self._iso(item.created_at),
         }
 

@@ -115,6 +115,8 @@ export interface BootstrapPayload {
   job_runs: JobRun[]
   queue: QueueRecord[]
   competitors: CompetitorRecord[]
+  memory?: Record<string, any>
+  assistant_history?: Array<Record<string, any>>
   hostinger?: Record<string, any>
   workers: WorkerSnapshot
   health: HealthPayload

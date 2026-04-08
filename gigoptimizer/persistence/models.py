@@ -111,3 +111,15 @@ class ComparisonHistoryORM(Base):
     score_after: Mapped[int | None] = mapped_column(Integer, nullable=True)
     result_json: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+
+
+class AssistantMessageORM(Base):
+    __tablename__ = "assistant_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    gig_id: Mapped[str] = mapped_column(String(255), index=True)
+    role: Mapped[str] = mapped_column(String(24), index=True)
+    content: Mapped[str] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(48), default="assistant")
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)

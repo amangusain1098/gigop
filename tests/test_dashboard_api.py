@@ -633,6 +633,9 @@ class DashboardApiTests(unittest.TestCase):
 
                     self.assertEqual(assistant.status_code, 200)
                     self.assertEqual(assistant.json()["assistant"]["reply"], "Use the recommended title.")
+                    self.assertTrue(assistant.json()["assistant_history"])
+                    self.assertEqual(assistant.json()["assistant_history"][0]["role"], "user")
+                    self.assertEqual(assistant.json()["assistant_history"][-1]["role"], "assistant")
 
     def test_health_endpoint_redacts_database_url_and_summarizes_last_run(self) -> None:
         root = Path(__file__).resolve().parent.parent

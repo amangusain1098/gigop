@@ -242,6 +242,7 @@ def create_app() -> FastAPI:
             "queue": repository.list_hitl_items(limit=50),
             "competitors": repository.list_competitor_snapshots(limit=30),
             "memory": dashboard_service._memory_context(gig_id=gig_id),  # noqa: SLF001
+            "assistant_history": list(reversed(repository.list_assistant_messages(gig_id=gig_id, limit=12))),
             "hostinger": hostinger_service.get_public_status(),
             "workers": job_service.worker_snapshot(),
             "health": build_health_payload(),
@@ -254,12 +255,28 @@ def create_app() -> FastAPI:
         gig_id = comparison.get("gig_id") or comparison.get("gig_url") or dashboard_service._gig_identifier()  # noqa: SLF001
         memory_context = dashboard_service._memory_context(gig_id=gig_id)  # noqa: SLF001
         latest_report = state.get("latest_report") or {}
+        scraper_run = state.get("scraper_run") or {}
+        top_ten = (comparison.get("first_page_top_10") or [])[:10]
+        one_by_one = (comparison.get("one_by_one_recommendations") or [])[:10]
+        pending_queue = [
+            item
+            for item in state.get("queue", [])
+            if item.get("status") in {"pending", "auto_approved", "approved"}
+        ][:8]
         return {
             "optimization_score": latest_report.get("optimization_score"),
+            "gig_id": gig_id,
+            "gig_url": comparison.get("gig_url", ""),
+            "primary_search_term": comparison.get("primary_search_term", ""),
             "recommended_title": implementation.get("recommended_title", ""),
             "recommended_tags": implementation.get("recommended_tags", []),
             "market_anchor_price": comparison.get("market_anchor_price"),
             "competitor_count": comparison.get("competitor_count", 0),
+            "top_ranked_gig": comparison.get("top_ranked_gig", {}),
+            "first_page_top_10": top_ten,
+            "one_by_one_recommendations": one_by_one,
+            "top_search_titles": comparison.get("top_search_titles", []),
+            "title_patterns": comparison.get("title_patterns", []),
             "why_competitors_win": comparison.get("why_competitors_win", []),
             "what_to_implement": comparison.get("what_to_implement", []),
             "do_this_first": implementation.get("do_this_first", []),
@@ -268,11 +285,19 @@ def create_app() -> FastAPI:
             "trust_boosters": implementation.get("trust_boosters", []),
             "faq_recommendations": implementation.get("faq_recommendations", []),
             "persona_focus": implementation.get("persona_focus", []),
-            "scraper_status": (state.get("scraper_run") or {}).get("status", "idle"),
-            "scraper_message": (state.get("scraper_run") or {}).get("last_status_message", ""),
+            "description_full": implementation.get("description_full", ""),
+            "title_options": implementation.get("title_options", []),
+            "description_options": implementation.get("description_options", []),
+            "scraper_status": scraper_run.get("status", "idle"),
+            "scraper_message": scraper_run.get("last_status_message", ""),
+            "recent_scraper_events": list(reversed((scraper_run.get("recent_events") or [])[-8:])),
+            "recent_scraper_gigs": (scraper_run.get("recent_gigs") or [])[:8],
+            "keyword_pulse": latest_report.get("niche_pulse", {}).get("trending_queries", [])[:8],
+            "pending_queue": pending_queue,
             "hostinger": hostinger_service.get_public_status(),
             "user_actions": memory_context.get("user_actions", []),
             "comparison_history": memory_context.get("comparison_history", []),
+            "assistant_history": memory_context.get("assistant_history", []),
         }
 
     def build_health_payload() -> dict:
@@ -556,11 +581,34 @@ def create_app() -> FastAPI:
         _: None = Depends(require_auth),
         __: None = Depends(require_csrf),
     ) -> dict:
-        reply = ai_overview_service.chat(
-            message=str(payload.get("message", "")),
-            context=build_assistant_context(),
+        context = build_assistant_context()
+        gig_id = str(context.get("gig_id") or dashboard_service._gig_identifier())  # noqa: SLF001
+        message = str(payload.get("message", ""))
+        repository.record_assistant_message(
+            gig_id=gig_id,
+            role="user",
+            content=message,
+            source="dashboard_chat",
         )
-        return {"assistant": reply}
+        reply = ai_overview_service.chat(
+            message=message,
+            context=context,
+        )
+        repository.record_assistant_message(
+            gig_id=gig_id,
+            role="assistant",
+            content=str(reply.get("reply", "")),
+            source=str(reply.get("provider", "assistant")),
+            metadata={
+                "status": reply.get("status"),
+                "model": reply.get("model"),
+                "suggestions": reply.get("suggestions", []),
+            },
+        )
+        return {
+            "assistant": reply,
+            "assistant_history": list(reversed(repository.list_assistant_messages(gig_id=gig_id, limit=12))),
+        }
 
     @app.post("/api/settings")
     async def save_settings(payload: dict = Body(...), _: None = Depends(require_auth), __: None = Depends(require_csrf)) -> dict:

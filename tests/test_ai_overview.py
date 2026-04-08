@@ -79,6 +79,51 @@ class AIOverviewFallbackTests(unittest.TestCase):
         self.assertIn("strongest current title option", response["reply"].lower())
         self.assertTrue(response["suggestions"])
 
+    def test_local_chat_answers_generic_rank_question_from_live_context(self) -> None:
+        with TemporaryDirectory() as tmp:
+            temp_root = Path(tmp)
+            with patch.dict(
+                os.environ,
+                {
+                    "DATA_DIR": str(temp_root / "data"),
+                    "INTEGRATION_SETTINGS_PATH": str(temp_root / "data" / "integrations.json"),
+                    "AI_PROVIDER": "n8n",
+                    "AI_API_KEY": "",
+                },
+                clear=False,
+            ):
+                config = GigOptimizerConfig.from_env()
+                settings = SettingsService(config)
+                settings.update_settings({"ai": {"enabled": True, "provider": "n8n", "api_base_url": ""}})
+                service = AIOverviewService(settings)
+                response = service.chat(
+                    message="Why is the top gig ranking first on Fiverr right now?",
+                    context={
+                        "primary_search_term": "wordpress speed optimization",
+                        "top_ranked_gig": {
+                            "title": "I will do wordpress speed optimization for google pagespeed insight",
+                            "why_on_page_one": [
+                                "Fiverr is currently surfacing this gig first for the primary search term on page one.",
+                                "The title matches the searched phrase directly.",
+                            ],
+                        },
+                        "one_by_one_recommendations": [
+                            {
+                                "rank_position": 1,
+                                "primary_recommendation": "Use the exact search phrase in your title and first line.",
+                                "what_to_change": [
+                                    "Use the exact search phrase in your title and first line.",
+                                    "Add stronger proof and deliverables near the top.",
+                                ],
+                            }
+                        ],
+                    },
+                )
+
+        self.assertEqual(response["status"], "fallback")
+        self.assertIn("ranking", response["reply"].lower())
+        self.assertTrue(response["suggestions"])
+
     def test_n8n_overview_uses_webhook_response(self) -> None:
         with TemporaryDirectory() as tmp:
             temp_root = Path(tmp)
