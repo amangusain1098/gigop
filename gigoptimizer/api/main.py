@@ -401,7 +401,12 @@ def create_app() -> FastAPI:
         return overview
 
     def absolute_url(request: Request, path: str) -> str:
-        base = str(request.base_url).rstrip("/")
+        forwarded_proto = str(request.headers.get("x-forwarded-proto", "")).split(",")[0].strip()
+        forwarded_host = str(request.headers.get("x-forwarded-host", "")).split(",")[0].strip()
+        if forwarded_proto and forwarded_host:
+            base = f"{forwarded_proto}://{forwarded_host}"
+        else:
+            base = str(request.base_url).rstrip("/")
         return f"{base}{path}"
 
     def render_manhwa_feed_xml(request: Request, entries: list[dict]) -> str:
