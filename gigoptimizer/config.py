@@ -153,6 +153,8 @@ class GigOptimizerConfig:
     knowledge_chunk_overlap_chars: int = 150
     copilot_learning_enabled: bool = True
     copilot_learning_interval_minutes: int = 30
+    copilot_training_enabled: bool = True
+    copilot_training_export_interval_minutes: int = 180
     extension_enabled: bool = True
     extension_api_token: str = ""
     extension_max_gigs_per_import: int = 25
@@ -372,6 +374,8 @@ class GigOptimizerConfig:
             knowledge_chunk_overlap_chars=_get_int("KNOWLEDGE_CHUNK_OVERLAP_CHARS", 150),
             copilot_learning_enabled=_get_bool("COPILOT_LEARNING_ENABLED", True),
             copilot_learning_interval_minutes=_get_int("COPILOT_LEARNING_INTERVAL_MINUTES", 30),
+            copilot_training_enabled=_get_bool("COPILOT_TRAINING_ENABLED", True),
+            copilot_training_export_interval_minutes=_get_int("COPILOT_TRAINING_EXPORT_INTERVAL_MINUTES", 180),
             extension_enabled=_get_bool("EXTENSION_ENABLED", True),
             extension_api_token=os.getenv("EXTENSION_API_TOKEN", "").strip(),
             extension_max_gigs_per_import=_get_int("EXTENSION_MAX_GIGS_PER_IMPORT", 25),
@@ -411,6 +415,7 @@ class GigOptimizerConfig:
             self._validate_extension_ingest(),
             self._validate_manhwa(),
             self._validate_copilot_learning(),
+            self._validate_copilot_training(),
         ]
 
     def _validate_database(self) -> ConnectorStatus:
@@ -677,6 +682,22 @@ class GigOptimizerConfig:
             connector="copilot_learning",
             status="active",
             detail=f"active (educational feed sync every {max(5, self.copilot_learning_interval_minutes)} minutes)",
+        )
+
+    def _validate_copilot_training(self) -> ConnectorStatus:
+        if not self.copilot_training_enabled:
+            return ConnectorStatus(
+                connector="copilot_training",
+                status="skipped",
+                detail="skipped (COPILOT_TRAINING_ENABLED is false)",
+            )
+        return ConnectorStatus(
+            connector="copilot_training",
+            status="active",
+            detail=(
+                "active "
+                f"(dataset export every {max(15, self.copilot_training_export_interval_minutes)} minutes when scheduler is running)"
+            ),
         )
 
     def _module_available(self, module_name: str) -> bool:

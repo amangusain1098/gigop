@@ -183,6 +183,38 @@ export interface FailedLoginAttemptRecord {
   photo_captured_at?: string
 }
 
+export interface AssistantHistoryMessage {
+  id?: number
+  role: 'user' | 'assistant'
+  text: string
+  suggestions?: string[]
+  feedbackRating?: number | null
+}
+
+export interface CopilotTrainingStatus {
+  enabled: boolean
+  gig_id?: string
+  last_run_id?: string
+  last_exported_at?: string
+  status?: string
+  train_examples?: number
+  holdout_examples?: number
+  preference_examples?: number
+  recent_topics?: string[]
+  feedback?: {
+    total: number
+    positive: number
+    negative: number
+    positive_ratio: number
+    recent_topics?: string[]
+  }
+  latest_files?: {
+    train_path?: string
+    holdout_path?: string
+    preferences_path?: string
+  }
+}
+
 export interface HealthPayload {
   status: string
   app: string
@@ -204,6 +236,7 @@ export interface BootstrapPayload {
   datasets?: DatasetRecord[]
   memory?: Record<string, any>
   assistant_history?: Array<Record<string, any>>
+  copilot_training?: CopilotTrainingStatus
   hostinger?: Record<string, any>
   security?: {
     capture_threshold: number

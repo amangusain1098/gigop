@@ -695,6 +695,23 @@ pre {
   margin-top: 10px;
 }
 
+.assistant-feedback-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.feedback-button {
+  padding: 8px 12px;
+  min-height: 38px;
+}
+
+.feedback-button--active {
+  background: rgba(70, 177, 255, 0.28) !important;
+  border: 1px solid rgba(70, 177, 255, 0.45);
+}
+
 .assistant-shell .pill-button {
   max-width: 100%;
   white-space: normal;

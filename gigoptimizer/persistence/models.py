@@ -145,6 +145,36 @@ class AssistantMessageORM(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
 
 
+class AssistantFeedbackORM(Base):
+    __tablename__ = "assistant_feedback"
+    __table_args__ = (UniqueConstraint("message_id", name="uq_assistant_feedback_message_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    message_id: Mapped[int] = mapped_column(Integer, index=True)
+    gig_id: Mapped[str] = mapped_column(String(255), index=True)
+    rating: Mapped[int] = mapped_column(Integer, default=0)
+    note: Mapped[str] = mapped_column(Text, default="")
+    topic_tags: Mapped[list] = mapped_column(JSON, default=list)
+    quality_score: Mapped[float] = mapped_column(Float, default=0.0)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+
+class CopilotTrainingRunORM(Base):
+    __tablename__ = "copilot_training_runs"
+
+    run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    gig_id: Mapped[str] = mapped_column(String(255), index=True)
+    status: Mapped[str] = mapped_column(String(32), default="completed", index=True)
+    train_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    holdout_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    preferences_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class KnowledgeDocumentORM(Base):
     __tablename__ = "knowledge_documents"
     __table_args__ = (UniqueConstraint("gig_id", "checksum", name="uq_knowledge_documents_gig_checksum"),)

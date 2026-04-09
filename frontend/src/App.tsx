@@ -14,10 +14,12 @@ import {
 } from 'recharts'
 import { createDashboardSocket, fetchJson, loadBootstrap } from './api'
 import type {
+  AssistantHistoryMessage,
   BootstrapPayload,
   ComparisonDiffPayload,
   ComparisonTimelinePoint,
   CompetitorRecord,
+  CopilotTrainingStatus,
   DashboardEvent,
   DatasetRecord,
   FailedLoginAttemptRecord,
@@ -68,7 +70,7 @@ function App() {
   const [assistantOpen, setAssistantOpen] = useState(false)
   const [assistantInput, setAssistantInput] = useState('')
   const [assistantBusy, setAssistantBusy] = useState(false)
-  const [assistantMessages, setAssistantMessages] = useState<Array<{ role: 'user' | 'assistant'; text: string; suggestions?: string[] }>>([])
+  const [assistantMessages, setAssistantMessages] = useState<AssistantHistoryMessage[]>([])
   const [assistantInitialized, setAssistantInitialized] = useState(false)
   const [extensionInstalled, setExtensionInstalled] = useState(false)
   const [showExtensionPrompt, setShowExtensionPrompt] = useState(false)
@@ -194,6 +196,13 @@ function App() {
       setData({
         ...data,
         security: event.payload,
+      })
+      return
+    }
+    if (event.type === 'copilot_training') {
+      setData({
+        ...data,
+        copilot_training: event.payload as CopilotTrainingStatus,
       })
       return
     }
@@ -435,7 +444,7 @@ function App() {
     setAssistantInput('')
     try {
       const response = await withCsrfRetry((csrfToken) =>
-        fetchJson<{ assistant: { reply: string; suggestions?: string[] }; assistant_history?: Array<Record<string, any>> }>(
+        fetchJson<{ assistant: { reply: string; suggestions?: string[] }; assistant_history?: Array<Record<string, any>>; copilot_training?: CopilotTrainingStatus }>(
           '/api/assistant/chat',
           {
             method: 'POST',
@@ -457,6 +466,9 @@ function App() {
           },
         ])
       }
+      if (response.copilot_training) {
+        setData((current) => current ? { ...current, copilot_training: response.copilot_training } : current)
+      }
     } catch (reason) {
       const detail = reason instanceof Error ? reason.message : 'Assistant request failed.'
       setAssistantMessages((current) => [
@@ -469,6 +481,63 @@ function App() {
       ])
     } finally {
       setAssistantBusy(false)
+    }
+  }
+
+  async function sendAssistantFeedback(messageId: number, rating: 1 | -1) {
+    if (!data) return
+    setBusy(`feedback-${messageId}`)
+    setError('')
+    setMessage('')
+    try {
+      const response = await withCsrfRetry((csrfToken) =>
+        fetchJson<{ assistant_history?: Array<Record<string, any>>; copilot_training?: CopilotTrainingStatus }>(
+          '/api/assistant/feedback',
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              message_id: messageId,
+              rating,
+            }),
+          },
+          csrfToken,
+        ),
+      )
+      if (response.assistant_history?.length) {
+        setAssistantMessages(mapAssistantHistory(response.assistant_history, data))
+      }
+      if (response.copilot_training) {
+        setData((current) => current ? { ...current, copilot_training: response.copilot_training } : current)
+      }
+      setMessage(rating > 0 ? 'Saved positive copilot feedback.' : 'Saved negative copilot feedback.')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Unable to save copilot feedback.')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function runCopilotTrainingExport() {
+    if (!data) return
+    setBusy('copilot-training-export')
+    setError('')
+    setMessage('')
+    try {
+      const response = await withCsrfRetry((csrfToken) =>
+        fetchJson<{ copilot_training: CopilotTrainingStatus }>(
+          '/api/copilot/training/export',
+          {
+            method: 'POST',
+          },
+          csrfToken,
+        ),
+      )
+      setData((current) => current ? { ...current, copilot_training: response.copilot_training } : current)
+      setMessage('Exported a fresh copilot training bundle from live chats and feedback.')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Unable to export the copilot training bundle.')
+    } finally {
+      setBusy('')
     }
   }
 
@@ -653,6 +722,20 @@ function App() {
   const assistantStatusLabel = aiSettings.enabled
     ? (aiSettings.configured ? `${assistantProviderLabel} configured` : `${assistantProviderLabel} fallback`)
     : 'local market fallback'
+  const copilotTraining = (data.copilot_training ?? {
+    enabled: true,
+    status: 'idle',
+    train_examples: 0,
+    holdout_examples: 0,
+    preference_examples: 0,
+    feedback: {
+      total: 0,
+      positive: 0,
+      negative: 0,
+      positive_ratio: 0,
+    },
+    recent_topics: [],
+  }) as CopilotTrainingStatus
   const extensionInstall = data.extension_install ?? {
     enabled: false,
     download_url: '/downloads/fiverr-market-capture.zip',
@@ -830,6 +913,34 @@ function App() {
           {!((data.memory?.knowledge_documents ?? []) as Array<Record<string, any>>).length ? (
             <p className="inline-note">Once you upload data, the copilot will pull relevant snippets into each answer.</p>
           ) : null}
+        </article>
+      </section>
+
+      <section className="content-grid">
+        <article className="card">
+          <div className="card-head"><h2>Copilot training</h2><span className={`status status--${String(copilotTraining.status ?? 'pending') === 'completed' ? 'ok' : 'queued'}`}>{String(copilotTraining.status ?? 'idle')}</span></div>
+          <div className="meta-grid">
+            <MetaItem label="Train examples" value={String(copilotTraining.train_examples ?? 0)} />
+            <MetaItem label="Holdout examples" value={String(copilotTraining.holdout_examples ?? 0)} />
+            <MetaItem label="Preference pairs" value={String(copilotTraining.preference_examples ?? 0)} />
+            <MetaItem label="Positive feedback" value={String(copilotTraining.feedback?.positive ?? 0)} />
+          </div>
+          <p className="inline-note">
+            This training bundle is built from live copilot chats, upload context, and your thumbs up/down signals. The export is PII-scrubbed and ready for later LoRA or DPO work.
+          </p>
+          <div className="pill-row">
+            {((copilotTraining.recent_topics ?? []) as string[]).slice(0, 6).map((topic) => (
+              <span className="pill" key={topic}>{topic}</span>
+            ))}
+          </div>
+          <div className="button-row button-row--two">
+            <button onClick={() => void runCopilotTrainingExport()} disabled={busy === 'copilot-training-export'}>
+              {busy === 'copilot-training-export' ? 'Exporting...' : 'Export training bundle'}
+            </button>
+            <button className="secondary" onClick={() => void sendAssistantMessage('What has the copilot learned from recent chats and uploads?')} disabled={assistantBusy}>
+              Ask what it learned
+            </button>
+          </div>
         </article>
       </section>
 
@@ -1356,6 +1467,24 @@ function App() {
               <div className={`assistant-bubble assistant-bubble--${entry.role}`} key={`${entry.role}-${index}`}>
                 <strong>{entry.role === 'assistant' ? 'Copilot' : 'You'}</strong>
                 <p>{entry.text}</p>
+                {entry.role === 'assistant' && entry.id ? (
+                  <div className="assistant-feedback-row">
+                    <button
+                      className={`secondary feedback-button ${entry.feedbackRating === 1 ? 'feedback-button--active' : ''}`}
+                      onClick={() => void sendAssistantFeedback(entry.id as number, 1)}
+                      disabled={busy === `feedback-${entry.id}` || assistantBusy}
+                    >
+                      Helpful
+                    </button>
+                    <button
+                      className={`secondary feedback-button ${entry.feedbackRating === -1 ? 'feedback-button--active' : ''}`}
+                      onClick={() => void sendAssistantFeedback(entry.id as number, -1)}
+                      disabled={busy === `feedback-${entry.id}` || assistantBusy}
+                    >
+                      Needs work
+                    </button>
+                  </div>
+                ) : null}
                 {entry.suggestions?.length ? (
                   <div className="pill-row assistant-suggestion-row">
                     {entry.suggestions.map((suggestion) => (
@@ -1492,6 +1621,7 @@ function buildAssistantMessages(payload: BootstrapPayload) {
   if (history.length) return history
   return [
     {
+      id: undefined,
       role: 'assistant' as const,
       text: "Ask me anything about your live Fiverr market position. I answer from the current page-one leaderboard, your gig comparison, and your recent scraper feed.",
       suggestions: buildAssistantQuickPrompts(payload.state.gig_comparison ?? {}, (payload.state.gig_comparison ?? {}).implementation_blueprint ?? {}, payload.state.scraper_run ?? {}),
@@ -1513,9 +1643,11 @@ function mapAssistantHistory(items: Array<Record<string, any>>, payload: Bootstr
       return Number(left.id ?? 0) - Number(right.id ?? 0)
     })
     .map((item) => ({
+      id: typeof item.id === 'number' ? item.id : Number(item.id ?? 0) || undefined,
       role: (item.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
       text: String(item.content ?? '').trim(),
       suggestions: item.role === 'assistant' ? ((item.metadata?.suggestions as string[] | undefined) ?? []) : undefined,
+      feedbackRating: item.role === 'assistant' ? (Number(item.metadata?.feedback?.rating ?? 0) || undefined) : undefined,
     }))
     .filter((item) => item.text)
   if (!mapped.length) return []

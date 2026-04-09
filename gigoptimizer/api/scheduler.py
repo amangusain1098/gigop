@@ -19,6 +19,7 @@ class WeeklyReportScheduler:
         config=None,
         manhwa_service=None,
         copilot_learning_service=None,
+        copilot_training_service=None,
     ) -> None:
         self.report_service = report_service
         self.dashboard_service = report_service.dashboard_service
@@ -29,6 +30,7 @@ class WeeklyReportScheduler:
         self.config = config
         self.manhwa_service = manhwa_service
         self.copilot_learning_service = copilot_learning_service
+        self.copilot_training_service = copilot_training_service
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._weekly_schedule_available = False
@@ -39,6 +41,8 @@ class WeeklyReportScheduler:
         self._next_manhwa_sync_run = 0.0
         self._copilot_learning_running = False
         self._next_copilot_learning_run = 0.0
+        self._copilot_training_running = False
+        self._next_copilot_training_run = 0.0
 
     def start(self) -> str:
         self._weekly_schedule_available = self._configure_weekly_schedule()
@@ -90,6 +94,7 @@ class WeeklyReportScheduler:
             self._maybe_run_market_watch()
             self._maybe_run_manhwa_sync()
             self._maybe_run_copilot_learning_sync()
+            self._maybe_run_copilot_training_export()
             time.sleep(1)
 
     def _maybe_run_market_watch(self) -> None:
@@ -309,6 +314,47 @@ class WeeklyReportScheduler:
                 pass
         finally:
             self._copilot_learning_running = False
+
+    def _maybe_run_copilot_training_export(self) -> None:
+        if self.config is None or self.copilot_training_service is None:
+            return
+        if not getattr(self.config, "copilot_training_enabled", False):
+            return
+        if self._copilot_training_running:
+            return
+        if self._next_copilot_training_run and time.time() < self._next_copilot_training_run:
+            return
+
+        interval_minutes = max(15, int(getattr(self.config, "copilot_training_export_interval_minutes", 180) or 180))
+        self._next_copilot_training_run = time.time() + (interval_minutes * 60)
+        self._copilot_training_running = True
+        threading.Thread(target=self._run_copilot_training_export_job, daemon=True).start()
+
+    def _run_copilot_training_export_job(self) -> None:
+        try:
+            result = self.copilot_training_service.export_training_bundle(force=False)
+            self.notification_service.notify(
+                event="pipeline_run",
+                title="GigOptimizer copilot training export completed",
+                lines=[
+                    f"Train examples: {result.get('train_examples', 0)}",
+                    f"Holdout examples: {result.get('holdout_examples', 0)}",
+                    f"Preference examples: {result.get('preference_examples', 0)}",
+                    f"Recent topics: {', '.join(result.get('recent_topics', [])[:3]) or 'None'}",
+                ],
+            )
+        except Exception as exc:
+            try:
+                self.notification_service.notify(
+                    event="error",
+                    title="GigOptimizer copilot training export failed",
+                    lines=[str(exc)],
+                )
+            except Exception:
+                pass
+        finally:
+            self._copilot_training_running = False
+            self._broadcast_state()
 
     def _broadcast_state(self) -> None:
         try:

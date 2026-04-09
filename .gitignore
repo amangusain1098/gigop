@@ -1,5 +1,6 @@
 .env
 .env.production
+.env.local
 .venv/
 venv/
 __pycache__/
@@ -25,3 +26,7 @@ frontend/dist/
 .ruff_cache/
 .coverage
 htmlcov/
+*.pem
+*.key
+*.ppk
+*.p12

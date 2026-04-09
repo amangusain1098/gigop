@@ -10,6 +10,7 @@ import threading
 import traceback
 import json
 import secrets
+import time
 from urllib.parse import urlsplit, urlunsplit
 
 import logging
@@ -32,6 +33,7 @@ from ..services import (
     AuthService,
     CacheService,
     CopilotLearningService,
+    CopilotTrainingService,
     DashboardService,
     HostingerService,
     KnowledgeService,
@@ -168,6 +170,7 @@ def create_app() -> FastAPI:
     report_service = WeeklyReportService(dashboard_service)
     database_manager = dashboard_service.database_manager
     repository = dashboard_service.repository
+    copilot_training_service = CopilotTrainingService(config, repository)
     event_bus = JobEventBus(config)
     job_service = JobService(config, repository, event_bus, cache_service=cache_service)
     auth_service = AuthService(config)
@@ -188,6 +191,7 @@ def create_app() -> FastAPI:
         config=config,
         manhwa_service=manhwa_service,
         copilot_learning_service=copilot_learning_service,
+        copilot_training_service=copilot_training_service,
     )
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     frontend_dist_dir = Path(config.frontend_dist_dir).resolve()
@@ -215,6 +219,8 @@ def create_app() -> FastAPI:
 
         def worker() -> None:
             try:
+                if not config.data_dir.exists():
+                    return
                 result = copilot_learning_service.sync_query_context(cleaned_query, force=False)
                 asyncio.run_coroutine_threadsafe(
                     websocket_manager.broadcast_json(
@@ -238,6 +244,17 @@ def create_app() -> FastAPI:
                 logging.warning("GigOptimizer Pro could not refresh copilot query learning: %s", exc)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def normalize_extension_comparison_payload(comparison: dict | None, *, keyword: str) -> dict:
+        normalized = dict(comparison or {})
+        normalized_keyword = dashboard_service._normalize_query(keyword).strip()  # noqa: SLF001
+        detected = [str(item).strip() for item in (normalized.get("detected_search_terms") or []) if str(item).strip()]
+        if normalized_keyword and not detected:
+            detected = [normalized_keyword]
+            normalized["detected_search_terms"] = detected
+        if not str(normalized.get("primary_search_term", "")).strip():
+            normalized["primary_search_term"] = normalized_keyword or (detected[0] if detected else "")
+        return normalized
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -270,6 +287,7 @@ def create_app() -> FastAPI:
         app.state.hostinger_service = hostinger_service
         app.state.knowledge_service = knowledge_service
         app.state.copilot_learning_service = copilot_learning_service
+        app.state.copilot_training_service = copilot_training_service
         app.state.manhwa_service = manhwa_service
         app.state.websocket_manager = websocket_manager
         event_bus.subscribe(relay_bus_event)
@@ -375,6 +393,7 @@ def create_app() -> FastAPI:
             "assistant_history": list(reversed(repository.list_assistant_messages(gig_id=gig_id, limit=12))),
             "datasets": knowledge_service.list_documents(gig_id=gig_id, limit=20),
             "copilot_learning": copilot_learning_service.status(),
+            "copilot_training": copilot_training_service.status(gig_id=gig_id),
             "hostinger": hostinger_service.get_public_status(),
             "security": build_login_security_payload(),
             "workers": job_service.worker_snapshot(),
@@ -441,7 +460,9 @@ def create_app() -> FastAPI:
             "assistant_history": memory_context.get("assistant_history", []),
             "knowledge_documents": knowledge_service.summarize_documents(gig_id=gig_id, limit=8),
             "copilot_learning": copilot_learning_service.status(),
+            "copilot_training": copilot_training_service.status(gig_id=gig_id),
             "global_knowledge_documents": copilot_learning_service.summarize_documents(limit=8),
+            "feedback_summary": repository.feedback_summary(gig_id=gig_id),
         }
 
     def merge_knowledge_results(*knowledge_sets: list[dict[str, object]], limit: int = 8) -> list[dict[str, object]]:
@@ -1371,6 +1392,7 @@ def create_app() -> FastAPI:
     async def copilot_status(_: None = Depends(require_auth)) -> dict:
         return {
             "copilot_learning": copilot_learning_service.status(),
+            "copilot_training": copilot_training_service.status(),
             "datasets": copilot_learning_service.summarize_documents(limit=8),
         }
 
@@ -1385,8 +1407,38 @@ def create_app() -> FastAPI:
         )
         return {
             "copilot_learning": result,
+            "copilot_training": copilot_training_service.status(),
             "datasets": copilot_learning_service.summarize_documents(limit=8),
         }
+
+    @app.get("/api/copilot/training/status")
+    async def copilot_training_status(_: None = Depends(require_auth)) -> dict:
+        context = build_assistant_context()
+        return {
+            "copilot_training": copilot_training_service.status(gig_id=str(context.get("gig_id") or "")),
+        }
+
+    @app.post("/api/copilot/training/export")
+    async def copilot_training_export(_: None = Depends(require_auth), __: None = Depends(require_csrf)) -> dict:
+        context = build_assistant_context()
+        status = await asyncio.to_thread(
+            copilot_training_service.export_training_bundle,
+            gig_id=str(context.get("gig_id") or ""),
+            force=True,
+        )
+        await websocket_manager.broadcast_json(
+            {
+                "type": "state",
+                "payload": build_state(),
+            }
+        )
+        await websocket_manager.broadcast_json(
+            {
+                "type": "copilot_training",
+                "payload": status,
+            }
+        )
+        return {"copilot_training": status}
 
     @app.post("/api/assistant/chat")
     async def assistant_chat(
@@ -1397,6 +1449,7 @@ def create_app() -> FastAPI:
         context = build_assistant_context()
         gig_id = str(context.get("gig_id") or dashboard_service._gig_identifier())  # noqa: SLF001
         message = str(payload.get("message", ""))
+        topic_tags = copilot_training_service.classify_topics(message)
         start_copilot_query_sync(message)
         retrieval_query_parts = [
             message,
@@ -1455,29 +1508,92 @@ def create_app() -> FastAPI:
         )
         context["retrieved_knowledge"] = retrieved_knowledge
         context["copilot_learning"] = copilot_learning_service.status()
+        context["copilot_training"] = copilot_training_service.status(gig_id=gig_id)
         repository.record_assistant_message(
             gig_id=gig_id,
             role="user",
             content=message,
             source="dashboard_chat",
+            metadata={
+                "topic_tags": topic_tags,
+                "estimated_tokens": copilot_training_service.estimate_tokens(message),
+            },
         )
+        started_at = time.perf_counter()
         reply = ai_overview_service.chat(
             message=message,
             context=context,
         )
+        latency_ms = round((time.perf_counter() - started_at) * 1000)
+        reply_text = str(reply.get("reply", ""))
+        assistant_topic_tags = sorted(
+            set(
+                topic_tags
+                + copilot_training_service.classify_topics(reply_text)
+            )
+        )
         repository.record_assistant_message(
             gig_id=gig_id,
             role="assistant",
-            content=str(reply.get("reply", "")),
+            content=reply_text,
             source=str(reply.get("provider", "assistant")),
             metadata={
                 "status": reply.get("status"),
                 "model": reply.get("model"),
                 "suggestions": reply.get("suggestions", []),
+                "topic_tags": assistant_topic_tags,
+                "latency_ms": latency_ms,
+                "estimated_tokens": copilot_training_service.estimate_tokens(reply_text),
+                "retrieved_sources": [str(item.get("filename", "")) for item in retrieved_knowledge[:5] if item.get("filename")],
             },
         )
         return {
             "assistant": reply,
+            "assistant_history": list(reversed(repository.list_assistant_messages(gig_id=gig_id, limit=12))),
+            "copilot_training": copilot_training_service.status(gig_id=gig_id),
+        }
+
+    @app.post("/api/assistant/feedback")
+    async def assistant_feedback(
+        payload: dict = Body(...),
+        _: None = Depends(require_auth),
+        __: None = Depends(require_csrf),
+    ) -> dict:
+        message_id = int(payload.get("message_id") or 0)
+        rating = int(payload.get("rating") or 0)
+        note = str(payload.get("note", "") or "")
+        if not message_id:
+            raise HTTPException(status_code=400, detail="message_id is required.")
+        if rating not in {-1, 1}:
+            raise HTTPException(status_code=400, detail="rating must be -1 or 1.")
+        try:
+            feedback = await asyncio.to_thread(
+                copilot_training_service.record_feedback,
+                message_id=message_id,
+                rating=rating,
+                note=note,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Assistant message {exc.args[0]} was not found.") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        gig_id = str(feedback.get("gig_id") or dashboard_service._gig_identifier())  # noqa: SLF001
+        training_status = copilot_training_service.status(gig_id=gig_id)
+        await websocket_manager.broadcast_json(
+            {
+                "type": "state",
+                "payload": build_state(),
+            }
+        )
+        await websocket_manager.broadcast_json(
+            {
+                "type": "copilot_training",
+                "payload": training_status,
+            }
+        )
+        return {
+            "feedback": feedback,
+            "copilot_training": training_status,
             "assistant_history": list(reversed(repository.list_assistant_messages(gig_id=gig_id, limit=12))),
         }
 
@@ -1867,9 +1983,13 @@ def create_app() -> FastAPI:
         cache_key = f"gigoptimizer:extension-import:{fingerprint}"
         cached_state = cache_service.get_json(cache_key)
         if isinstance(cached_state, dict) and cached_state.get("gig_comparison"):
+            comparison = normalize_extension_comparison_payload(
+                cached_state.get("gig_comparison"),
+                keyword=keyword,
+            )
             return {
                 "status": "cached",
-                "gig_comparison": cached_state.get("gig_comparison"),
+                "gig_comparison": comparison,
                 "optimization_score": (cached_state.get("latest_report") or {}).get("optimization_score"),
             }
 
@@ -1887,10 +2007,14 @@ def create_app() -> FastAPI:
             response_state,
             ttl_seconds=max(60, int(config.extension_import_ttl_seconds)),
         )
+        comparison = normalize_extension_comparison_payload(
+            response_state.get("gig_comparison"),
+            keyword=keyword,
+        )
         await websocket_manager.broadcast_json({"type": "state", "payload": response_state})
         return {
             "status": "ok",
-            "gig_comparison": response_state.get("gig_comparison"),
+            "gig_comparison": comparison,
             "optimization_score": (response_state.get("latest_report") or {}).get("optimization_score"),
         }
 

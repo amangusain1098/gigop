@@ -6,13 +6,16 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 
 from ..models import ApprovalRecord, MarketplaceGig, ValidationIssue
 from ..utils import build_gig_key
 from .database import DatabaseManager
 from .models import (
     AgentRunORM,
+    AssistantFeedbackORM,
     AssistantMessageORM,
+    CopilotTrainingRunORM,
     ComparisonHistoryORM,
     CompetitorSnapshotORM,
     FeedEntryORM,
@@ -153,25 +156,18 @@ class BlueprintRepository:
             return [self._agent_run_to_dict(item) for item in rows]
 
     def upsert_hitl_item(self, record: ApprovalRecord) -> None:
-        with self.database.session() as session:
-            session.merge(
-                HITLItemORM(
-                    id=record.id,
-                    agent_name=record.agent_name,
-                    action_type=record.action_type,
-                    current_value=record.current_value,
-                    proposed_value=record.proposed_value,
-                    confidence_score=record.confidence_score,
-                    validator_issues=[issue.__dict__ for issue in record.validator_issues],
-                    status=record.status,
-                    reviewer_notes=record.reviewer_notes,
-                    created_at=self._coerce_datetime(record.created_at),
-                    reviewed_at=self._coerce_datetime(record.reviewed_at),
-                )
-            )
+        try:
+            with self.database.session() as session:
+                self._apply_hitl_record(session, record)
+        except IntegrityError:
+            with self.database.session() as session:
+                self._apply_hitl_record(session, record)
 
     def sync_hitl_items(self, records: list[ApprovalRecord]) -> None:
+        latest_by_id: dict[str, ApprovalRecord] = {}
         for record in records:
+            latest_by_id[record.id] = record
+        for record in latest_by_id.values():
             self.upsert_hitl_item(record)
 
     def list_hitl_items(self, *, status: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
@@ -193,6 +189,22 @@ class BlueprintRepository:
         with self.database.session() as session:
             item = session.get(HITLItemORM, item_id)
             return self._hitl_to_dict(item)
+
+    def _apply_hitl_record(self, session, record: ApprovalRecord) -> None:
+        item = session.get(HITLItemORM, record.id)
+        if item is None:
+            item = HITLItemORM(id=record.id)
+            session.add(item)
+        item.agent_name = record.agent_name
+        item.action_type = record.action_type
+        item.current_value = record.current_value
+        item.proposed_value = record.proposed_value
+        item.confidence_score = record.confidence_score
+        item.validator_issues = [issue.__dict__ for issue in record.validator_issues]
+        item.status = record.status
+        item.reviewer_notes = record.reviewer_notes
+        item.created_at = self._coerce_datetime(record.created_at)
+        item.reviewed_at = self._coerce_datetime(record.reviewed_at)
 
     def replace_competitor_snapshots(
         self,
@@ -426,6 +438,11 @@ class BlueprintRepository:
         rows = self.list_assistant_messages(gig_id=gig_id, limit=1)
         return rows[0] if rows else None
 
+    def get_assistant_message(self, message_id: int) -> dict[str, Any] | None:
+        with self.database.session() as session:
+            item = session.get(AssistantMessageORM, int(message_id))
+            return self._assistant_message_to_dict(item) if item is not None else None
+
     def list_assistant_messages(self, *, gig_id: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
         with self.database.session() as session:
             query = select(AssistantMessageORM).order_by(AssistantMessageORM.created_at.desc()).limit(limit)
@@ -433,6 +450,141 @@ class BlueprintRepository:
                 query = query.where(AssistantMessageORM.gig_id == build_gig_key(gig_id))
             rows = session.scalars(query).all()
             return [self._assistant_message_to_dict(item) for item in rows]
+
+    def record_assistant_feedback(
+        self,
+        *,
+        message_id: int,
+        rating: int,
+        note: str = "",
+        topic_tags: list[str] | None = None,
+        quality_score: float = 0.0,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        with self.database.session() as session:
+            message = session.get(AssistantMessageORM, int(message_id))
+            if message is None:
+                raise KeyError(message_id)
+
+            feedback = session.scalar(
+                select(AssistantFeedbackORM).where(AssistantFeedbackORM.message_id == int(message_id))
+            )
+            if feedback is None:
+                feedback = AssistantFeedbackORM(
+                    message_id=int(message_id),
+                    gig_id=message.gig_id,
+                )
+                session.add(feedback)
+            feedback.rating = max(-1, min(1, int(rating)))
+            feedback.note = str(note).strip()
+            feedback.topic_tags = [str(item).strip() for item in (topic_tags or []) if str(item).strip()]
+            feedback.quality_score = float(max(0.0, min(1.0, quality_score)))
+            feedback.metadata_json = metadata or {}
+            feedback.updated_at = utc_now()
+
+            message_meta = dict(message.metadata_json or {})
+            message_meta["feedback"] = {
+                "rating": feedback.rating,
+                "note": feedback.note,
+                "topic_tags": feedback.topic_tags,
+                "quality_score": feedback.quality_score,
+                "updated_at": self._iso(feedback.updated_at),
+            }
+            message.metadata_json = message_meta
+
+        return self.get_assistant_feedback_by_message_id(int(message_id)) or {}
+
+    def get_assistant_feedback_by_message_id(self, message_id: int) -> dict[str, Any] | None:
+        with self.database.session() as session:
+            item = session.scalar(
+                select(AssistantFeedbackORM).where(AssistantFeedbackORM.message_id == int(message_id))
+            )
+            return self._assistant_feedback_to_dict(item) if item is not None else None
+
+    def list_assistant_feedback(
+        self,
+        *,
+        gig_id: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        with self.database.session() as session:
+            query = select(AssistantFeedbackORM).order_by(AssistantFeedbackORM.created_at.desc()).limit(limit)
+            if gig_id:
+                query = query.where(AssistantFeedbackORM.gig_id == build_gig_key(gig_id))
+            rows = session.scalars(query).all()
+            return [self._assistant_feedback_to_dict(item) for item in rows]
+
+    def feedback_summary(self, *, gig_id: str | None = None) -> dict[str, Any]:
+        items = self.list_assistant_feedback(gig_id=gig_id, limit=200)
+        if not items:
+            return {
+                "total": 0,
+                "positive": 0,
+                "negative": 0,
+                "positive_ratio": 0.0,
+                "recent_topics": [],
+            }
+        positive = sum(1 for item in items if int(item.get("rating", 0)) > 0)
+        negative = sum(1 for item in items if int(item.get("rating", 0)) < 0)
+        topics: list[str] = []
+        for item in items:
+            for tag in item.get("topic_tags", []) or []:
+                cleaned = str(tag).strip()
+                if cleaned and cleaned not in topics:
+                    topics.append(cleaned)
+        return {
+            "total": len(items),
+            "positive": positive,
+            "negative": negative,
+            "positive_ratio": round((positive / len(items)), 3) if items else 0.0,
+            "recent_topics": topics[:8],
+        }
+
+    def record_copilot_training_run(
+        self,
+        *,
+        run_id: str,
+        gig_id: str,
+        status: str,
+        train_path: str | None,
+        holdout_path: str | None,
+        preferences_path: str | None,
+        summary: dict[str, Any],
+        started_at: datetime,
+        finished_at: datetime | None,
+    ) -> dict[str, Any]:
+        normalized_gig_id = build_gig_key(gig_id)
+        with self.database.session() as session:
+            item = session.get(CopilotTrainingRunORM, run_id)
+            if item is None:
+                item = CopilotTrainingRunORM(run_id=run_id, gig_id=normalized_gig_id)
+                session.add(item)
+            item.gig_id = normalized_gig_id
+            item.status = str(status).strip() or "completed"
+            item.train_path = str(train_path).strip() if train_path else None
+            item.holdout_path = str(holdout_path).strip() if holdout_path else None
+            item.preferences_path = str(preferences_path).strip() if preferences_path else None
+            item.summary_json = summary or {}
+            item.started_at = started_at
+            item.finished_at = finished_at
+        return self.latest_copilot_training_run(gig_id=normalized_gig_id) or {}
+
+    def latest_copilot_training_run(self, *, gig_id: str | None = None) -> dict[str, Any] | None:
+        rows = self.list_copilot_training_runs(gig_id=gig_id, limit=1)
+        return rows[0] if rows else None
+
+    def list_copilot_training_runs(
+        self,
+        *,
+        gig_id: str | None = None,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        with self.database.session() as session:
+            query = select(CopilotTrainingRunORM).order_by(CopilotTrainingRunORM.started_at.desc()).limit(limit)
+            if gig_id:
+                query = query.where(CopilotTrainingRunORM.gig_id == build_gig_key(gig_id))
+            rows = session.scalars(query).all()
+            return [self._copilot_training_run_to_dict(item) for item in rows]
 
     def count_recent_failed_login_attempts(self, *, client_key: str, window_minutes: int = 30) -> int:
         cutoff = utc_now() - timedelta(minutes=max(1, window_minutes))
@@ -935,6 +1087,33 @@ class BlueprintRepository:
             "source": item.source,
             "metadata": item.metadata_json or {},
             "created_at": self._iso(item.created_at),
+        }
+
+    def _assistant_feedback_to_dict(self, item: AssistantFeedbackORM) -> dict[str, Any]:
+        return {
+            "id": item.id,
+            "message_id": item.message_id,
+            "gig_id": item.gig_id,
+            "rating": item.rating,
+            "note": item.note,
+            "topic_tags": item.topic_tags or [],
+            "quality_score": item.quality_score,
+            "metadata": item.metadata_json or {},
+            "created_at": self._iso(item.created_at),
+            "updated_at": self._iso(item.updated_at),
+        }
+
+    def _copilot_training_run_to_dict(self, item: CopilotTrainingRunORM) -> dict[str, Any]:
+        return {
+            "run_id": item.run_id,
+            "gig_id": item.gig_id,
+            "status": item.status,
+            "train_path": item.train_path or "",
+            "holdout_path": item.holdout_path or "",
+            "preferences_path": item.preferences_path or "",
+            "summary": item.summary_json or {},
+            "started_at": self._iso(item.started_at),
+            "finished_at": self._iso(item.finished_at),
         }
 
     def _login_attempt_to_dict(self, item: LoginAttemptORM) -> dict[str, Any]:

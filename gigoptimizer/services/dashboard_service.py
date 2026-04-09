@@ -5,8 +5,10 @@ import json
 import re
 from dataclasses import asdict
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 import tempfile
+import time
 from time import monotonic
 from typing import Any
 
@@ -2263,6 +2265,7 @@ class DashboardService:
             "user_actions": self.repository.list_user_actions(gig_id=gig_id, limit=8),
             "comparison_history": self.repository.list_comparison_history(gig_id=gig_id, limit=6),
             "assistant_history": self.repository.list_assistant_messages(gig_id=gig_id, limit=10),
+            "assistant_feedback": self.repository.list_assistant_feedback(gig_id=gig_id, limit=10),
             "knowledge_documents": self.repository.list_knowledge_documents(gig_id=gig_id, limit=8),
         }
 
@@ -2552,8 +2555,30 @@ class DashboardService:
         serialized = json.dumps(payload, indent=2)
         with tempfile.NamedTemporaryFile("w", delete=False, dir=str(path.parent), encoding="utf-8") as temp_file:
             temp_file.write(serialized)
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
             temp_name = temp_file.name
-        Path(temp_name).replace(path)
+        temp_path = Path(temp_name)
+        last_error: PermissionError | None = None
+        for attempt in range(5):
+            try:
+                temp_path.replace(path)
+                return
+            except PermissionError as exc:
+                last_error = exc
+                if attempt == 4:
+                    break
+                time.sleep(0.05 * (attempt + 1))
+        try:
+            path.write_text(serialized, encoding="utf-8")
+            temp_path.unlink(missing_ok=True)
+            return
+        except PermissionError:
+            if temp_path.exists():
+                temp_path.unlink(missing_ok=True)
+            if last_error is not None:
+                raise last_error
+            raise
 
     def _create_action_drafts(self, snapshot: GigSnapshot, report: OptimizationReport) -> None:
         if report.title_variants:

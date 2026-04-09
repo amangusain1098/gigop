@@ -353,10 +353,10 @@ Relevant `.env` values:
 ```powershell
 EMAIL_SMTP_HOST=smtp.gmail.com
 EMAIL_SMTP_PORT=587
-EMAIL_SMTP_USERNAME=vpnid259@gmail.com
+EMAIL_SMTP_USERNAME=you@example.com
 EMAIL_SMTP_PASSWORD=
-EMAIL_FROM_ADDRESS=vpnid259@gmail.com
-EMAIL_TO_ADDRESSES=reveal4902k@gmail.com
+EMAIL_FROM_ADDRESS=alerts@example.com
+EMAIL_TO_ADDRESSES=owner@example.com,ops@example.com
 EMAIL_USE_TLS=true
 ```
 
