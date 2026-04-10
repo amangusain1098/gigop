@@ -143,6 +143,8 @@ class GigOptimizerConfig:
     ai_model: str = "webhook"
     ai_api_key: str = ""
     ai_api_base_url: str = ""
+    n8n_webhook_secret: str = "change_me"
+    google_pagespeed_api_key: str = ""
     hostinger_enabled: bool = False
     hostinger_api_base_url: str = "https://developers.hostinger.com"
     hostinger_api_token: str = ""
@@ -363,6 +365,8 @@ class GigOptimizerConfig:
             ai_model=os.getenv("AI_MODEL", "webhook").strip() or "webhook",
             ai_api_key=os.getenv("AI_API_KEY", "").strip(),
             ai_api_base_url=os.getenv("AI_API_BASE_URL", "").strip(),
+            n8n_webhook_secret=os.getenv("N8N_WEBHOOK_SECRET", "change_me").strip() or "change_me",
+            google_pagespeed_api_key=os.getenv("GOOGLE_PAGESPEED_API_KEY", "").strip(),
             hostinger_enabled=_get_bool("HOSTINGER_ENABLED", False),
             hostinger_api_base_url=(
                 os.getenv("HOSTINGER_API_BASE_URL", "https://developers.hostinger.com").strip()

@@ -12,6 +12,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import ReactMarkdown from 'react-markdown'
 import { createDashboardSocket, fetchJson, loadBootstrap } from './api'
 import type {
   AssistantHistoryMessage,
@@ -55,6 +56,7 @@ type CompetitorRecommendation = {
 
 function App() {
   const extensionPromptDismissKey = 'gigoptimizer-extension-install-dismissed'
+  const assistantSessionStorageKey = 'gigoptimizer-assistant-session-id'
   const [data, setData] = useState<BootstrapPayload | null>(null)
   const [gigUrl, setGigUrl] = useState('')
   const [terms, setTerms] = useState('')
@@ -70,6 +72,7 @@ function App() {
   const [assistantOpen, setAssistantOpen] = useState(false)
   const [assistantInput, setAssistantInput] = useState('')
   const [assistantBusy, setAssistantBusy] = useState(false)
+  const [assistantWaitingForFirstChunk, setAssistantWaitingForFirstChunk] = useState(false)
   const [assistantMessages, setAssistantMessages] = useState<AssistantHistoryMessage[]>([])
   const [assistantInitialized, setAssistantInitialized] = useState(false)
   const [extensionInstalled, setExtensionInstalled] = useState(false)
@@ -78,6 +81,7 @@ function App() {
   const datasetInputRef = useRef<HTMLInputElement | null>(null)
   const assistantLogRef = useRef<HTMLDivElement | null>(null)
   const assistantInputRef = useRef<HTMLTextAreaElement | null>(null)
+  const assistantSessionIdRef = useRef(getAssistantSessionId(assistantSessionStorageKey))
   const lastMarketplaceSyncRef = useRef({ gigUrl: '', terms: '' })
 
   useEffect(() => {
@@ -116,7 +120,7 @@ function App() {
       assistantInputRef.current?.focus()
     })
     return () => window.cancelAnimationFrame(frame)
-  }, [assistantOpen, assistantMessages.length, assistantBusy])
+  }, [assistantOpen, assistantMessages.length, assistantBusy, assistantWaitingForFirstChunk])
 
   useEffect(() => {
     let timer = 0
@@ -435,20 +439,16 @@ function App() {
     }
   }
 
-  async function sendAssistantMessage(prefill?: string) {
+  async function sendAssistantMessageFallback(question: string) {
     if (!data) return
-    const question = (prefill ?? assistantInput).trim()
-    if (!question) return
-    setAssistantBusy(true)
-    setAssistantMessages((current) => [...current, { role: 'user', text: question }])
-    setAssistantInput('')
+    setAssistantWaitingForFirstChunk(true)
     try {
       const response = await withCsrfRetry((csrfToken) =>
         fetchJson<{ assistant: { reply: string; suggestions?: string[] }; assistant_history?: Array<Record<string, any>>; copilot_training?: CopilotTrainingStatus }>(
           '/api/assistant/chat',
           {
             method: 'POST',
-            body: JSON.stringify({ message: question }),
+            body: JSON.stringify({ message: question, session_id: assistantSessionIdRef.current }),
           },
           csrfToken,
         ),
@@ -469,6 +469,100 @@ function App() {
       if (response.copilot_training) {
         setData((current) => current ? { ...current, copilot_training: response.copilot_training } : current)
       }
+    } finally {
+      setAssistantWaitingForFirstChunk(false)
+    }
+  }
+
+  async function sendAssistantMessage(prefill?: string) {
+    if (!data) return
+    const question = (prefill ?? assistantInput).trim()
+    if (!question) return
+    setAssistantBusy(true)
+    setAssistantWaitingForFirstChunk(true)
+    setAssistantMessages((current) => [...current, { role: 'user', text: question }])
+    setAssistantInput('')
+    if (assistantInputRef.current) {
+      assistantInputRef.current.style.height = 'auto'
+    }
+    try {
+      if (typeof ReadableStream === 'undefined') {
+        await sendAssistantMessageFallback(question)
+        return
+      }
+      await withCsrfRetry(async (csrfToken) => {
+        const response = await fetch('/api/assistant/stream', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': csrfToken,
+          },
+          body: JSON.stringify({ message: question, session_id: assistantSessionIdRef.current }),
+        })
+        if (response.status === 401) {
+          window.location.href = '/login'
+          throw new Error('Authentication required.')
+        }
+        if (!response.ok) {
+          let detail = response.statusText
+          try {
+            const payload = await response.json()
+            detail = payload.error ?? payload.detail ?? payload.message ?? JSON.stringify(payload)
+          } catch {
+            detail = await response.text()
+          }
+          throw new Error(detail || `Request failed with status ${response.status}`)
+        }
+        if (!response.body?.getReader) {
+          await sendAssistantMessageFallback(question)
+          return
+        }
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+        let hasStarted = false
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          const events = buffer.split('\n\n')
+          buffer = events.pop() ?? ''
+          for (const rawEvent of events) {
+            const dataLines = rawEvent
+              .split('\n')
+              .filter((line) => line.startsWith('data:'))
+              .map((line) => line.slice(5).trimStart())
+            if (!dataLines.length) continue
+            const token = dataLines.join('\n')
+            if (token === '[DONE]') {
+              return
+            }
+            if (!hasStarted) {
+              hasStarted = true
+              setAssistantWaitingForFirstChunk(false)
+              setAssistantMessages((current) => [...current, { role: 'assistant', text: token }])
+            } else {
+              setAssistantMessages((current) => {
+                const next = [...current]
+                for (let index = next.length - 1; index >= 0; index -= 1) {
+                  if (next[index]?.role === 'assistant') {
+                    next[index] = {
+                      ...next[index],
+                      text: `${next[index].text}${token}`,
+                    }
+                    break
+                  }
+                }
+                return next
+              })
+            }
+          }
+        }
+        if (!hasStarted) {
+          await sendAssistantMessageFallback(question)
+        }
+      })
     } catch (reason) {
       const detail = reason instanceof Error ? reason.message : 'Assistant request failed.'
       setAssistantMessages((current) => [
@@ -480,6 +574,7 @@ function App() {
         },
       ])
     } finally {
+      setAssistantWaitingForFirstChunk(false)
       setAssistantBusy(false)
     }
   }
@@ -641,6 +736,18 @@ function App() {
     setShowExtensionPrompt(false)
   }
 
+  function exportChat() {
+    const markdown = assistantMessages
+      .map((messageEntry) => `**${messageEntry.role === 'assistant' ? 'Copilot' : 'You'}:** ${messageEntry.text}`)
+      .join('\n\n---\n\n')
+    const blob = new Blob([markdown], { type: 'text/markdown' })
+    const anchor = document.createElement('a')
+    anchor.href = URL.createObjectURL(blob)
+    anchor.download = `copilot-chat-${Date.now()}.md`
+    anchor.click()
+    URL.revokeObjectURL(anchor.href)
+  }
+
   function handleAssistantKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
@@ -658,7 +765,6 @@ function App() {
   const scraperRun = data.state.scraper_run ?? {}
   const hostinger = data.hostinger ?? {}
   const datasets = data.datasets ?? []
-  const aiSettings = (data.state.notifications?.ai ?? {}) as Record<string, any>
   const slackSettings = (data.state.notifications?.slack ?? {}) as Record<string, any>
   const myGig = (comparison.my_gig ?? {}) as Record<string, any>
   const failedLoginAttempts = (data.security?.failed_login_attempts ?? []) as FailedLoginAttemptRecord[]
@@ -718,10 +824,6 @@ function App() {
     ...item,
     label: shortDate(item.created_at),
   }))
-  const assistantProviderLabel = aiSettings.provider === 'n8n' ? 'n8n webhook' : String(aiSettings.provider ?? 'local fallback')
-  const assistantStatusLabel = aiSettings.enabled
-    ? (aiSettings.configured ? `${assistantProviderLabel} configured` : `${assistantProviderLabel} fallback`)
-    : 'local market fallback'
   const copilotTraining = (data.copilot_training ?? {
     enabled: true,
     status: 'idle',
@@ -1428,7 +1530,7 @@ function App() {
         </article>
       </section>
 
-      {\!assistantOpen ? (
+      {!assistantOpen ? (
         <button className="assistant-toggle" onClick={() => setAssistantOpen(true)}>
           <span className="assistant-toggle-icon">✦</span>
           Gig Copilot
@@ -1448,6 +1550,13 @@ function App() {
               </div>
             </div>
             <div className="assistant-head-actions">
+              <button
+                className="assistant-close-btn"
+                onClick={exportChat}
+                title="Export chat"
+              >
+                ⬇
+              </button>
               <button
                 className="assistant-close-btn"
                 onClick={() => setAssistantOpen(false)}
@@ -1474,6 +1583,20 @@ function App() {
 
           {/* Message log */}
           <div className="assistant-log" ref={assistantLogRef}>
+            {assistantMessages.length === 0 && !assistantBusy ? (
+              <div className="chat-welcome">
+                <div className="chat-welcome-avatar">✦</div>
+                <h3>Gig Copilot</h3>
+                <p>Your AI for Fiverr ranking, SEO audits, and content that converts.</p>
+                <div className="chat-welcome-chips">
+                  {['Rewrite my gig title', 'Who are my top competitors?', 'Audit my website SEO', 'Write a LinkedIn post'].map((question) => (
+                    <button key={question} className="welcome-chip" onClick={() => void sendAssistantMessage(question)} disabled={assistantBusy}>
+                      {question}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             {assistantMessages.map((entry, index) => (
               <div
                 className={`assistant-bubble assistant-bubble--${entry.role}`}
@@ -1482,7 +1605,9 @@ function App() {
                 <span className="bubble-meta">
                   {entry.role === 'assistant' ? 'Copilot' : 'You'}
                 </span>
-                <div className="bubble-body">{entry.text}</div>
+                <div className="bubble-body">
+                  <ReactMarkdown>{entry.text}</ReactMarkdown>
+                </div>
                 {entry.role === 'assistant' && entry.id ? (
                   <div className="assistant-feedback-row">
                     <button
@@ -1517,7 +1642,7 @@ function App() {
                 ) : null}
               </div>
             ))}
-            {assistantBusy ? (
+            {assistantWaitingForFirstChunk ? (
               <div className="assistant-bubble assistant-bubble--assistant assistant-bubble--pending">
                 <span className="bubble-meta">Copilot</span>
                 <div className="bubble-body">
@@ -1538,13 +1663,18 @@ function App() {
                 rows={1}
                 value={assistantInput}
                 onChange={(event) => setAssistantInput(event.target.value)}
+                onInput={(event) => {
+                  const element = event.currentTarget
+                  element.style.height = 'auto'
+                  element.style.height = `${Math.min(element.scrollHeight, 160)}px`
+                }}
                 onKeyDown={handleAssistantKeyDown}
                 placeholder="Ask about your gig, SEO, competitors..."
               />
               <button
                 className="compose-send-btn"
                 onClick={() => void sendAssistantMessage()}
-                disabled={assistantBusy || \!assistantInput.trim()}
+                disabled={assistantBusy || !assistantInput.trim()}
                 title="Send"
               >
                 →
@@ -1650,14 +1780,24 @@ function isPlaceholderText(value: string) {
 function buildAssistantMessages(payload: BootstrapPayload) {
   const history = mapAssistantHistory(payload.assistant_history ?? payload.memory?.assistant_history ?? [], payload)
   if (history.length) return history
-  return [
-    {
-      id: undefined,
-      role: 'assistant' as const,
-      text: "Ask me anything about your live Fiverr market position. I answer from the current page-one leaderboard, your gig comparison, and your recent scraper feed.",
-      suggestions: buildAssistantQuickPrompts(payload.state.gig_comparison ?? {}, (payload.state.gig_comparison ?? {}).implementation_blueprint ?? {}, payload.state.scraper_run ?? {}),
-    },
-  ]
+  return []
+}
+
+function getAssistantSessionId(storageKey: string) {
+  try {
+    const existing = window.sessionStorage.getItem(storageKey)
+    if (existing) {
+      return existing
+    }
+    const next =
+      typeof window.crypto?.randomUUID === 'function'
+        ? window.crypto.randomUUID()
+        : `session-${Date.now()}-${Math.random().toString(16).slice(2)}`
+    window.sessionStorage.setItem(storageKey, next)
+    return next
+  } catch {
+    return 'global'
+  }
 }
 
 function mapAssistantHistory(items: Array<Record<string, any>>, payload: BootstrapPayload | null) {

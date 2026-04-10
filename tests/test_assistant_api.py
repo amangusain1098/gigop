@@ -129,6 +129,8 @@ class AssistantRouterTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(body["envelope"]["feature"], "audit_website")
+        self.assertIn("pagespeed", body)
+        self.assertEqual(body["pagespeed"]["error"], "no_api_key")
 
     def test_generate_content_endpoint(self) -> None:
         canned_posts = (

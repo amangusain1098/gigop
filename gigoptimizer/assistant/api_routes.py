@@ -25,6 +25,7 @@ except Exception:  # pragma: no cover - allows import without fastapi installed
 
 from .assistant import AIAssistant
 from .client import LLMClient, build_default_client
+from ..connectors.pagespeed import PageSpeedConnector
 from .training import AssistantTrainer
 
 logger = logging.getLogger(__name__)
@@ -160,7 +161,8 @@ def build_assistant_router(
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"envelope": envelope.to_dict(), "result": result.to_dict()}
+        pagespeed = PageSpeedConnector().fetch(str(url or ""))
+        return {"envelope": envelope.to_dict(), "result": result.to_dict(), "pagespeed": pagespeed}
 
     # ------------------------------------------------------------------
     # /generate-content

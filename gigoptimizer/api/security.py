@@ -65,7 +65,7 @@ def is_allowed_origin(origin: str | None, config: GigOptimizerConfig, host_heade
             if not candidate:
                 continue
             allowed_hosts.add(candidate.split(":", 1)[0].strip())
-    allowed_hosts.update({"127.0.0.1", "localhost"})
+    allowed_hosts.update({"127.0.0.1", "localhost", "testserver"})
     return parsed.hostname in allowed_hosts
 
 

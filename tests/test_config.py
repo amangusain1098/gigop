@@ -12,6 +12,11 @@ from gigoptimizer.services.settings_service import SettingsService
 
 
 class ConfigValidationTests(unittest.TestCase):
+    def test_new_webhook_and_pagespeed_defaults_boot_cleanly(self) -> None:
+        config = GigOptimizerConfig.from_env()
+        self.assertEqual(config.n8n_webhook_secret, "change_me")
+        self.assertEqual(config.google_pagespeed_api_key, "")
+
     def test_validate_credentials_reports_missing_values_clearly(self) -> None:
         with patch.dict(
             os.environ,

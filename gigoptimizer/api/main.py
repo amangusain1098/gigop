@@ -14,7 +14,9 @@ import time
 from urllib.parse import urlsplit, urlunsplit
 
 import logging
+import re
 from zipfile import ZIP_DEFLATED, ZipFile
+from uuid import uuid4
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -24,6 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from ..assistant.memory import ConversationMemory
 from ..config import GigOptimizerConfig
 from ..jobs import JobEventBus, JobService
 from ..services import (
@@ -131,6 +134,11 @@ def build_extension_bundle(config: GigOptimizerConfig) -> Path:
         for file_path in source_files:
             archive.write(file_path, arcname=file_path.relative_to(EXTENSION_SOURCE_DIR))
     return bundle_path
+
+
+def slugify_text(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower())
+    return normalized.strip("-") or uuid4().hex
 
 
 def create_app() -> FastAPI:
@@ -1486,15 +1494,72 @@ def create_app() -> FastAPI:
         )
         return {"copilot_training": status}
 
-    @app.post("/api/assistant/chat")
-    async def assistant_chat(
-        payload: dict = Body(...),
-        _: None = Depends(require_auth),
-        __: None = Depends(require_csrf),
-    ) -> dict:
+    @app.post("/api/webhooks/n8n")
+    async def n8n_webhook(payload: dict = Body(...)) -> dict:
+        secret = str(payload.get("secret", "")).strip()
+        expected_secret = str(config.n8n_webhook_secret or "change_me").strip() or "change_me"
+        if not secrets.compare_digest(secret, expected_secret):
+            raise HTTPException(status_code=401, detail="Invalid n8n webhook secret.")
+
+        event = str(payload.get("event", "")).strip() or "unknown"
+        body = payload.get("payload") or {}
+
+        if event == "trigger_pipeline":
+            from ..jobs.tasks import run_pipeline_job
+
+            asyncio.create_task(
+                asyncio.to_thread(
+                    run_pipeline_job,
+                    uuid4().hex,
+                    use_live_connectors=True,
+                )
+            )
+        elif event == "trigger_compare":
+            from ..jobs.tasks import run_marketplace_compare_job
+
+            raw_terms = body.get("search_terms") or []
+            if isinstance(raw_terms, str):
+                search_terms = [item.strip() for item in re.split(r"[\n,;]+", raw_terms) if item.strip()]
+            else:
+                search_terms = [str(item).strip() for item in raw_terms if str(item).strip()]
+            asyncio.create_task(
+                asyncio.to_thread(
+                    run_marketplace_compare_job,
+                    uuid4().hex,
+                    gig_url=str(body.get("gig_url", "")).strip(),
+                    search_terms=search_terms,
+                )
+            )
+        elif event == "knowledge_refresh":
+            title = str(body.get("title", "")).strip() or "n8n-knowledge-refresh"
+            content = str(body.get("content", "")).strip()
+            knowledge_dir = (config.data_dir / "knowledge").resolve()
+            knowledge_dir.mkdir(parents=True, exist_ok=True)
+            target_path = knowledge_dir / f"{slugify_text(title)}.md"
+            target_path.write_text(content, encoding="utf-8")
+            if content:
+                knowledge_service.ingest_document(
+                    gig_id=copilot_learning_service.GLOBAL_GIG_ID,
+                    filename=target_path.name,
+                    content_type="text/markdown",
+                    raw_bytes=content.encode("utf-8"),
+                    source="n8n_webhook",
+                )
+        elif event == "unknown":
+            return {"status": "ignored"}
+        else:
+            return {"status": "ignored"}
+
+        return {"status": "ok", "event": event}
+
+    async def generate_assistant_chat_response(message: str, *, session_id: str = "global") -> dict:
         context = build_assistant_context()
         gig_id = str(context.get("gig_id") or dashboard_service._gig_identifier())  # noqa: SLF001
-        message = str(payload.get("message", ""))
+        normalized_session_id = str(session_id or "global").strip() or "global"
+        memory = ConversationMemory(normalized_session_id, data_dir=config.data_dir / "conversations")
+        memory.add("user", message)
+        memory_context = memory.summary()
+        prompt_message = f"[Recent context]\n{memory_context}\n\n[Current question]\n{message}"
         topic_tags = copilot_training_service.classify_topics(message)
         start_copilot_query_sync(message)
         retrieval_query_parts = [
@@ -1567,12 +1632,22 @@ def create_app() -> FastAPI:
         )
         started_at = time.perf_counter()
         reply = None
-        if ai_assistant is not None:
+        try:
+            reply = ai_overview_service.chat(
+                message=prompt_message,
+                context=context,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logging.warning(
+                "GigOptimizer Pro grounded copilot path failed, "
+                "falling back to unified assistant: %s",
+                exc,
+            )
+            reply = None
+
+        if reply is None and ai_assistant is not None:
             try:
-                # Build a grounded context string from the retrieval pipeline so
-                # the new AIAssistant has the same knowledge the dashboard
-                # copilot uses, plus its own RAG index on top.
-                grounding_lines: list = []
+                grounding_lines: list[str] = []
                 if context.get("recommended_title"):
                     grounding_lines.append(
                         f"Current recommended gig title: {context['recommended_title']}"
@@ -1606,16 +1681,19 @@ def create_app() -> FastAPI:
                         snippet = snippet[:600].rstrip() + "..."
                     source = str(doc.get("filename") or doc.get("document_id") or f"doc_{idx}")
                     grounding_lines.append(f"[{idx}] {source}:\n{snippet}")
+                if memory_context.strip():
+                    grounding_lines.insert(0, f"[Recent context]\n{memory_context}")
                 grounded_context = "\n\n".join(grounding_lines).strip() or None
 
-                envelope = ai_assistant.ask(
+                envelope = await asyncio.to_thread(
+                    ai_assistant.ask,
                     message,
                     context=grounded_context,
                     temperature=0.4,
                 )
                 structured = envelope.structured or {}
                 reply_text_new = (envelope.raw_text or "").strip()
-                suggestions_new: list = []
+                suggestions_new: list[str] = []
                 for step in (structured.get("action_steps") or [])[:6]:
                     step_text = str(step).strip()
                     if step_text:
@@ -1638,29 +1716,18 @@ def create_app() -> FastAPI:
                 }
             except Exception as exc:  # noqa: BLE001
                 logging.warning(
-                    "GigOptimizer Pro unified assistant path failed, "
-                    "falling back to legacy chat: %s",
+                    "GigOptimizer Pro unified assistant path failed after grounded fallback: %s",
                     exc,
                 )
                 reply = None
 
         if reply is None:
-            try:
-                reply = ai_overview_service.chat(
-                    message=message,
-                    context=context,
-                )
-            except Exception as exc:  # noqa: BLE001
-                logging.warning(
-                    "GigOptimizer Pro legacy copilot chat path failed: %s",
-                    exc,
-                )
-                reply = {
-                    "reply": "The copilot could not answer right now. Try again after refreshing the dashboard state.",
-                    "provider": "assistant-fallback",
-                    "status": "error",
-                    "suggestions": [],
-                }
+            reply = {
+                "reply": "The copilot could not answer right now. Try again after refreshing the dashboard state.",
+                "provider": "assistant-fallback",
+                "status": "error",
+                "suggestions": [],
+            }
         latency_ms = round((time.perf_counter() - started_at) * 1000)
         reply_text = str(reply.get("reply", ""))
         assistant_topic_tags = sorted(
@@ -1684,11 +1751,52 @@ def create_app() -> FastAPI:
                 "retrieved_sources": [str(item.get("filename", "")) for item in retrieved_knowledge[:5] if item.get("filename")],
             },
         )
+        memory.add("assistant", reply_text)
         return {
             "assistant": reply,
             "assistant_history": list(reversed(repository.list_assistant_messages(gig_id=gig_id, limit=12))),
             "copilot_training": copilot_training_service.status(gig_id=gig_id),
+            "session_id": normalized_session_id,
         }
+
+    @app.post("/api/assistant/chat")
+    async def assistant_chat(
+        payload: dict = Body(...),
+        _: None = Depends(require_auth),
+        __: None = Depends(require_csrf),
+    ) -> dict:
+        message = str(payload.get("message", "")).strip()
+        session_id = str(payload.get("session_id", "global")).strip() or "global"
+        if not message:
+            raise HTTPException(status_code=400, detail="message is required.")
+        return await generate_assistant_chat_response(message, session_id=session_id)
+
+    @app.post("/api/assistant/stream")
+    async def assistant_stream(
+        payload: dict = Body(...),
+        _: None = Depends(require_auth),
+        __: None = Depends(require_csrf),
+    ) -> StreamingResponse:
+        message = str(payload.get("message", "")).strip()
+        session_id = str(payload.get("session_id", "global")).strip() or "global"
+        if not message:
+            raise HTTPException(status_code=400, detail="message is required.")
+        response_payload = await generate_assistant_chat_response(message, session_id=session_id)
+        reply_text = str((response_payload.get("assistant") or {}).get("reply", ""))
+
+        async def event_stream():
+            if not reply_text:
+                yield "data: [DONE]\n\n"
+                return
+            for index in range(0, len(reply_text), 8):
+                chunk = reply_text[index : index + 8]
+                data_lines = chunk.splitlines() or [chunk]
+                event_payload = "".join(f"data: {line}\n" for line in data_lines)
+                yield f"{event_payload}\n"
+                await asyncio.sleep(0.012)
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
 
     @app.post("/api/assistant/feedback")
     async def assistant_feedback(
