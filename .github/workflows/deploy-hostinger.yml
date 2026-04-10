@@ -13,6 +13,30 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Create release archive
+        run: |
+          tar \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='artifacts' \
+            --exclude='data' \
+            --exclude='reports' \
+            --exclude='.env' \
+            --exclude='.env.production' \
+            --exclude='frontend/node_modules' \
+            --exclude='frontend/dist' \
+            -czf gigoptimizer-release.tgz .
+
+      - name: Upload release archive
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.HOSTINGER_HOST }}
+          username: ${{ secrets.HOSTINGER_USER }}
+          key: ${{ secrets.HOSTINGER_SSH_KEY }}
+          port: ${{ secrets.HOSTINGER_PORT }}
+          source: gigoptimizer-release.tgz
+          target: /tmp
+
       - name: Deploy over SSH
         uses: appleboy/ssh-action@v1.2.0
         with:
@@ -22,9 +46,25 @@ jobs:
           port: ${{ secrets.HOSTINGER_PORT }}
           script: |
             set -Eeuo pipefail
-            cd /opt/gigoptimizer-pro
-            git fetch --all
-            git checkout main
-            git pull --ff-only origin main
-            [ -f .env.production ] || cp .env.production.example .env.production
-            bash deploy/restart-stack.sh
+            APP_DIR=/opt/gigoptimizer-pro
+            RELEASE_DIR=/tmp/gigoptimizer-release
+
+            rm -rf "$RELEASE_DIR"
+            mkdir -p "$RELEASE_DIR" "$APP_DIR"
+            tar -xzf /tmp/gigoptimizer-release.tgz -C "$RELEASE_DIR"
+
+            if [ ! -f "$APP_DIR/.env.production" ]; then
+              cp "$RELEASE_DIR/.env.production.example" "$APP_DIR/.env.production"
+            fi
+
+            find "$APP_DIR" -mindepth 1 -maxdepth 1 \
+              ! -name '.env.production' \
+              -exec rm -rf {} +
+
+            cp -a "$RELEASE_DIR"/. "$APP_DIR"/
+            sed -i 's/\r$//' "$APP_DIR/deploy/restart-stack.sh"
+            chmod +x "$APP_DIR/deploy/restart-stack.sh"
+
+            bash "$APP_DIR/deploy/restart-stack.sh"
+
+            rm -rf "$RELEASE_DIR" /tmp/gigoptimizer-release.tgz
