@@ -15,6 +15,7 @@ jobs:
 
       - name: Create release archive
         run: |
+          mkdir -p artifacts
           tar \
             --exclude='.git' \
             --exclude='.github' \
@@ -25,7 +26,7 @@ jobs:
             --exclude='.env.production' \
             --exclude='frontend/node_modules' \
             --exclude='frontend/dist' \
-            -czf "$RUNNER_TEMP/gigoptimizer-release.tgz" .
+            -czf artifacts/gigoptimizer-release.tgz .
 
       - name: Upload release archive
         uses: appleboy/scp-action@v0.1.7
@@ -34,7 +35,7 @@ jobs:
           username: ${{ secrets.HOSTINGER_USER }}
           key: ${{ secrets.HOSTINGER_SSH_KEY }}
           port: ${{ secrets.HOSTINGER_PORT }}
-          source: ${{ runner.temp }}/gigoptimizer-release.tgz
+          source: artifacts/gigoptimizer-release.tgz
           target: /tmp
 
       - name: Deploy over SSH
