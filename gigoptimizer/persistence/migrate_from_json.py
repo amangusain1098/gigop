@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 
 from ..config import GigOptimizerConfig
-from ..models import ApprovalRecord, ValidationIssue
 from ..queue import HITLQueue
 from .database import DatabaseManager
 from .repository import BlueprintRepository

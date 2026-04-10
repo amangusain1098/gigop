@@ -19,6 +19,8 @@ from .prompts import (
     ARCHITECT_DESIGN_PROMPT,
     CHAIN_OF_THOUGHT_PROMPT,
     CONTENT_REFINER_PROMPT,
+    CONVERSATIONAL_PROMPT,
+    CONVERSATIONAL_SYSTEM_PROMPT,
     FIVERR_SEO_EXPERT_PROMPT,
     GIG_OPTIMIZER_SYSTEM_PROMPT,
     SAAS_SELF_AUDIT_PROMPT,
@@ -56,6 +58,78 @@ class AssistantResponse:
         return asdict(self)
 
 
+# ---------------------------------------------------------------------------
+# Intent classification for the copilot chatbot
+# ---------------------------------------------------------------------------
+_GREETINGS = {
+    "hi", "hii", "hiii", "hiiii", "hello", "helo", "hey", "heya", "hola",
+    "yo", "sup", "howdy", "greetings", "good morning", "good afternoon",
+    "good evening", "morning", "evening", "gm", "ga", "ge",
+}
+_THANKS = {
+    "thanks", "thank you", "ty", "thx", "thankyou", "appreciate it",
+    "cheers", "much appreciated",
+}
+_HOW_ARE_YOU = {
+    "how are you", "how is it going", "hows it going", "how are things",
+    "whats up", "how do you do", "how are u", "how r u",
+}
+_IDENTITY = {
+    "who are you", "what are you", "tell me about yourself",
+    "introduce yourself", "your name", "what is your name", "whats your name",
+    "who is this", "are you a bot", "are you an ai", "are you human",
+}
+_CAPABILITY = {
+    "what do you do", "what can you do", "what can you help with",
+    "what can i ask you", "how can you help", "what do you help with",
+    "what are you for", "what are you good at", "help me", "how does this work",
+    "what is this", "what is gigoptimizer",
+}
+
+_CONVERSATIONAL_INTENTS = {"greeting", "thanks", "how_are_you", "identity", "capability"}
+
+
+def _classify_intent(user_text):
+    """Classify a raw user message as conversational or task.
+
+    Returns one of: greeting, thanks, how_are_you, identity,
+    capability, empty, or task.
+    """
+    text = (user_text or "").strip().lower()
+    if not text:
+        return "empty"
+
+    stripped = text.rstrip("?!.,;: ")
+    # Also strip apostrophes/single quotes from the working copy so "what's"
+    # matches "whats" without having to enumerate both variants.
+    canon = stripped.replace("'", "").replace("\u2019", "")
+    words = canon.split()
+    word_count = len(words)
+
+    # Anything longer than 8 words is almost always an actual task.
+    if word_count > 8:
+        return "task"
+
+    if canon in _GREETINGS:
+        return "greeting"
+    if word_count <= 3 and any(canon == g or canon.startswith(g + " ") for g in _GREETINGS):
+        return "greeting"
+
+    if canon in _THANKS or any(canon == t or canon.startswith(t + " ") for t in _THANKS):
+        return "thanks"
+
+    if canon in _HOW_ARE_YOU or any(canon.startswith(h) for h in _HOW_ARE_YOU):
+        return "how_are_you"
+
+    if canon in _IDENTITY or any(canon.startswith(i) for i in _IDENTITY):
+        return "identity"
+
+    if canon in _CAPABILITY or any(canon.startswith(c) for c in _CAPABILITY):
+        return "capability"
+
+    return "task"
+
+
 _SECTION_ORDER = ("analysis", "problems", "optimized_version", "action_steps")
 _SECTION_HEADERS = {
     "analysis": ("analysis", "1. analysis"),
@@ -75,7 +149,7 @@ _SECTION_HEADERS = {
 }
 
 
-def _parse_structured(text: str) -> StructuredAnalysis:
+def _parse_structured(text):
     if not text or not text.strip():
         return StructuredAnalysis()
 
@@ -128,7 +202,7 @@ def _parse_structured(text: str) -> StructuredAnalysis:
     )
 
 
-def _extract_lines(text: str, header: str):
+def _extract_lines(text, header):
     if not text:
         return []
     lines = text.splitlines()
@@ -154,13 +228,13 @@ class AIAssistant:
     def __init__(
         self,
         *,
-        client: LLMClient | None = None,
-        rubric: ScoringRubric | None = None,
-        system_prompt: str = GIG_OPTIMIZER_SYSTEM_PROMPT,
-        default_temperature: float = 0.4,
-        default_max_tokens: int = 1024,
+        client=None,
+        rubric=None,
+        system_prompt=GIG_OPTIMIZER_SYSTEM_PROMPT,
+        default_temperature=0.4,
+        default_max_tokens=1024,
         rag_index=None,
-    ) -> None:
+    ):
         self.client = client or build_default_client()
         self.fallback_client = DeterministicLLMClient()
         self.rubric = rubric or ScoringRubric()
@@ -171,9 +245,9 @@ class AIAssistant:
 
     def _call(
         self,
-        user_prompt: str,
+        user_prompt,
         *,
-        feature: str,
+        feature,
         temperature=None,
         max_tokens=None,
         extra_system=None,
@@ -217,7 +291,7 @@ class AIAssistant:
 
     def _envelope(
         self,
-        feature: str,
+        feature,
         response,
         structured,
         *,
@@ -242,18 +316,49 @@ class AIAssistant:
     def ask(self, question, *, context=None, temperature=0.4, use_rag=True):
         if not question or not question.strip():
             raise ValueError("question must not be empty")
-        user_prompt = question.strip()
+
+        raw_question = question.strip()
+        intent = _classify_intent(raw_question)
+
+        # Conversational intents get a short, natural reply. No RAG, no
+        # chain-of-thought scaffolding, no structured section parsing.
+        if intent in _CONVERSATIONAL_INTENTS:
+            user_prompt = render_prompt(
+                CONVERSATIONAL_PROMPT,
+                user_message=raw_question,
+            )
+            response, fallback_used, warnings = self._call(
+                user_prompt,
+                feature="ask",
+                temperature=max(temperature, 0.6),
+                max_tokens=220,
+                extra_system=CONVERSATIONAL_SYSTEM_PROMPT,
+            )
+            # Build an empty StructuredAnalysis so the frontend doesnt try
+            # to render the four-part template for a simple "hi".
+            empty_structured = StructuredAnalysis().to_dict()
+            return self._envelope(
+                "ask",
+                response,
+                empty_structured,
+                score=None,
+                fallback_used=fallback_used,
+                warnings=warnings,
+            )
+
+        # Task intent: RAG + chain-of-thought + structured parsing.
+        user_prompt = raw_question
         effective_context = context
         if not effective_context and use_rag and self.rag_index is not None:
             try:
-                effective_context = self.rag_index.render_context(question.strip(), k=3)
+                effective_context = self.rag_index.render_context(raw_question, k=3)
             except Exception as exc:  # noqa: BLE001 - never let RAG crash ask()
                 logger.warning("rag retrieval failed: %s", exc)
                 effective_context = None
         if effective_context:
             user_prompt = render_prompt(
                 CHAIN_OF_THOUGHT_PROMPT,
-                user_request=question.strip(),
+                user_request=raw_question,
                 context=effective_context.strip(),
             )
         response, fallback_used, warnings = self._call(

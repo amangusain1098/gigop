@@ -139,13 +139,38 @@ CHAIN_OF_THOUGHT_PROMPT = """Think step-by-step before answering.
 4. What is the best optimized output?
 
 Then, and only then, return the final answer in the required four-part format.
-Do not show your reasoning in the final answer — keep it crisp.
+Do not show your reasoning in the final answer - keep it crisp.
 
 User request:
 {user_request}
 
 Supporting data:
 {context}
+"""
+
+
+# ---------------------------------------------------------------------------
+# 5b. Conversational mode (small talk, greetings, identity, capability)
+# ---------------------------------------------------------------------------
+CONVERSATIONAL_SYSTEM_PROMPT = """You are the AI copilot inside GigOptimizer Pro, a SaaS that helps freelancers and website owners optimize Fiverr gigs, audit websites for SEO and performance, and generate social content.
+
+When the user is chatting casually (greeting, introducing themselves, asking what you do, saying thanks, or asking how you work), respond naturally in one to three short sentences, like a friendly senior consultant. Do not use the "Analysis / Problems / Optimized Version / Action Steps" template for small talk.
+
+When the user asks an actual optimization or audit task, switch to structured, expert, action-first output.
+
+Rules for small talk:
+- Warm, direct, conversational.
+- Never start with "Analysis:" or any headered section.
+- Never output a bullet list for a one-line greeting.
+- Name what you can help with: Fiverr gig rewrites, website audits, SEO, and content generation.
+- Keep it under 60 words unless the user asked something open-ended.
+"""
+
+
+CONVERSATIONAL_PROMPT = """The user is chatting with you casually. Reply naturally in 1-3 short sentences, like a human expert would. No templates, no headers, no bullet lists. If they greet you, greet them back and briefly mention what you can help with (gig optimization, site audits, content). If they ask what you do or who you are, explain in one sentence and invite them to ask a real question.
+
+User message:
+{user_message}
 """
 
 
@@ -165,7 +190,7 @@ Suggest:
 - Growth hacks
 
 Think like a startup expert. Be specific. Do not repeat the product
-description back to me. No fluff, no "consider X" — tell me what to do.
+description back to me. No fluff, no "consider X" - tell me what to do.
 
 Product snapshot (JSON):
 ---
@@ -184,10 +209,10 @@ class _StrictFormatter(string.Formatter):
 
     def check_unused_args(
         self,
-        used_args: set[int | str],
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
-    ) -> None:
+        used_args,
+        args,
+        kwargs,
+    ):
         unused = set(kwargs) - {key for key in used_args if isinstance(key, str)}
         if unused:
             raise KeyError(f"Unused template keys: {sorted(unused)}")
@@ -208,5 +233,7 @@ ALL_PROMPTS: dict[str, str] = {
     "refiner": CONTENT_REFINER_PROMPT,
     "fiverr_seo": FIVERR_SEO_EXPERT_PROMPT,
     "chain_of_thought": CHAIN_OF_THOUGHT_PROMPT,
+    "conversational_system": CONVERSATIONAL_SYSTEM_PROMPT,
+    "conversational": CONVERSATIONAL_PROMPT,
     "self_audit": SAAS_SELF_AUDIT_PROMPT,
 }

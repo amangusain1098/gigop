@@ -1428,32 +1428,41 @@ function App() {
         </article>
       </section>
 
-      {!assistantOpen ? (
+      {\!assistantOpen ? (
         <button className="assistant-toggle" onClick={() => setAssistantOpen(true)}>
-          Open Copilot
+          <span className="assistant-toggle-icon">✦</span>
+          Gig Copilot
         </button>
       ) : null}
 
       {assistantOpen ? (
         <aside className="assistant-shell">
+
+          {/* Header */}
           <div className="assistant-head">
-            <div>
-              <p className="eyebrow">Gig Copilot</p>
-              <strong>Ask from live app data</strong>
-              <p className="assistant-subtitle">{assistantStatusLabel}</p>
-              <div className="pill-row">
-                <span className="pill">{String(comparison.primary_search_term ?? 'no primary term')}</span>
-                <span className="pill">{topRankedGig.title ? `#1 ${topRankedGig.seller_name || 'leader'}` : 'no live leader yet'}</span>
-                <span className="pill">{scraperRun.status ?? 'idle'} feed</span>
-                <span className="pill">{datasets.length} knowledge file(s)</span>
+            <div className="assistant-head-info">
+              <div className="assistant-avatar">✦</div>
+              <div className="assistant-head-text">
+                <strong>Gig Copilot</strong>
+                <p className="assistant-subtitle">Online · live gig data</p>
               </div>
             </div>
-            <button className="secondary" onClick={() => setAssistantOpen(false)}>Hide</button>
+            <div className="assistant-head-actions">
+              <button
+                className="assistant-close-btn"
+                onClick={() => setAssistantOpen(false)}
+                title="Close"
+              >
+                ✕
+              </button>
+            </div>
           </div>
-          <div className="pill-row assistant-quick-prompts">
+
+          {/* Quick prompts */}
+          <div className="assistant-quick-prompts">
             {assistantQuickPrompts.map((suggestion) => (
               <button
-                className="secondary pill-button"
+                className="quick-prompt-chip"
                 key={suggestion}
                 onClick={() => void sendAssistantMessage(suggestion)}
                 disabled={assistantBusy}
@@ -1462,22 +1471,29 @@ function App() {
               </button>
             ))}
           </div>
+
+          {/* Message log */}
           <div className="assistant-log" ref={assistantLogRef}>
             {assistantMessages.map((entry, index) => (
-              <div className={`assistant-bubble assistant-bubble--${entry.role}`} key={`${entry.role}-${index}`}>
-                <strong>{entry.role === 'assistant' ? 'Copilot' : 'You'}</strong>
-                <p>{entry.text}</p>
+              <div
+                className={`assistant-bubble assistant-bubble--${entry.role}`}
+                key={`${entry.role}-${index}`}
+              >
+                <span className="bubble-meta">
+                  {entry.role === 'assistant' ? 'Copilot' : 'You'}
+                </span>
+                <div className="bubble-body">{entry.text}</div>
                 {entry.role === 'assistant' && entry.id ? (
                   <div className="assistant-feedback-row">
                     <button
-                      className={`secondary feedback-button ${entry.feedbackRating === 1 ? 'feedback-button--active' : ''}`}
+                      className={`feedback-button ${entry.feedbackRating === 1 ? 'feedback-button--active' : ''}`}
                       onClick={() => void sendAssistantFeedback(entry.id as number, 1)}
                       disabled={busy === `feedback-${entry.id}` || assistantBusy}
                     >
                       Helpful
                     </button>
                     <button
-                      className={`secondary feedback-button ${entry.feedbackRating === -1 ? 'feedback-button--active' : ''}`}
+                      className={`feedback-button ${entry.feedbackRating === -1 ? 'feedback-button--active' : ''}`}
                       onClick={() => void sendAssistantFeedback(entry.id as number, -1)}
                       disabled={busy === `feedback-${entry.id}` || assistantBusy}
                     >
@@ -1486,10 +1502,10 @@ function App() {
                   </div>
                 ) : null}
                 {entry.suggestions?.length ? (
-                  <div className="pill-row assistant-suggestion-row">
+                  <div className="assistant-suggestion-row">
                     {entry.suggestions.map((suggestion) => (
                       <button
-                        className="secondary pill-button"
+                        className="suggestion-chip"
                         key={suggestion}
                         onClick={() => void sendAssistantMessage(suggestion)}
                         disabled={assistantBusy}
@@ -1503,23 +1519,38 @@ function App() {
             ))}
             {assistantBusy ? (
               <div className="assistant-bubble assistant-bubble--assistant assistant-bubble--pending">
-                <strong>Copilot</strong>
-                <p>Thinking through your live gig data...</p>
+                <span className="bubble-meta">Copilot</span>
+                <div className="bubble-body">
+                  <div className="typing-dots">
+                    <span /><span /><span />
+                  </div>
+                </div>
               </div>
             ) : null}
           </div>
+
+          {/* Compose */}
           <div className="assistant-compose">
-            <textarea
-              ref={assistantInputRef}
-              rows={3}
-              value={assistantInput}
-              onChange={(event) => setAssistantInput(event.target.value)}
-              onKeyDown={handleAssistantKeyDown}
-              placeholder="Ask anything about your gig, page-one competitors, title, pricing, trust, keywords, or what to change next..."
-            />
-            <button onClick={() => void sendAssistantMessage()} disabled={assistantBusy || !assistantInput.trim()}>
-              {assistantBusy ? 'Thinking...' : 'Send'}
-            </button>
+            <div className="compose-inner">
+              <textarea
+                className="compose-textarea"
+                ref={assistantInputRef}
+                rows={1}
+                value={assistantInput}
+                onChange={(event) => setAssistantInput(event.target.value)}
+                onKeyDown={handleAssistantKeyDown}
+                placeholder="Ask about your gig, SEO, competitors..."
+              />
+              <button
+                className="compose-send-btn"
+                onClick={() => void sendAssistantMessage()}
+                disabled={assistantBusy || \!assistantInput.trim()}
+                title="Send"
+              >
+                →
+              </button>
+            </div>
+            <p className="compose-hint">Enter to send · Shift+Enter for new line</p>
           </div>
         </aside>
       ) : null}

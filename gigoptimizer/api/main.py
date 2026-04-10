@@ -16,9 +16,8 @@ from urllib.parse import urlsplit, urlunsplit
 import logging
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from fastapi import Body, Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Body, Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.wsgi import WSGIMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -27,7 +26,6 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from ..config import GigOptimizerConfig
 from ..jobs import JobEventBus, JobService
-from ..persistence import BlueprintRepository, DatabaseManager
 from ..services import (
     AIOverviewService,
     AuthService,
@@ -43,7 +41,7 @@ from ..services import (
     SettingsService,
     WeeklyReportService,
 )
-from .security import SecurityHeadersMiddleware, require_csrf, verify_websocket_origin
+from .security import SecurityHeadersMiddleware, require_csrf
 from .scheduler import WeeklyReportScheduler
 from .websocket_manager import DashboardWebSocketManager
 
@@ -1569,24 +1567,11 @@ def create_app() -> FastAPI:
         )
         started_at = time.perf_counter()
         reply = None
-        try:
-            reply = ai_overview_service.chat(
-                message=message,
-                context=context,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logging.warning(
-                "GigOptimizer Pro legacy copilot chat path failed, "
-                "falling back to unified assistant: %s",
-                exc,
-            )
-            reply = None
-
-        if reply is None and ai_assistant is not None:
+        if ai_assistant is not None:
             try:
                 # Build a grounded context string from the retrieval pipeline so
-                # the fallback assistant still sees the same app state and
-                # uploaded knowledge the dashboard copilot uses.
+                # the new AIAssistant has the same knowledge the dashboard
+                # copilot uses, plus its own RAG index on top.
                 grounding_lines: list = []
                 if context.get("recommended_title"):
                     grounding_lines.append(
@@ -1653,7 +1638,21 @@ def create_app() -> FastAPI:
                 }
             except Exception as exc:  # noqa: BLE001
                 logging.warning(
-                    "GigOptimizer Pro unified assistant fallback failed: %s",
+                    "GigOptimizer Pro unified assistant path failed, "
+                    "falling back to legacy chat: %s",
+                    exc,
+                )
+                reply = None
+
+        if reply is None:
+            try:
+                reply = ai_overview_service.chat(
+                    message=message,
+                    context=context,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logging.warning(
+                    "GigOptimizer Pro legacy copilot chat path failed: %s",
                     exc,
                 )
                 reply = {

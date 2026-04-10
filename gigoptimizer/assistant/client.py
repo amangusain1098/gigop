@@ -17,7 +17,7 @@ The assistant never calls an HTTP SDK directly. Instead it speaks to a
 
 All clients return a ``LLMResponse`` with the raw text and token usage
 (when the backend reports it). They deliberately do not try to parse JSON or
-structured output - that's the assistant's job.
+structured output - thats the assistants job.
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ class LLMResponse:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     latency_ms: int = 0
-    raw: dict[str, Any] = field(default_factory=dict)
+    raw: dict = field(default_factory=dict)
 
 
 @runtime_checkable
@@ -57,29 +57,29 @@ class LLMClient(Protocol):
 
     def complete(
         self,
-        messages: list[LLMMessage],
+        messages,
         *,
         temperature: float = 0.4,
         max_tokens: int = 1024,
-    ) -> LLMResponse: ...
+    ) -> "LLMResponse": ...
 
 
 # ---------------------------------------------------------------------------
 # HTTP helper (stdlib only, no new deps)
 # ---------------------------------------------------------------------------
 def _post_json(
-    url: str,
-    payload: dict[str, Any],
+    url,
+    payload,
     *,
-    headers: dict[str, str] | None = None,
-    timeout: float = 60.0,
-) -> dict[str, Any]:
+    headers=None,
+    timeout=60.0,
+):
     body = json.dumps(payload).encode("utf-8")
     request_headers = {"Content-Type": "application/json"}
     if headers:
         request_headers.update(headers)
     request = urllib.request.Request(url, data=body, headers=request_headers, method="POST")
-    with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310 - POST to configured host
+    with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310
         raw = response.read().decode("utf-8", errors="replace")
     try:
         return json.loads(raw)
@@ -91,11 +91,7 @@ def _post_json(
 # Ollama (local, default)
 # ---------------------------------------------------------------------------
 class OllamaLLMClient:
-    """Talks to a locally running Ollama daemon.
-
-    Install once with ``ollama pull llama3.1:8b`` (or any other instruction
-    tuned model) and the assistant can run entirely on the user's machine.
-    """
+    """Talks to a locally running Ollama daemon."""
 
     name = "ollama"
 
@@ -105,18 +101,18 @@ class OllamaLLMClient:
         model: str = "llama3.1:8b",
         base_url: str = "http://localhost:11434",
         timeout: float = 90.0,
-    ) -> None:
+    ):
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
 
     def complete(
         self,
-        messages: list[LLMMessage],
+        messages,
         *,
         temperature: float = 0.4,
         max_tokens: int = 1024,
-    ) -> LLMResponse:
+    ):
         payload = {
             "model": self.model,
             "messages": [{"role": m.role, "content": m.content} for m in messages],
@@ -160,7 +156,7 @@ class OpenAILLMClient:
         model: str = "gpt-4o-mini",
         base_url: str = "https://api.openai.com/v1",
         timeout: float = 60.0,
-    ) -> None:
+    ):
         if not api_key:
             raise ValueError("OpenAILLMClient requires an API key")
         self.api_key = api_key
@@ -170,11 +166,11 @@ class OpenAILLMClient:
 
     def complete(
         self,
-        messages: list[LLMMessage],
+        messages,
         *,
         temperature: float = 0.4,
         max_tokens: int = 1024,
-    ) -> LLMResponse:
+    ):
         payload = {
             "model": self.model,
             "messages": [{"role": m.role, "content": m.content} for m in messages],
@@ -220,7 +216,7 @@ class AnthropicLLMClient:
         base_url: str = "https://api.anthropic.com/v1",
         anthropic_version: str = "2023-06-01",
         timeout: float = 60.0,
-    ) -> None:
+    ):
         if not api_key:
             raise ValueError("AnthropicLLMClient requires an API key")
         self.api_key = api_key
@@ -231,18 +227,18 @@ class AnthropicLLMClient:
 
     def complete(
         self,
-        messages: list[LLMMessage],
+        messages,
         *,
         temperature: float = 0.4,
         max_tokens: int = 1024,
-    ) -> LLMResponse:
+    ):
         system_parts = [m.content for m in messages if m.role == "system"]
         convo = [
             {"role": m.role, "content": m.content}
             for m in messages
             if m.role in {"user", "assistant"}
         ]
-        payload: dict[str, Any] = {
+        payload = {
             "model": self.model,
             "max_tokens": max_tokens,
             "temperature": temperature,
@@ -265,7 +261,9 @@ class AnthropicLLMClient:
 
         content = data.get("content") or []
         text = "".join(
-            block.get("text", "") for block in content if isinstance(block, dict) and block.get("type") == "text"
+            block.get("text", "")
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
         )
         usage = data.get("usage") or {}
         return LLMResponse(
@@ -288,11 +286,11 @@ class LLMUnavailableError(RuntimeError):
 class DeterministicLLMClient:
     """Offline, zero-dependency fallback.
 
-    This client does not call any network. It returns a template-shaped
-    response that satisfies the assistant's parser, so the product remains
-    usable in air-gapped environments and in CI. The text is intentionally
-    generic but follows the required four-part format so the downstream
-    parser never crashes.
+    This client does not call any network. It inspects the user turn and
+    returns either a short conversational reply (for greetings, identity,
+    capability, thanks) or a template-shaped four-part analysis (for real
+    optimization requests), so the product remains usable in air-gapped
+    environments and in CI.
     """
 
     name = "deterministic"
@@ -324,20 +322,153 @@ class DeterministicLLMClient:
         "5. Add a crisp CTA inside the first package description.\n"
     )
 
+    _GREETING_REPLY = (
+        "Hey! I am the GigOptimizer copilot. I can rewrite your Fiverr gigs, "
+        "audit websites for SEO and Core Web Vitals, and generate social "
+        "content that actually converts. What would you like to work on?"
+    )
+
+    _IDENTITY_REPLY = (
+        "I am the GigOptimizer Pro AI copilot. I specialize in Fiverr gig "
+        "optimization, website SEO and performance audits, and content "
+        "generation for LinkedIn, Twitter, and blogs. Ask me to rewrite a "
+        "gig, audit a URL, or draft posts."
+    )
+
+    _CAPABILITY_REPLY = (
+        "I can rewrite your Fiverr gig title, description, tags, and FAQ to "
+        "rank and convert better; audit any website for SEO, Core Web Vitals, "
+        "and conversion blockers; and generate social posts with hooks and "
+        "CTAs. Paste a URL, a gig, or a topic and I will take it from there."
+    )
+
+    _THANKS_REPLY = (
+        "Anytime. Ping me whenever you want to optimize something else."
+    )
+
+    _HOW_ARE_YOU_REPLY = (
+        "Running smooth. Ready to rewrite a gig, audit a site, or draft some "
+        "content whenever you are."
+    )
+
+    _GREETINGS_SET = {
+        "hi", "hii", "hiii", "hiiii", "hello", "helo", "hey", "heya", "hola",
+        "yo", "sup", "howdy", "greetings", "good morning", "good afternoon",
+        "good evening", "morning", "evening", "gm", "ga", "ge",
+    }
+    _THANKS_SET = {
+        "thanks", "thank you", "ty", "thx", "thankyou", "appreciate it",
+        "cheers", "much appreciated",
+    }
+    _HOW_ARE_YOU_SET = {
+        "how are you", "how is it going", "hows it going", "how are things",
+        "whats up", "how do you do", "how are u", "how r u",
+    }
+    _IDENTITY_SET = {
+        "who are you", "what are you", "tell me about yourself",
+        "introduce yourself", "your name", "what is your name",
+        "whats your name", "who is this", "are you a bot", "are you an ai",
+        "are you human",
+    }
+    _CAPABILITY_SET = {
+        "what do you do", "what can you do", "what can you help with",
+        "what can i ask you", "how can you help", "what do you help with",
+        "what are you for", "what are you good at", "help me",
+        "how does this work", "what is this", "what is gigoptimizer",
+    }
+
+    @classmethod
+    def _classify(cls, user_text):
+        text = (user_text or "").strip().lower()
+        if not text:
+            return "empty"
+        stripped = text.rstrip("?!.,;: ")
+        canon = stripped.replace("'", "").replace("\u2019", "")
+        words = canon.split()
+        word_count = len(words)
+        if word_count > 8:
+            return "task"
+        if canon in cls._GREETINGS_SET:
+            return "greeting"
+        if word_count <= 3 and any(canon == g or canon.startswith(g + " ") for g in cls._GREETINGS_SET):
+            return "greeting"
+        if canon in cls._THANKS_SET or any(canon == t or canon.startswith(t + " ") for t in cls._THANKS_SET):
+            return "thanks"
+        if canon in cls._HOW_ARE_YOU_SET or any(canon.startswith(h) for h in cls._HOW_ARE_YOU_SET):
+            return "how_are_you"
+        if canon in cls._IDENTITY_SET or any(canon.startswith(i) for i in cls._IDENTITY_SET):
+            return "identity"
+        if canon in cls._CAPABILITY_SET or any(canon.startswith(c) for c in cls._CAPABILITY_SET):
+            return "capability"
+        return "task"
+
     def complete(
         self,
-        messages: list[LLMMessage],
+        messages,
         *,
         temperature: float = 0.4,
         max_tokens: int = 1024,
-    ) -> LLMResponse:
-        # Keep a short echo of the user turn so tests can assert context was
-        # threaded through.
-        user_tail = ""
+    ):
+        user_text = ""
         for m in reversed(messages):
             if m.role == "user":
-                user_tail = m.content[:160].replace("\n", " ")
+                user_text = m.content
                 break
+
+        # Detect if the caller already wrapped the user turn in the
+        # conversational prompt template (which we should respect), vs a raw
+        # one-liner (which we should classify).
+        is_conversational_wrapper = "User message:" in user_text and (
+            "Reply naturally" in user_text or "casually" in user_text
+        )
+
+        # Extract the raw user text even when it has been wrapped in the
+        # conversational template.
+        raw = user_text
+        if is_conversational_wrapper:
+            marker = "User message:"
+            idx = user_text.rfind(marker)
+            if idx >= 0:
+                raw = user_text[idx + len(marker):].strip()
+
+        intent = self._classify(raw)
+
+        if intent in {"greeting", "thanks", "how_are_you", "identity", "capability"}:
+            if intent == "greeting":
+                text = self._GREETING_REPLY
+            elif intent == "thanks":
+                text = self._THANKS_REPLY
+            elif intent == "how_are_you":
+                text = self._HOW_ARE_YOU_REPLY
+            elif intent == "identity":
+                text = self._IDENTITY_REPLY
+            else:
+                text = self._CAPABILITY_REPLY
+            return LLMResponse(
+                text=text,
+                model=self.model,
+                provider=self.name,
+                prompt_tokens=sum(len(m.content) // 4 for m in messages),
+                completion_tokens=len(text) // 4,
+            )
+
+        # Conversational wrapper with an unclassified payload: play nice.
+        if is_conversational_wrapper:
+            text = (
+                "I am the GigOptimizer copilot. Tell me what you would like "
+                "to work on - a Fiverr gig, a website audit, or some content "
+                "- and I will help you optimize it."
+            )
+            return LLMResponse(
+                text=text,
+                model=self.model,
+                provider=self.name,
+                prompt_tokens=sum(len(m.content) // 4 for m in messages),
+                completion_tokens=len(text) // 4,
+            )
+
+        # Task intent: return the four-part structured template.
+        user_tail = user_text[:160].replace("\n", " ") if user_text else ""
         text = self._TEMPLATE
         if user_tail:
             text = f"{text}\nContext echo: {user_tail}\n"
@@ -355,23 +486,15 @@ class DeterministicLLMClient:
 # ---------------------------------------------------------------------------
 def build_default_client(
     *,
-    provider: str | None = None,
-    model: str | None = None,
-    api_key: str | None = None,
-    base_url: str | None = None,
-    env: dict[str, str] | None = None,
-) -> LLMClient:
-    """Build the best available client based on config + environment.
+    provider=None,
+    model=None,
+    api_key=None,
+    base_url=None,
+    env=None,
+):
+    """Build the best available client based on config + environment."""
 
-    Resolution order:
-
-    1. Explicit ``provider`` argument.
-    2. ``AI_PROVIDER`` environment variable.
-    3. Fall back to ``ollama`` (local) if it appears reachable, otherwise
-       ``deterministic``.
-    """
-
-    env = env or os.environ  # type: ignore[assignment]
+    env = env or os.environ
     provider = (provider or env.get("AI_PROVIDER") or "").strip().lower()
     model = model or env.get("AI_MODEL") or ""
     api_key = api_key or env.get("AI_API_KEY") or ""
@@ -404,7 +527,6 @@ def build_default_client(
         )
 
     if provider in {"", "auto"}:
-        # Try Ollama, silently fall back if not reachable.
         client = OllamaLLMClient(
             model=model or "llama3.1:8b",
             base_url=base_url or "http://localhost:11434",
@@ -420,11 +542,11 @@ def build_default_client(
     return DeterministicLLMClient()
 
 
-def _ping(base_url: str, *, timeout: float = 0.75) -> bool:
-    """Return True if ``base_url`` looks reachable."""
+def _ping(base_url, *, timeout=0.75):
+    """Return True if base_url looks reachable."""
     try:
         request = urllib.request.Request(f"{base_url.rstrip('/')}/api/tags", method="GET")
-        with urllib.request.urlopen(request, timeout=timeout):  # nosec B310 - local loopback ping
+        with urllib.request.urlopen(request, timeout=timeout):  # nosec B310
             return True
-    except Exception:  # noqa: BLE001 - any failure means "not reachable"
+    except Exception:  # noqa: BLE001
         return False

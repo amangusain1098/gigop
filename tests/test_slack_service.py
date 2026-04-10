@@ -5,7 +5,7 @@ import os
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from urllib.error import URLError
 
 from gigoptimizer.config import GigOptimizerConfig

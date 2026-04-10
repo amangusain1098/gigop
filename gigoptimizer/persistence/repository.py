@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -8,7 +7,7 @@ from typing import Any
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 
-from ..models import ApprovalRecord, MarketplaceGig, ValidationIssue
+from ..models import ApprovalRecord, MarketplaceGig
 from ..utils import build_gig_key
 from .database import DatabaseManager
 from .models import (

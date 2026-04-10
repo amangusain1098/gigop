@@ -6,7 +6,6 @@ import re
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from html import unescape
-from pathlib import Path
 from typing import Any
 from urllib.parse import quote_plus
 from xml.etree import ElementTree as ET
