@@ -28,7 +28,7 @@ import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
 

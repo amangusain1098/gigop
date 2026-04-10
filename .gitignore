@@ -20,6 +20,10 @@ playwright/.marketplace-profile/
 
 frontend/node_modules/
 frontend/dist/
+build/
+
+.claude/
+CLAUDE.md
 
 .pytest_cache/
 .mypy_cache/

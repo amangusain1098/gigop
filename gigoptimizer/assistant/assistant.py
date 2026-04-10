@@ -7,13 +7,11 @@ import logging
 import re
 import time
 from dataclasses import asdict, dataclass, field
-from typing import Any, Iterable, Mapping
 
 from .client import (
     DeterministicLLMClient,
     LLMClient,
     LLMMessage,
-    LLMResponse,
     LLMUnavailableError,
     build_default_client,
 )
@@ -35,7 +33,7 @@ from .schemas import (
     StructuredAnalysis,
     WebsiteAuditResult,
 )
-from .scoring import GigScoreBreakdown, ScoringRubric
+from .scoring import ScoringRubric
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +159,7 @@ class AIAssistant:
         system_prompt: str = GIG_OPTIMIZER_SYSTEM_PROMPT,
         default_temperature: float = 0.4,
         default_max_tokens: int = 1024,
+        rag_index=None,
     ) -> None:
         self.client = client or build_default_client()
         self.fallback_client = DeterministicLLMClient()
@@ -168,6 +167,7 @@ class AIAssistant:
         self.system_prompt = system_prompt
         self.default_temperature = default_temperature
         self.default_max_tokens = default_max_tokens
+        self.rag_index = rag_index
 
     def _call(
         self,
@@ -239,15 +239,22 @@ class AIAssistant:
             warnings=list(warnings),
         )
 
-    def ask(self, question, *, context=None, temperature=0.4):
+    def ask(self, question, *, context=None, temperature=0.4, use_rag=True):
         if not question or not question.strip():
             raise ValueError("question must not be empty")
         user_prompt = question.strip()
-        if context:
+        effective_context = context
+        if not effective_context and use_rag and self.rag_index is not None:
+            try:
+                effective_context = self.rag_index.render_context(question.strip(), k=3)
+            except Exception as exc:  # noqa: BLE001 - never let RAG crash ask()
+                logger.warning("rag retrieval failed: %s", exc)
+                effective_context = None
+        if effective_context:
             user_prompt = render_prompt(
                 CHAIN_OF_THOUGHT_PROMPT,
                 user_request=question.strip(),
-                context=context.strip(),
+                context=effective_context.strip(),
             )
         response, fallback_used, warnings = self._call(
             user_prompt,

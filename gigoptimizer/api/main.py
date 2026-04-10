@@ -171,6 +171,38 @@ def create_app() -> FastAPI:
     database_manager = dashboard_service.database_manager
     repository = dashboard_service.repository
     copilot_training_service = CopilotTrainingService(config, repository)
+    try:
+        from gigoptimizer.assistant.api_routes import build_assistant
+        from gigoptimizer.assistant.training import AssistantTrainer
+
+        ai_assistant = build_assistant(
+            provider=config.ai_provider,
+            model=config.ai_model,
+            api_key=config.ai_api_key,
+            base_url=getattr(config, "ai_api_base_url", "") or None,
+        )
+        assistant_trainer = AssistantTrainer(
+            data_dir=config.data_dir,
+            repository=repository,
+        )
+        # Attach a previously built RAG index if one exists on disk.
+        try:
+            from gigoptimizer.assistant.rag import RAGIndex
+            from pathlib import Path as _P
+
+            _rag_index_path = _P(config.data_dir) / "assistant" / "rag_index.json"
+            _rag_chunks_path = _P(config.data_dir) / "assistant" / "rag_chunks.jsonl"
+            if _rag_index_path.exists() and _rag_chunks_path.exists():
+                ai_assistant.rag_index = RAGIndex.load(
+                    index_path=_rag_index_path,
+                    chunks_path=_rag_chunks_path,
+                )
+        except Exception as _rag_exc:  # noqa: BLE001
+            logging.warning("GigOptimizer Pro could not load RAG index: %s", _rag_exc)
+    except Exception as exc:  # noqa: BLE001
+        logging.warning("GigOptimizer Pro could not initialize AI assistant: %s", exc)
+        ai_assistant = None
+        assistant_trainer = None
     event_bus = JobEventBus(config)
     job_service = JobService(config, repository, event_bus, cache_service=cache_service)
     auth_service = AuthService(config)
@@ -546,6 +578,22 @@ def create_app() -> FastAPI:
             return
         if auth_service.get_request_session(request) is None:
             raise HTTPException(status_code=401, detail="Authentication required.")
+
+    if ai_assistant is not None:
+        try:
+            from gigoptimizer.assistant.api_routes import build_assistant_router
+
+            assistant_router = build_assistant_router(
+                assistant=ai_assistant,
+                trainer=assistant_trainer,
+                auth_dependency=require_auth,
+                csrf_dependency=require_csrf,
+            )
+            app.include_router(assistant_router)
+            app.state.ai_assistant = ai_assistant
+            app.state.assistant_trainer = assistant_trainer
+        except Exception as exc:  # noqa: BLE001
+            logging.warning("GigOptimizer Pro could not mount AI assistant router: %s", exc)
 
     def require_extension_token(request: Request) -> None:
         if not config.extension_enabled:
@@ -1520,10 +1568,100 @@ def create_app() -> FastAPI:
             },
         )
         started_at = time.perf_counter()
-        reply = ai_overview_service.chat(
-            message=message,
-            context=context,
-        )
+        reply = None
+        try:
+            reply = ai_overview_service.chat(
+                message=message,
+                context=context,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logging.warning(
+                "GigOptimizer Pro legacy copilot chat path failed, "
+                "falling back to unified assistant: %s",
+                exc,
+            )
+            reply = None
+
+        if reply is None and ai_assistant is not None:
+            try:
+                # Build a grounded context string from the retrieval pipeline so
+                # the fallback assistant still sees the same app state and
+                # uploaded knowledge the dashboard copilot uses.
+                grounding_lines: list = []
+                if context.get("recommended_title"):
+                    grounding_lines.append(
+                        f"Current recommended gig title: {context['recommended_title']}"
+                    )
+                if context.get("primary_search_term"):
+                    grounding_lines.append(
+                        f"Primary search term: {context['primary_search_term']}"
+                    )
+                recommended_tags = context.get("recommended_tags") or []
+                if recommended_tags:
+                    grounding_lines.append(
+                        "Recommended tags: "
+                        + ", ".join(str(tag) for tag in recommended_tags[:8])
+                    )
+                do_this_first = context.get("do_this_first") or []
+                if do_this_first:
+                    grounding_lines.append(
+                        "Immediate actions in progress: "
+                        + "; ".join(str(step) for step in do_this_first[:5])
+                    )
+                for idx, doc in enumerate(retrieved_knowledge[:5], start=1):
+                    snippet = str(
+                        doc.get("snippet")
+                        or doc.get("content")
+                        or doc.get("preview")
+                        or ""
+                    ).strip()
+                    if not snippet:
+                        continue
+                    if len(snippet) > 600:
+                        snippet = snippet[:600].rstrip() + "..."
+                    source = str(doc.get("filename") or doc.get("document_id") or f"doc_{idx}")
+                    grounding_lines.append(f"[{idx}] {source}:\n{snippet}")
+                grounded_context = "\n\n".join(grounding_lines).strip() or None
+
+                envelope = ai_assistant.ask(
+                    message,
+                    context=grounded_context,
+                    temperature=0.4,
+                )
+                structured = envelope.structured or {}
+                reply_text_new = (envelope.raw_text or "").strip()
+                suggestions_new: list = []
+                for step in (structured.get("action_steps") or [])[:6]:
+                    step_text = str(step).strip()
+                    if step_text:
+                        suggestions_new.append(step_text)
+                status_new = "ok"
+                if envelope.fallback_used:
+                    status_new = "fallback"
+                if not reply_text_new:
+                    status_new = "empty"
+                reply = {
+                    "reply": reply_text_new,
+                    "provider": envelope.provider or "ai_assistant",
+                    "status": status_new,
+                    "model": envelope.model or "",
+                    "suggestions": suggestions_new,
+                    "score": envelope.score,
+                    "structured": structured,
+                    "warnings": list(envelope.warnings or []),
+                    "latency_ms": envelope.latency_ms,
+                }
+            except Exception as exc:  # noqa: BLE001
+                logging.warning(
+                    "GigOptimizer Pro unified assistant fallback failed: %s",
+                    exc,
+                )
+                reply = {
+                    "reply": "The copilot could not answer right now. Try again after refreshing the dashboard state.",
+                    "provider": "assistant-fallback",
+                    "status": "error",
+                    "suggestions": [],
+                }
         latency_ms = round((time.perf_counter() - started_at) * 1000)
         reply_text = str(reply.get("reply", ""))
         assistant_topic_tags = sorted(

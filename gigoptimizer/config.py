@@ -34,6 +34,15 @@ def _get_int(name: str, default: int) -> int:
         return default
 
 
+def _default_training_mirror_dir() -> str:
+    configured = os.getenv("COPILOT_TRAINING_LOCAL_MIRROR_DIR")
+    if configured is not None and configured.strip():
+        return configured.strip()
+    if os.name == "nt":
+        return str((Path.home() / "GigOptimizerTraining").resolve())
+    return ""
+
+
 @dataclass(slots=True)
 class GigOptimizerConfig:
     data_dir: Path = Path("data")
@@ -155,6 +164,8 @@ class GigOptimizerConfig:
     copilot_learning_interval_minutes: int = 30
     copilot_training_enabled: bool = True
     copilot_training_export_interval_minutes: int = 180
+    copilot_training_local_mirror_enabled: bool = False
+    copilot_training_local_mirror_dir: Path | None = None
     extension_enabled: bool = True
     extension_api_token: str = ""
     extension_max_gigs_per_import: int = 25
@@ -376,6 +387,15 @@ class GigOptimizerConfig:
             copilot_learning_interval_minutes=_get_int("COPILOT_LEARNING_INTERVAL_MINUTES", 30),
             copilot_training_enabled=_get_bool("COPILOT_TRAINING_ENABLED", True),
             copilot_training_export_interval_minutes=_get_int("COPILOT_TRAINING_EXPORT_INTERVAL_MINUTES", 180),
+            copilot_training_local_mirror_enabled=_get_bool(
+                "COPILOT_TRAINING_LOCAL_MIRROR_ENABLED",
+                bool(_default_training_mirror_dir()),
+            ),
+            copilot_training_local_mirror_dir=(
+                Path(_default_training_mirror_dir()).expanduser()
+                if _default_training_mirror_dir()
+                else None
+            ),
             extension_enabled=_get_bool("EXTENSION_ENABLED", True),
             extension_api_token=os.getenv("EXTENSION_API_TOKEN", "").strip(),
             extension_max_gigs_per_import=_get_int("EXTENSION_MAX_GIGS_PER_IMPORT", 25),
@@ -696,7 +716,13 @@ class GigOptimizerConfig:
             status="active",
             detail=(
                 "active "
-                f"(dataset export every {max(15, self.copilot_training_export_interval_minutes)} minutes when scheduler is running)"
+                f"(dataset export every {max(15, self.copilot_training_export_interval_minutes)} minutes when scheduler is running"
+                + (
+                    f"; laptop mirror: {self.copilot_training_local_mirror_dir}"
+                    if self.copilot_training_local_mirror_enabled and self.copilot_training_local_mirror_dir
+                    else ""
+                )
+                + ")"
             ),
         )
 

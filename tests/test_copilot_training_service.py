@@ -17,6 +17,7 @@ class CopilotTrainingServiceTests(unittest.TestCase):
     def test_export_training_bundle_creates_clean_holdout_and_feedback_summary(self) -> None:
         with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             temp_root = Path(tmp)
+            mirror_root = temp_root / "laptop-training"
             with patch.dict(
                 os.environ,
                 {
@@ -25,6 +26,8 @@ class CopilotTrainingServiceTests(unittest.TestCase):
                     "REPORTS_DIR": str(temp_root / "reports"),
                     "INTEGRATION_SETTINGS_PATH": str(temp_root / "data" / "integrations.json"),
                     "DATABASE_URL": f"sqlite:///{(temp_root / 'data' / 'training.db').as_posix()}",
+                    "COPILOT_TRAINING_LOCAL_MIRROR_ENABLED": "true",
+                    "COPILOT_TRAINING_LOCAL_MIRROR_DIR": str(mirror_root),
                 },
                 clear=False,
             ):
@@ -53,6 +56,11 @@ class CopilotTrainingServiceTests(unittest.TestCase):
                 self.assertTrue(holdout_path.exists())
                 payload = holdout_path.read_text(encoding="utf-8")
                 self.assertIn("[redacted-email]", payload)
+                local_mirror = status["local_mirror"]
+                self.assertTrue(local_mirror["enabled"])
+                self.assertEqual(local_mirror["path"], str(mirror_root.resolve()))
+                self.assertTrue(Path(local_mirror["latest_files"]["holdout_path"]).exists())
+                self.assertTrue(Path(local_mirror["latest_files"]["status_path"]).exists())
 
         self.assertEqual(status["feedback"]["positive"], 1)
         self.assertEqual(status["holdout_examples"], 1)

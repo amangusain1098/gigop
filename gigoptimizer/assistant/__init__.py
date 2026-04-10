@@ -45,6 +45,14 @@ from .schemas import (
     WebsiteAuditResult,
 )
 from .scoring import GigScoreBreakdown, ScoringRubric
+from .rag import RAGHit, RAGIndex
+from .training import AssistantTrainer, TrainingExample, TrainingReport
+
+try:  # fastapi is optional at import time
+    from .api_routes import build_assistant, build_assistant_router
+except Exception:  # pragma: no cover - optional dependency
+    build_assistant = None  # type: ignore[assignment]
+    build_assistant_router = None  # type: ignore[assignment]
 
 __all__ = [
     "AIAssistant",
@@ -73,4 +81,11 @@ __all__ = [
     "WebsiteAuditResult",
     "GigScoreBreakdown",
     "ScoringRubric",
+    "RAGHit",
+    "RAGIndex",
+    "AssistantTrainer",
+    "TrainingExample",
+    "TrainingReport",
+    "build_assistant",
+    "build_assistant_router",
 ]

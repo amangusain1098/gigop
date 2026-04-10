@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import uuid
 from collections import Counter
 from datetime import datetime, timezone
@@ -38,8 +39,11 @@ class CopilotTrainingService:
         self.repository = repository
         self.training_dir = (self.config.data_dir / "copilot_training").resolve()
         self.exports_dir = self.training_dir / "exports"
+        self.local_mirror_dir = self._resolve_local_mirror_dir()
         self.training_dir.mkdir(parents=True, exist_ok=True)
         self.exports_dir.mkdir(parents=True, exist_ok=True)
+        if self.local_mirror_dir is not None:
+            self.local_mirror_dir.mkdir(parents=True, exist_ok=True)
 
     def status(self, *, gig_id: str | None = None) -> dict[str, Any]:
         target_gig = build_gig_key(gig_id or self.GLOBAL_GIG_ID)
@@ -63,6 +67,7 @@ class CopilotTrainingService:
                     "holdout_path": latest.get("holdout_path", ""),
                     "preferences_path": latest.get("preferences_path", ""),
                 },
+                "local_mirror": self._build_local_mirror_status(latest),
             }
         return {
             "enabled": True,
@@ -80,6 +85,7 @@ class CopilotTrainingService:
                 "holdout_path": "",
                 "preferences_path": "",
             },
+            "local_mirror": self._build_local_mirror_status(None),
         }
 
     def classify_topics(self, text: str) -> list[str]:
@@ -184,6 +190,14 @@ class CopilotTrainingService:
             "top_topics": [topic for topic, _ in topic_counter.most_common(8)],
             "generated_at": started_at.isoformat(),
         }
+        mirror_details = self._mirror_export_bundle(
+            gig_id=target_gig,
+            train_path=train_path,
+            holdout_path=holdout_path,
+            preferences_path=preferences_path,
+        )
+        if mirror_details:
+            summary["local_mirror"] = mirror_details
         finished_at = utc_now()
         self.repository.record_copilot_training_run(
             run_id=run_id,
@@ -209,6 +223,54 @@ class CopilotTrainingService:
             gig_id=target_gig,
         )
         return self.status(gig_id=target_gig)
+
+    def _resolve_local_mirror_dir(self) -> Path | None:
+        if not self.config.copilot_training_local_mirror_enabled:
+            return None
+        if self.config.copilot_training_local_mirror_dir is None:
+            return None
+        return Path(self.config.copilot_training_local_mirror_dir).expanduser().resolve()
+
+    def _build_local_mirror_status(self, latest: dict[str, Any] | None) -> dict[str, Any]:
+        summary = dict((latest or {}).get("summary") or {})
+        local_mirror = dict(summary.get("local_mirror") or {})
+        return {
+            "enabled": self.local_mirror_dir is not None,
+            "path": str(self.local_mirror_dir) if self.local_mirror_dir is not None else "",
+            "last_synced_at": str(local_mirror.get("synced_at", "")),
+            "latest_files": {
+                "train_path": str(local_mirror.get("train_path", "")),
+                "holdout_path": str(local_mirror.get("holdout_path", "")),
+                "preferences_path": str(local_mirror.get("preferences_path", "")),
+                "status_path": str(local_mirror.get("status_path", "")),
+            },
+        }
+
+    def _mirror_export_bundle(
+        self,
+        *,
+        gig_id: str,
+        train_path: Path,
+        holdout_path: Path,
+        preferences_path: Path,
+    ) -> dict[str, Any]:
+        if self.local_mirror_dir is None:
+            return {}
+        target_dir = self.local_mirror_dir / gig_id.replace(":", "_")
+        target_dir.mkdir(parents=True, exist_ok=True)
+        mirrored_train = target_dir / train_path.name
+        mirrored_holdout = target_dir / holdout_path.name
+        mirrored_preferences = target_dir / preferences_path.name
+        shutil.copy2(train_path, mirrored_train)
+        shutil.copy2(holdout_path, mirrored_holdout)
+        shutil.copy2(preferences_path, mirrored_preferences)
+        return {
+            "synced_at": utc_now().isoformat(),
+            "train_path": str(mirrored_train),
+            "holdout_path": str(mirrored_holdout),
+            "preferences_path": str(mirrored_preferences),
+            "status_path": str(target_dir / self.STATUS_FILE),
+        }
 
     def _build_pairs(
         self,
@@ -331,3 +393,8 @@ class CopilotTrainingService:
         target.mkdir(parents=True, exist_ok=True)
         status_path = target / self.STATUS_FILE
         status_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        if self.local_mirror_dir is not None:
+            mirror_target = self.local_mirror_dir / gig_id.replace(":", "_")
+            mirror_target.mkdir(parents=True, exist_ok=True)
+            mirror_status_path = mirror_target / self.STATUS_FILE
+            mirror_status_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
