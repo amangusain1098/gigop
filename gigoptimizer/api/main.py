@@ -652,7 +652,12 @@ def create_app() -> FastAPI:
             },
         }
 
+    _n8n_api_key: str = config.get("N8N_INTERNAL_API_KEY", "")
+
     def require_auth(request: Request) -> None:
+        # Allow internal automation tools (n8n) via API key header — no session/CSRF needed
+        if _n8n_api_key and request.headers.get("X-Internal-API-Key") == _n8n_api_key:
+            return
         if not auth_service.auth_enabled:
             return
         if auth_service.get_request_session(request) is None:
@@ -2594,15 +2599,4 @@ def run() -> None:
     import uvicorn
 
     config = GigOptimizerConfig.from_env()
-    uvicorn.run(
-        "gigoptimizer.api.main:app",
-        host=config.app_host,
-        port=config.app_port,
-        reload=False,
-        proxy_headers=True,
-        forwarded_allow_ips=config.app_forwarded_allow_ips,
-    )
-
-
-if __name__ == "__main__":
-    run()
+    u

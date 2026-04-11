@@ -1,64 +1,118 @@
 {
-  "name": "GigOptimizer — Copilot Learning Monitor",
+  "name": "GigOptimizer \u2014 Copilot Learning Monitor",
   "nodes": [
     {
       "parameters": {
-        "rule": { "interval": [{ "field": "hours", "hoursInterval": 4 }] }
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 4
+            }
+          ]
+        }
       },
       "id": "n8n-node-schedule",
       "name": "Every 4 Hours",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [240, 300]
+      "position": [
+        240,
+        300
+      ]
     },
     {
       "parameters": {
-        "url": "={{ $vars.GIGOPTIMIZER_URL }}/api/copilot/training-dashboard",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "options": { "timeout": 15000 }
+        "url": "http://deploy-app-1:8001/api/copilot/training-dashboard",
+        "options": {
+          "timeout": 15000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Internal-API-Key",
+              "value": "EbKgctxIFDm2o5-7sOguaWS84xUSIdeyRMZsd-D_pRc"
+            }
+          ]
+        }
       },
       "id": "n8n-node-fetch-stats",
       "name": "Fetch Learning Stats",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [460, 300],
-      "credentials": { "httpHeaderAuth": { "id": "gigoptimizer-cookie", "name": "GigOptimizer Session Cookie" } }
+      "position": [
+        460,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gigoptimizer-cookie",
+          "name": "GigOptimizer Session Cookie"
+        }
+      }
     },
     {
       "parameters": {
-        "url": "={{ $vars.GIGOPTIMIZER_URL }}/api/copilot/training-dashboard/predict?q=fiverr&top_n=5",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "options": { "timeout": 10000 }
+        "url": "http://deploy-app-1:8001/api/copilot/training-dashboard/predict?q=fiverr&top_n=5",
+        "options": {
+          "timeout": 10000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Internal-API-Key",
+              "value": "EbKgctxIFDm2o5-7sOguaWS84xUSIdeyRMZsd-D_pRc"
+            }
+          ]
+        }
       },
       "id": "n8n-node-fetch-predict",
       "name": "Fetch Word Predictions (sample)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [460, 480],
-      "credentials": { "httpHeaderAuth": { "id": "gigoptimizer-cookie", "name": "GigOptimizer Session Cookie" } }
+      "position": [
+        460,
+        480
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gigoptimizer-cookie",
+          "name": "GigOptimizer Session Cookie"
+        }
+      }
     },
     {
       "parameters": {
-        "jsCode": "const stats   = $('Fetch Learning Stats').first().json;\nconst predict = $('Fetch Word Predictions (sample)').first().json;\n\nconst model    = stats.model   || {};\nconst totals   = stats.totals  || {};\nconst schedule = stats.schedule || {};\nconst tests    = stats.test_results || {};\nconst recent   = (stats.recent_learning || []).slice(0, 5);\nconst comps    = (predict.completions   || []).slice(0, 5);\n\nconst testIcon = { pass: '✅', fail: '❌', error: '⚠️', never_run: '⬜' }[tests.status] || '⬜';\n\nconst recentLines = recent.map(ev => {\n  const src  = ev.source || '?';\n  const toks = ev.tokens_learned ? ` +${ev.tokens_learned} tokens` : '';\n  const ts   = (ev.timestamp || '').slice(0, 16).replace('T', ' ');\n  return `• ${ts}  \\`${src}\\`${toks}`;\n}).join('\\n') || '_No recent events_';\n\nconst compLines = comps.map(c =>\n  `• \\`${c.full_suggestion}\\`  _(score ${c.score})_`\n).join('\\n') || '_No predictions yet — ingest more data_';\n\nconst nextRun = schedule.next_run\n  ? schedule.next_run.slice(0, 16).replace('T', ' ')\n  : 'not scheduled';\n\nreturn [{\n  json: {\n    vocab_size:    model.vocab_size    || 0,\n    doc_count:     model.doc_count     || 0,\n    bigram_count:  model.bigram_count  || 0,\n    total_tokens:  totals.total_tokens || 0,\n    total_new_words: totals.total_new_words || 0,\n    cron_cycles:   schedule.run_count  || 0,\n    schedule_enabled: schedule.enabled ? '🟢 Active' : '🔴 Paused',\n    next_run:      nextRun,\n    test_status:   tests.status        || 'never_run',\n    test_passed:   tests.passed        || 0,\n    test_total:    tests.total         || 0,\n    test_icon:     testIcon,\n    recent_lines:  recentLines,\n    comp_lines:    compLines,\n    version:       stats.version       || '?',\n  }\n}];\n"
+        "jsCode": "const stats   = $('Fetch Learning Stats').first().json;\nconst predict = $('Fetch Word Predictions (sample)').first().json;\n\nconst model    = stats.model   || {};\nconst totals   = stats.totals  || {};\nconst schedule = stats.schedule || {};\nconst tests    = stats.test_results || {};\nconst recent   = (stats.recent_learning || []).slice(0, 5);\nconst comps    = (predict.completions   || []).slice(0, 5);\n\nconst testIcon = { pass: '\u2705', fail: '\u274c', error: '\u26a0\ufe0f', never_run: '\u2b1c' }[tests.status] || '\u2b1c';\n\nconst recentLines = recent.map(ev => {\n  const src  = ev.source || '?';\n  const toks = ev.tokens_learned ? ` +${ev.tokens_learned} tokens` : '';\n  const ts   = (ev.timestamp || '').slice(0, 16).replace('T', ' ');\n  return `\u2022 ${ts}  \\`${src}\\`${toks}`;\n}).join('\\n') || '_No recent events_';\n\nconst compLines = comps.map(c =>\n  `\u2022 \\`${c.full_suggestion}\\`  _(score ${c.score})_`\n).join('\\n') || '_No predictions yet \u2014 ingest more data_';\n\nconst nextRun = schedule.next_run\n  ? schedule.next_run.slice(0, 16).replace('T', ' ')\n  : 'not scheduled';\n\nreturn [{\n  json: {\n    vocab_size:    model.vocab_size    || 0,\n    doc_count:     model.doc_count     || 0,\n    bigram_count:  model.bigram_count  || 0,\n    total_tokens:  totals.total_tokens || 0,\n    total_new_words: totals.total_new_words || 0,\n    cron_cycles:   schedule.run_count  || 0,\n    schedule_enabled: schedule.enabled ? '\ud83d\udfe2 Active' : '\ud83d\udd34 Paused',\n    next_run:      nextRun,\n    test_status:   tests.status        || 'never_run',\n    test_passed:   tests.passed        || 0,\n    test_total:    tests.total         || 0,\n    test_icon:     testIcon,\n    recent_lines:  recentLines,\n    comp_lines:    compLines,\n    version:       stats.version       || '?',\n  }\n}];\n"
       },
       "id": "n8n-node-transform",
       "name": "Build Digest Data",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [700, 380]
+      "position": [
+        700,
+        380
+      ]
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
           "conditions": [
             {
               "id": "cond-tests",
               "leftValue": "={{ $json.test_status }}",
               "rightValue": "fail",
-              "operator": { "type": "string", "operation": "equals" }
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
             }
           ],
           "combinator": "or"
@@ -68,169 +122,346 @@
       "name": "Tests Failing?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [920, 380]
+      "position": [
+        920,
+        380
+      ]
     },
     {
       "parameters": {
         "select": "channel",
-        "channelId": { "__rl": true, "value": "={{ $vars.SLACK_CHANNEL_ID }}", "mode": "id" },
-        "text": "",
-        "blocksUi": {
-          "blocksValues": [
-            {
-              "type": "header",
-              "text": { "type": "plain_text", "text": "🧠 GigOptimizer Copilot — 4-Hour Learning Digest", "emoji": true }
-            },
-            {
-              "type": "section",
-              "fields": [
-                { "type": "mrkdwn", "text": "*Vocabulary*\n={{ $json.vocab_size.toLocaleString() }} words" },
-                { "type": "mrkdwn", "text": "*Docs ingested*\n={{ $json.doc_count }}" },
-                { "type": "mrkdwn", "text": "*Tokens learned*\n={{ $json.total_tokens.toLocaleString() }}" },
-                { "type": "mrkdwn", "text": "*New words*\n={{ $json.total_new_words.toLocaleString() }}" },
-                { "type": "mrkdwn", "text": "*Bigrams*\n={{ $json.bigram_count.toLocaleString() }}" },
-                { "type": "mrkdwn", "text": "*Cron cycles*\n={{ $json.cron_cycles }}" }
-              ]
-            },
-            {
-              "type": "section",
-              "fields": [
-                { "type": "mrkdwn", "text": "*Tests* ={{ $json.test_icon }}\n={{ $json.test_passed }}/={{ $json.test_total }} passed" },
-                { "type": "mrkdwn", "text": "*Schedule*\n={{ $json.schedule_enabled }}" },
-                { "type": "mrkdwn", "text": "*Next training run*\n={{ $json.next_run }}" },
-                { "type": "mrkdwn", "text": "*Model version*\nv={{ $json.version }}" }
-              ]
-            },
-            {
-              "type": "section",
-              "text": { "type": "mrkdwn", "text": "*Recent learning events*\n={{ $json.recent_lines }}" }
-            },
-            {
-              "type": "section",
-              "text": { "type": "mrkdwn", "text": "*Sample predictions for \"fiverr…\"*\n={{ $json.comp_lines }}" }
-            },
-            { "type": "divider" }
-          ]
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $vars.SLACK_CHANNEL_ID }}",
+          "mode": "id"
         },
-        "otherOptions": { "mrkdwn": true }
-      },
-      "id": "n8n-node-slack-digest",
-      "name": "Slack — Learning Digest",
-      "type": "n8n-nodes-base.slack",
-      "typeVersion": 2.2,
-      "position": [1160, 260],
-      "credentials": { "slackApi": { "id": "slack-bot", "name": "Slack Bot Token" } }
-    },
-    {
-      "parameters": {
-        "select": "channel",
-        "channelId": { "__rl": true, "value": "={{ $vars.SLACK_CHANNEL_ID }}", "mode": "id" },
         "text": "",
         "blocksUi": {
           "blocksValues": [
             {
               "type": "header",
-              "text": { "type": "plain_text", "text": "🚨 GigOptimizer Copilot — TEST SUITE FAILING", "emoji": true }
+              "text": {
+                "type": "plain_text",
+                "text": "\ud83e\udde0 GigOptimizer Copilot \u2014 4-Hour Learning Digest",
+                "emoji": true
+              }
+            },
+            {
+              "type": "section",
+              "fields": [
+                {
+                  "type": "mrkdwn",
+                  "text": "*Vocabulary*\n={{ $json.vocab_size.toLocaleString() }} words"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*Docs ingested*\n={{ $json.doc_count }}"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*Tokens learned*\n={{ $json.total_tokens.toLocaleString() }}"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*New words*\n={{ $json.total_new_words.toLocaleString() }}"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*Bigrams*\n={{ $json.bigram_count.toLocaleString() }}"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*Cron cycles*\n={{ $json.cron_cycles }}"
+                }
+              ]
+            },
+            {
+              "type": "section",
+              "fields": [
+                {
+                  "type": "mrkdwn",
+                  "text": "*Tests* ={{ $json.test_icon }}\n={{ $json.test_passed }}/={{ $json.test_total }} passed"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*Schedule*\n={{ $json.schedule_enabled }}"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*Next training run*\n={{ $json.next_run }}"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*Model version*\nv={{ $json.version }}"
+                }
+              ]
             },
             {
               "type": "section",
               "text": {
                 "type": "mrkdwn",
-                "text": "*Action required:* The Copilot test suite has failed.\n\n*Status:* ={{ $json.test_icon }} `={{ $json.test_status.toUpperCase() }}`\n*Passed:* ={{ $json.test_passed }}/={{ $json.test_total }}\n\nGo to the *Training Dashboard → Tests* tab to view the full output and debug."
+                "text": "*Recent learning events*\n={{ $json.recent_lines }}"
               }
             },
-            { "type": "divider" }
+            {
+              "type": "section",
+              "text": {
+                "type": "mrkdwn",
+                "text": "*Sample predictions for \"fiverr\u2026\"*\n={{ $json.comp_lines }}"
+              }
+            },
+            {
+              "type": "divider"
+            }
           ]
         },
-        "otherOptions": { "mrkdwn": true }
+        "otherOptions": {
+          "mrkdwn": true
+        },
+        "url": "YOUR_SLACK_WEBHOOK_URL"
       },
-      "id": "n8n-node-slack-alert",
-      "name": "Slack — Test Failure Alert",
+      "id": "n8n-node-slack-digest",
+      "name": "Slack \u2014 Learning Digest",
       "type": "n8n-nodes-base.slack",
       "typeVersion": 2.2,
-      "position": [1160, 480],
-      "credentials": { "slackApi": { "id": "slack-bot", "name": "Slack Bot Token" } }
+      "position": [
+        1160,
+        260
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-bot",
+          "name": "Slack Bot Token"
+        }
+      }
     },
     {
       "parameters": {
-        "url": "={{ $vars.GIGOPTIMIZER_URL }}/api/copilot/training-dashboard/train",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $vars.SLACK_CHANNEL_ID }}",
+          "mode": "id"
+        },
+        "text": "",
+        "blocksUi": {
+          "blocksValues": [
+            {
+              "type": "header",
+              "text": {
+                "type": "plain_text",
+                "text": "\ud83d\udea8 GigOptimizer Copilot \u2014 TEST SUITE FAILING",
+                "emoji": true
+              }
+            },
+            {
+              "type": "section",
+              "text": {
+                "type": "mrkdwn",
+                "text": "*Action required:* The Copilot test suite has failed.\n\n*Status:* ={{ $json.test_icon }} `={{ $json.test_status.toUpperCase() }}`\n*Passed:* ={{ $json.test_passed }}/={{ $json.test_total }}\n\nGo to the *Training Dashboard \u2192 Tests* tab to view the full output and debug."
+              }
+            },
+            {
+              "type": "divider"
+            }
+          ]
+        },
+        "otherOptions": {
+          "mrkdwn": true
+        },
+        "url": "YOUR_SLACK_WEBHOOK_URL"
+      },
+      "id": "n8n-node-slack-alert",
+      "name": "Slack \u2014 Test Failure Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        1160,
+        480
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-bot",
+          "name": "Slack Bot Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "http://deploy-app-1:8001/api/copilot/training-dashboard/train",
         "method": "POST",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Content-Type", "value": "application/json" },
-            { "name": "X-CSRF-Token", "value": "={{ $vars.GIGOPTIMIZER_CSRF_TOKEN }}" }
+            {
+              "name": "X-Internal-API-Key",
+              "value": "EbKgctxIFDm2o5-7sOguaWS84xUSIdeyRMZsd-D_pRc"
+            }
           ]
         },
         "sendBody": true,
-        "bodyParameters": { "parameters": [] },
-        "options": { "timeout": 60000 }
+        "bodyParameters": {
+          "parameters": []
+        },
+        "options": {
+          "timeout": 60000
+        }
       },
       "id": "n8n-node-trigger-train",
       "name": "Trigger Training Cycle",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1160, 680],
-      "credentials": { "httpHeaderAuth": { "id": "gigoptimizer-cookie", "name": "GigOptimizer Session Cookie" } },
+      "position": [
+        1160,
+        680
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gigoptimizer-cookie",
+          "name": "GigOptimizer Session Cookie"
+        }
+      },
       "notes": "Optional: auto-trigger a training cycle every 4 hours after the digest"
     },
     {
       "parameters": {
-        "url": "={{ $vars.GIGOPTIMIZER_URL }}/api/copilot/training-dashboard/run-tests",
+        "url": "http://deploy-app-1:8001/api/copilot/training-dashboard/run-tests",
         "method": "POST",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Content-Type", "value": "application/json" },
-            { "name": "X-CSRF-Token", "value": "={{ $vars.GIGOPTIMIZER_CSRF_TOKEN }}" }
+            {
+              "name": "X-Internal-API-Key",
+              "value": "EbKgctxIFDm2o5-7sOguaWS84xUSIdeyRMZsd-D_pRc"
+            }
           ]
         },
         "sendBody": true,
-        "bodyParameters": { "parameters": [] },
-        "options": { "timeout": 120000 }
+        "bodyParameters": {
+          "parameters": []
+        },
+        "options": {
+          "timeout": 120000
+        }
       },
       "id": "n8n-node-run-tests",
       "name": "Run Tests",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1380, 480],
-      "credentials": { "httpHeaderAuth": { "id": "gigoptimizer-cookie", "name": "GigOptimizer Session Cookie" } }
+      "position": [
+        1380,
+        480
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gigoptimizer-cookie",
+          "name": "GigOptimizer Session Cookie"
+        }
+      }
     }
   ],
   "connections": {
     "Every 4 Hours": {
-      "main": [[
-        { "node": "Fetch Learning Stats",            "type": "main", "index": 0 },
-        { "node": "Fetch Word Predictions (sample)", "type": "main", "index": 0 }
-      ]]
+      "main": [
+        [
+          {
+            "node": "Fetch Learning Stats",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Word Predictions (sample)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
-    "Fetch Learning Stats":            { "main": [[{ "node": "Build Digest Data", "type": "main", "index": 0 }]] },
-    "Fetch Word Predictions (sample)": { "main": [[{ "node": "Build Digest Data", "type": "main", "index": 0 }]] },
+    "Fetch Learning Stats": {
+      "main": [
+        [
+          {
+            "node": "Build Digest Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Word Predictions (sample)": {
+      "main": [
+        [
+          {
+            "node": "Build Digest Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
     "Build Digest Data": {
-      "main": [[
-        { "node": "Tests Failing?",        "type": "main", "index": 0 },
-        { "node": "Slack — Learning Digest","type": "main", "index": 0 },
-        { "node": "Trigger Training Cycle","type": "main", "index": 0 }
-      ]]
+      "main": [
+        [
+          {
+            "node": "Tests Failing?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Slack \u2014 Learning Digest",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Trigger Training Cycle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Tests Failing?": {
       "main": [
-        [{ "node": "Slack — Test Failure Alert", "type": "main", "index": 0 }],
+        [
+          {
+            "node": "Slack \u2014 Test Failure Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
         []
       ]
     },
-    "Slack — Test Failure Alert": {
-      "main": [[{ "node": "Run Tests", "type": "main", "index": 0 }]]
+    "Slack \u2014 Test Failure Alert": {
+      "main": [
+        [
+          {
+            "node": "Run Tests",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "pinData": {},
-  "settings": { "executionOrder": "v1", "saveManualExecutions": true, "callerPolicy": "workflowsFromSameOwner" },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
   "staticData": null,
-  "tags": [{ "name": "gigoptimizer" }, { "name": "copilot" }, { "name": "monitoring" }],
+  "tags": [
+    {
+      "name": "gigoptimizer"
+    },
+    {
+      "name": "copilot"
+    },
+    {
+      "name": "monitoring"
+    }
+  ],
   "triggerCount": 1,
   "updatedAt": "2026-04-11T00:00:00.000Z",
   "versionId": "1"
