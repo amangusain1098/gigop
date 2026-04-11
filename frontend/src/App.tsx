@@ -947,7 +947,14 @@ function App() {
       </section>
 
       {showTrainingDashboard ? (
-        <CopilotTrainingDashboard />
+        <CopilotTrainingDashboard
+          csrfToken={data?.state.auth.csrf_token ?? ''}
+          onCsrfRefresh={async () => {
+            const payload = await loadBootstrap()
+            startTransition(() => applyBootstrap(payload))
+            return payload.state.auth.csrf_token
+          }}
+        />
       ) : (<>
             <section className="content-grid">
         <article className="card">

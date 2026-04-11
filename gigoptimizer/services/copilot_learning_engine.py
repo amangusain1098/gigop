@@ -104,7 +104,6 @@ class CopilotLearningEngine:
                         continue
                 if texts:
                     r = self.ingest_text(" ".join(texts), source=jf.name, source_type="conversation")
-                    (ingested if r["ingested"] else skipped).__class__  # unused; count below
                     if r["ingested"]:
                         ingested += 1
                     else:
@@ -252,6 +251,71 @@ class CopilotLearningEngine:
             ).isoformat()
         self._save_schedule(schedule)
         return schedule
+
+
+
+    def build_slack_digest(self) -> dict:
+        """Build a Slack Block Kit payload summarising current learning state."""
+        stats = self._load_stats()
+        schedule = self._load_schedule()
+        tests = self._load_test_results()
+        recent = self._recent_log(limit=5)
+
+        test_status = tests.get("status", "never_run")
+        test_icon = {
+            "pass": ":white_check_mark:",
+            "fail": ":x:",
+            "error": ":warning:",
+        }.get(test_status, ":white_square:")
+        passed = tests.get("passed", 0)
+        total  = tests.get("total", 0)
+
+        next_run_raw = schedule.get("next_run") or ""
+        next_run_fmt = next_run_raw[:16].replace("T", " ") if next_run_raw else "not scheduled"
+
+        recent_lines = []
+        for ev in recent:
+            src  = ev.get("source", "?")
+            toks = ev.get("tokens_learned")
+            ts_s = (ev.get("timestamp") or "")[:16].replace("T", " ")
+            line = "- " + ts_s + "  `" + src + "`"
+            if toks:
+                line += "  +" + str(toks) + " tokens"
+            recent_lines.append(line)
+
+        recent_text = (
+            "*Recent learning events*\n" + "\n".join(recent_lines)
+            if recent_lines else "*No recent events yet*"
+        )
+
+        fields_top = [
+            {"type": "mrkdwn", "text": "*Vocabulary*\n" + "{:,} words".format(len(self._vocab))},
+            {"type": "mrkdwn", "text": "*Docs ingested*\n" + "{:,}".format(stats.get("total_docs", 0))},
+            {"type": "mrkdwn", "text": "*Tokens learned*\n" + "{:,}".format(stats.get("total_tokens", 0))},
+            {"type": "mrkdwn", "text": "*New words*\n" + "{:,}".format(stats.get("total_new_words", 0))},
+            {"type": "mrkdwn", "text": "*Bigrams*\n" + "{:,}".format(len(self._bigrams))},
+            {"type": "mrkdwn", "text": "*Cron cycles*\n" + str(schedule.get("run_count", 0))},
+        ]
+        fields_mid = [
+            {"type": "mrkdwn", "text": "*Tests* " + test_icon + "\n" + str(passed) + "/" + str(total) + " passed"},
+            {"type": "mrkdwn", "text": "*Next training run*\n" + next_run_fmt},
+        ]
+
+        blocks = [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": "GigOptimizer Copilot — Learning Digest",
+                    "emoji": True,
+                },
+            },
+            {"type": "section", "fields": fields_top},
+            {"type": "section", "fields": fields_mid},
+            {"type": "section", "text": {"type": "mrkdwn", "text": recent_text}},
+            {"type": "divider"},
+        ]
+        return {"blocks": blocks, "text": "GigOptimizer Copilot Learning Digest"}
 
     # --- Private helpers ---
 

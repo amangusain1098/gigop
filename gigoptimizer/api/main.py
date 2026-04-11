@@ -373,10 +373,36 @@ def create_app() -> FastAPI:
 
         _cron_task = _asyncio.create_task(_learning_cron_loop())
 
+        # --- 4-hour Slack digest cron ---
+        async def _slack_digest_loop():
+            import logging as _log2
+            _slog = _log2.getLogger("copilot.slack.cron")
+            _SLACK_INTERVAL = 4 * 3600  # 4 hours
+            await _asyncio.sleep(60)  # brief startup delay
+            while True:
+                try:
+                    slack_url = getattr(config, "slack_webhook_url", None) or ""
+                    if slack_url:
+                        import httpx as _hx
+                        payload = _learning_engine.build_slack_digest()
+                        async with _hx.AsyncClient(timeout=10) as _c:
+                            r = await _c.post(slack_url, json=payload)
+                        _slog.info("Slack digest sent: %s", r.status_code)
+                    else:
+                        _slog.debug("SLACK_WEBHOOK_URL not set — skipping digest")
+                except _asyncio.CancelledError:
+                    break
+                except Exception as _exc:
+                    _slog.warning("Slack digest error: %s", _exc)
+                await _asyncio.sleep(_SLACK_INTERVAL)
+
+        _slack_task = _asyncio.create_task(_slack_digest_loop())
+
         yield
         _cron_task.cancel()
+        _slack_task.cancel()
         try:
-            await _asyncio.shield(_cron_task)
+            await _asyncio.gather(_cron_task, _slack_task, return_exceptions=True)
         except Exception:
             pass
         scheduler.stop()
@@ -2536,6 +2562,26 @@ def create_app() -> FastAPI:
             return _learning_engine.set_schedule(interval, enabled)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc))
+
+    @app.post("/api/copilot/training-dashboard/slack-notify")
+    async def copilot_slack_notify(
+        _: None = Depends(require_auth),
+        __: None = Depends(require_csrf),
+    ) -> dict:
+        """Send an immediate Slack digest of the current learning state."""
+        import httpx as _httpx
+        slack_url = getattr(config, "slack_webhook_url", None) or ""
+        if not slack_url:
+            raise HTTPException(status_code=503, detail="SLACK_WEBHOOK_URL not configured")
+        payload = _learning_engine.build_slack_digest()
+        async with _httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(slack_url, json=payload)
+        if resp.status_code != 200:
+            raise HTTPException(
+                status_code=502,
+                detail="Slack returned " + str(resp.status_code) + ": " + resp.text[:200],
+            )
+        return {"sent": True, "status_code": resp.status_code}
 
 
     return app
