@@ -1021,13 +1021,29 @@ class FiverrMarketplaceConnector:
         return f"{base}/{url}"
 
     def _reader_get_markdown(self, url: str) -> str:
-        return self._http_get_html(
-            self._reader_url(url),
-            extra_headers={
-                "Accept": "text/plain, text/markdown;q=0.9, */*;q=0.8",
-                "X-Respond-With": "markdown",
-            },
-        )
+        primary = self._reader_url(url)
+        try:
+            result = self._http_get_html(
+                primary,
+                extra_headers={
+                    "Accept": "text/plain, text/markdown;q=0.9, */*;q=0.8",
+                    "X-Respond-With": "markdown",
+                },
+            )
+            if result and len(result.strip()) >= 200:
+                return result
+        except Exception:
+            pass
+        fallback = f"https://r.jina.ai/{url.lstrip('/')}"
+        if fallback != primary:
+            return self._http_get_html(
+                fallback,
+                extra_headers={
+                    "Accept": "text/plain, text/markdown;q=0.9, */*;q=0.8",
+                    "X-Respond-With": "markdown",
+                },
+            )
+        return ""
 
     def _extract_gig_page_overview_from_markdown(self, markdown: str, gig_url: str) -> GigPageOverview:
         lines = [line.strip() for line in markdown.splitlines()]
@@ -1123,14 +1139,18 @@ class FiverrMarketplaceConnector:
                 continue
 
             seller_match = re.match(
-                r"^\[([^\]]+)\]\(https://www\.fiverr\.com/([^/?#]+)\?source=gig_cards[^)]*\)",
+                r"^\[([^\]]+)\]\(https://www\.fiverr\.com/([a-zA-Z0-9_\-]+)(?:[/?][^)]*)?\)",
                 line,
             )
             if seller_match:
-                current_seller = seller_match.group(1).strip()
+                candidate = seller_match.group(1).strip()
+                path_seg = seller_match.group(2).strip().lower()
+                # reject navigation links like 'search', 'categories', 'pro'
+                if path_seg not in {"search", "categories", "pro", "about", "contact", "start"}:
+                    current_seller = candidate
                 continue
 
-            if line in {"Top Rated", "Level 2", "Level 1", "Vetted Pro", "Fiverr Pro", "Pro"}:
+            if line in {"Top Rated", "Level 2", "Level 1", "Vetted Pro", "Fiverr Pro", "Pro", "New Seller", "Rising Talent"}:
                 if line not in recent_badges:
                     recent_badges.append(line)
                 recent_badges = recent_badges[-3:]
