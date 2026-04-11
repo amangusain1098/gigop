@@ -870,6 +870,21 @@ function App() {
         </div>
       </section>
 
+      <div className="status-bar">
+        <span className={`status-bar-item status--${scraperRun.status === 'running' ? 'warning' : scraperRun.status === 'ok' || scraperRun.status === 'completed' ? 'ok' : 'queued'}`}>
+          Scraper: {String(scraperRun.status ?? 'idle')}
+        </span>
+        <span className="status-bar-item">
+          {comparison.competitor_count ?? 0} competitors · {pageOneTopTen.length} page-one
+        </span>
+        <span className="status-bar-item">
+          Last run: {scraperRun.last_status_message ? String(scraperRun.last_status_message).slice(0, 40) : 'never'}
+        </span>
+        <span className={`status-bar-item status--${data ? 'ok' : 'queued'}`}>
+          Data: {data ? 'loaded' : 'loading'}
+        </span>
+      </div>
+
       {(message || error) && <section className={`flash ${error ? 'flash--error' : ''}`}>{error || message}</section>}
 
       {shouldShowExtensionPrompt ? (
