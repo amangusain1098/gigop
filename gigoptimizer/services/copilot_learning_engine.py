@@ -104,6 +104,7 @@ class CopilotLearningEngine:
                         continue
                 if texts:
                     r = self.ingest_text(" ".join(texts), source=jf.name, source_type="conversation")
+                    (ingested if r["ingested"] else skipped).__class__  # unused; count below
                     if r["ingested"]:
                         ingested += 1
                     else:
@@ -213,43 +214,23 @@ class CopilotLearningEngine:
     def run_tests(self, repo_root: Path) -> dict:
         started = time.monotonic()
         try:
-            tests_dir = repo_root / "tests"
-            if not tests_dir.exists():
-                # Running inside Docker where tests are not copied in
-                result = {
-                    "run_at": _utc_now(), "status": "skipped", "total": 0,
-                    "passed": 0, "failed": 0, "errors": 0, "elapsed_s": 0,
-                    "output_tail": (
-                        "Tests directory not found at " + str(tests_dir) + ".\n"
-                        "The test suite is only available in the source repo, "
-                        "not inside the production Docker image.\n"
-                        "Run locally with: python -m unittest discover -s tests -v"
-                    ),
-                }
-                self._tests_file.write_text(json.dumps(result, indent=2), encoding="utf-8")
-                return result
-
-            # Run the 4 copilot-relevant suites by name (tests/__init__.py required)
             proc = subprocess.run(
                 [sys.executable, "-m", "unittest",
-                 "tests.test_copilot_round3",
-                 "tests.test_assistant",
-                 "tests.test_conversation_memory",
-                 "tests.test_marketplace_reader",
-                 "-v"],
+                 "tests.test_copilot_round3", "tests.test_marketplace_reader",
+                 "tests.test_conversation_memory", "tests.test_assistant", "-v"],
                 capture_output=True, text=True, cwd=str(repo_root), timeout=120,
             )
             output = proc.stderr + proc.stdout
             elapsed = round(time.monotonic() - started, 2)
             m_ran = re.search(r"Ran (\d+) tests?", output)
             total = int(m_ran.group(1)) if m_ran else 0
-            failed = len(re.findall(r"^FAIL:", output, re.MULTILINE))
-            errors = len(re.findall(r"^ERROR:", output, re.MULTILINE))
-            passed = max(0, total - failed - errors)
+            failed = len(re.findall(r"\nFAIL:", output, re.MULTILINE))
+            errors = len(re.findall(r"\nERROR:", output, re.MULTILINE))
+            passed = total - failed - errors
             status = "pass" if proc.returncode == 0 else "fail"
             result = {"run_at": _utc_now(), "status": status, "total": total,
                       "passed": passed, "failed": failed, "errors": errors,
-                      "elapsed_s": elapsed, "output_tail": output[-3000:]}
+                      "elapsed_s": elapsed, "output_tail": output[-2000:]}
         except Exception as exc:
             result = {"run_at": _utc_now(), "status": "error", "total": 0,
                       "passed": 0, "failed": 0, "errors": 0, "elapsed_s": 0, "output_tail": str(exc)}
@@ -271,71 +252,6 @@ class CopilotLearningEngine:
             ).isoformat()
         self._save_schedule(schedule)
         return schedule
-
-
-
-    def build_slack_digest(self) -> dict:
-        """Build a Slack Block Kit payload summarising current learning state."""
-        stats = self._load_stats()
-        schedule = self._load_schedule()
-        tests = self._load_test_results()
-        recent = self._recent_log(limit=5)
-
-        test_status = tests.get("status", "never_run")
-        test_icon = {
-            "pass": ":white_check_mark:",
-            "fail": ":x:",
-            "error": ":warning:",
-        }.get(test_status, ":white_square:")
-        passed = tests.get("passed", 0)
-        total  = tests.get("total", 0)
-
-        next_run_raw = schedule.get("next_run") or ""
-        next_run_fmt = next_run_raw[:16].replace("T", " ") if next_run_raw else "not scheduled"
-
-        recent_lines = []
-        for ev in recent:
-            src  = ev.get("source", "?")
-            toks = ev.get("tokens_learned")
-            ts_s = (ev.get("timestamp") or "")[:16].replace("T", " ")
-            line = "- " + ts_s + "  `" + src + "`"
-            if toks:
-                line += "  +" + str(toks) + " tokens"
-            recent_lines.append(line)
-
-        recent_text = (
-            "*Recent learning events*\n" + "\n".join(recent_lines)
-            if recent_lines else "*No recent events yet*"
-        )
-
-        fields_top = [
-            {"type": "mrkdwn", "text": "*Vocabulary*\n" + "{:,} words".format(len(self._vocab))},
-            {"type": "mrkdwn", "text": "*Docs ingested*\n" + "{:,}".format(stats.get("total_docs", 0))},
-            {"type": "mrkdwn", "text": "*Tokens learned*\n" + "{:,}".format(stats.get("total_tokens", 0))},
-            {"type": "mrkdwn", "text": "*New words*\n" + "{:,}".format(stats.get("total_new_words", 0))},
-            {"type": "mrkdwn", "text": "*Bigrams*\n" + "{:,}".format(len(self._bigrams))},
-            {"type": "mrkdwn", "text": "*Cron cycles*\n" + str(schedule.get("run_count", 0))},
-        ]
-        fields_mid = [
-            {"type": "mrkdwn", "text": "*Tests* " + test_icon + "\n" + str(passed) + "/" + str(total) + " passed"},
-            {"type": "mrkdwn", "text": "*Next training run*\n" + next_run_fmt},
-        ]
-
-        blocks = [
-            {
-                "type": "header",
-                "text": {
-                    "type": "plain_text",
-                    "text": "GigOptimizer Copilot — Learning Digest",
-                    "emoji": True,
-                },
-            },
-            {"type": "section", "fields": fields_top},
-            {"type": "section", "fields": fields_mid},
-            {"type": "section", "text": {"type": "mrkdwn", "text": recent_text}},
-            {"type": "divider"},
-        ]
-        return {"blocks": blocks, "text": "GigOptimizer Copilot Learning Digest"}
 
     # --- Private helpers ---
 
@@ -422,11 +338,7 @@ class CopilotLearningEngine:
 
     def _list_corpus_docs(self, limit: int = 50) -> list[dict]:
         docs = []
-        for p in sorted(
-            self._corpus_dir.glob("*.json"),
-            key=lambda x: x.stat().st_mtime,
-            reverse=True,
-        )[:limit]:
+        for p in sorted(self._corpus_dir.glob("*.json"), key=lambda x: x.stat().st_mtime, reverse=True)[:limit]:
             try:
                 docs.append(json.loads(p.read_text(encoding="utf-8")))
             except Exception:
