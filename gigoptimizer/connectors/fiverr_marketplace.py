@@ -382,6 +382,19 @@ class FiverrMarketplaceConnector:
     def _search_url(self, term: str) -> str:
         return self.config.fiverr_marketplace_search_url_template.format(query=quote_plus(term))
 
+
+    @staticmethod
+    def _is_headless_env() -> bool:
+        """Return True when running on a server with no X display.
+
+        Checks $DISPLAY (X11) and $WAYLAND_DISPLAY.  If neither is set we
+        are almost certainly on a headless Linux server and must not try to
+        open a headed browser — Playwright will crash with
+        'Missing X server or $DISPLAY'.
+        """
+        import os
+        return not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
     @contextmanager
     def _open_browser(self, *, headless: bool, observer=None):
         from playwright.sync_api import sync_playwright
@@ -416,6 +429,15 @@ class FiverrMarketplaceConnector:
                         level="warning",
                         message=f"Browserless connection failed, falling back to local Chromium: {exc}",
                     )
+            # Auto-force headless on servers without an X display.
+            if headless is False and self._is_headless_env():
+                headless = True
+                self._notify(
+                    observer,
+                    stage="headless_forced",
+                    level="warning",
+                    message="No X display detected — forcing headless=True to avoid Playwright crash."
+                )
             channel = self._resolve_browser_channel(playwright)
             launch_kwargs = {
                 "user_data_dir": str(profile_dir),
@@ -521,7 +543,7 @@ class FiverrMarketplaceConnector:
         )
 
         try:
-            with self._open_browser(headless=False, observer=observer) as page:
+            with self._open_browser(headless=self.config.fiverr_marketplace_headless, observer=observer) as page:
                 page.goto(verification_url, wait_until="domcontentloaded")
                 while monotonic() < deadline:
                     if page.is_closed():
@@ -594,7 +616,7 @@ class FiverrMarketplaceConnector:
             message="Opening the manual verification browser. After the challenge clears, the scraper will continue in that same session.",
         )
         try:
-            with self._open_browser(headless=False, observer=observer) as page:
+            with self._open_browser(headless=self.config.fiverr_marketplace_headless, observer=observer) as page:
                 page.goto(verification_url, wait_until="domcontentloaded")
                 while monotonic() < deadline:
                     if page.is_closed():
@@ -1138,8 +1160,10 @@ class FiverrMarketplaceConnector:
             if not line:
                 continue
 
+            # Seller profile links end with ?source=gig_cards (no /slug after username).
+            # Gig title links have fiverr.com/<user>/<gig-slug>?... handled by title_match.
             seller_match = re.match(
-                r"^\[([^\]]+)\]\(https://www\.fiverr\.com/([a-zA-Z0-9_\-]+)(?:[/?][^)]*)?\)",
+                r"^\[([^\]]+)\]\(https://www\.fiverr\.com/([a-zA-Z0-9_\-]+)\?[^)]*\)",
                 line,
             )
             if seller_match:

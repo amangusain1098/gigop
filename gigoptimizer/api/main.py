@@ -43,6 +43,9 @@ from ..services import (
     SlackService,
     SettingsService,
     WeeklyReportService,
+    GigHealthScoreEngine,
+    TagGapAnalyzer,
+    PriceAlertService,
 )
 from .security import SecurityHeadersMiddleware, require_csrf
 from .scheduler import WeeklyReportScheduler
@@ -2305,6 +2308,86 @@ def create_app() -> FastAPI:
         if not report_path.exists():
             raise HTTPException(status_code=404, detail="Report not found.")
         return FileResponse(report_path)
+
+
+    # ------------------------------------------------------------------
+    # Gig Health Score  POST /api/gig/health-score
+    # ------------------------------------------------------------------
+
+    @app.post("/api/gig/health-score")
+    async def gig_health_score_endpoint(
+        request: Request,
+        _: None = Depends(require_auth),
+    ) -> JSONResponse:
+        """Compute a structured 5-dimension health score (0-100) for a gig snapshot."""
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid JSON body.")
+        from ..models import GigSnapshot as _GS
+        try:
+            snapshot = _GS.from_dict(body.get("snapshot", body))
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=f"Invalid snapshot: {exc}")
+        health = GigHealthScoreEngine().score(snapshot)
+        return JSONResponse(content=health.to_dict())
+
+    # ------------------------------------------------------------------
+    # SEO Tag Gap  POST /api/gig/tag-gap
+    # ------------------------------------------------------------------
+
+    @app.post("/api/gig/tag-gap")
+    async def gig_tag_gap_endpoint(
+        request: Request,
+        _: None = Depends(require_auth),
+    ) -> JSONResponse:
+        """Return missing, unique, shared, and power tags vs page-one competitors."""
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid JSON body.")
+        from ..models import GigSnapshot as _GS, MarketplaceGig as _MG
+        try:
+            snapshot = _GS.from_dict(body.get("snapshot", body))
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=f"Invalid snapshot: {exc}")
+        competitors = [_MG.from_dict(r) for r in body.get("competitors", []) if isinstance(r, dict)]
+        report = TagGapAnalyzer().analyze(snapshot, competitors or None)
+        return JSONResponse(content=report.to_dict())
+
+    # ------------------------------------------------------------------
+    # Price Alert  POST /api/gig/{gig_id}/price-alert/check
+    # ------------------------------------------------------------------
+
+    @app.post("/api/gig/{gig_id}/price-alert/check")
+    async def price_alert_check_endpoint(
+        gig_id: str,
+        request: Request,
+        _: None = Depends(require_auth),
+    ) -> JSONResponse:
+        """Compare current competitors against stored baseline; return fired alerts."""
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid JSON body.")
+        from ..models import MarketplaceGig as _MG
+        competitors = [_MG.from_dict(r) for r in body.get("competitors", []) if isinstance(r, dict)]
+        service = PriceAlertService(config)
+        alerts = service.check_and_alert(gig_id, competitors)
+        for alert in alerts:
+            try:
+                await websocket_manager.broadcast_json(alert.to_ws_event())
+            except Exception:
+                pass
+        return JSONResponse(content={"alerts": [a.to_dict() for a in alerts], "count": len(alerts)})
+
+    @app.get("/api/gig/{gig_id}/price-alert/baseline")
+    async def price_alert_baseline_endpoint(
+        gig_id: str,
+        _: None = Depends(require_auth),
+    ) -> JSONResponse:
+        """Return stored price/review baseline for a gig."""
+        return JSONResponse(content=PriceAlertService(config).get_baseline(gig_id))
 
     @app.websocket("/ws/dashboard")
     async def dashboard_ws(websocket: WebSocket) -> None:

@@ -109,7 +109,7 @@ class GigOptimizerConfig:
     fiverr_marketplace_request_delay_ms: int = 1500
     fiverr_marketplace_profile_dir: Path = Path("playwright/.marketplace-profile")
     fiverr_marketplace_verification_timeout_seconds: int = 600
-    fiverr_marketplace_headless: bool = False
+    fiverr_marketplace_headless: bool = True
     fiverr_marketplace_browser_channel: str = "auto"
     fiverr_marketplace_slow_mo_ms: int = 250
     approval_queue_db_path: Path = Path("data/approval_queue.db")
@@ -327,7 +327,7 @@ class GigOptimizerConfig:
                 "FIVERR_MARKETPLACE_VERIFICATION_TIMEOUT_SECONDS",
                 600,
             ),
-            fiverr_marketplace_headless=_get_bool("FIVERR_MARKETPLACE_HEADLESS", False),
+            fiverr_marketplace_headless=_get_bool("FIVERR_MARKETPLACE_HEADLESS", True),
             fiverr_marketplace_browser_channel=(
                 os.getenv("FIVERR_MARKETPLACE_BROWSER_CHANNEL", "auto").strip().lower() or "auto"
             ),

@@ -11,6 +11,9 @@ from .notification_service import NotificationService
 from .reporting import WeeklyReportService
 from .slack_service import SlackService
 from .settings_service import SettingsService
+from .health_score_service import GigHealthScoreEngine, GigHealthScore, DimensionScore
+from .tag_gap_analyzer import TagGapAnalyzer, TagGapReport
+from .price_alert_service import PriceAlertService, PriceAlert
 
 __all__ = [
     "AuthService",
@@ -26,4 +29,7 @@ __all__ = [
     "SlackService",
     "SettingsService",
     "WeeklyReportService",
+    "GigHealthScoreEngine", "GigHealthScore", "DimensionScore",
+    "TagGapAnalyzer", "TagGapReport",
+    "PriceAlertService", "PriceAlert",
 ]
