@@ -423,6 +423,12 @@ class GigOptimizerConfig:
             parsed = urlparse(self.app_base_url)
             if parsed.hostname and parsed.hostname not in hosts:
                 hosts.append(parsed.hostname)
+        # Always allow Docker-internal and loopback hosts so n8n and other
+        # internal services on the same Docker network can reach the API
+        # without TrustedHostMiddleware returning 400 "Invalid host header".
+        for _h in ["localhost", "127.0.0.1", "app", "*.localhost"]:
+            if _h not in hosts:
+                hosts.append(_h)
         return hosts
 
     def validate_credentials(self) -> list[ConnectorStatus]:
