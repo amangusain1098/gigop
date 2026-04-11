@@ -23,7 +23,7 @@
     },
     {
       "parameters": {
-        "url": "http://deploy-app-1:8001/api/copilot/training-dashboard",
+        "url": "http://app:8001/api/copilot/training-dashboard",
         "options": {
           "timeout": 15000
         },
@@ -54,7 +54,7 @@
     },
     {
       "parameters": {
-        "url": "http://deploy-app-1:8001/api/copilot/training-dashboard/predict?q=fiverr&top_n=5",
+        "url": "http://app:8001/api/copilot/training-dashboard/predict?q=fiverr&top_n=5",
         "options": {
           "timeout": 10000
         },
@@ -183,7 +183,7 @@
     },
     {
       "parameters": {
-        "url": "http://deploy-app-1:8001/api/copilot/training-dashboard/train",
+        "url": "http://app:8001/api/copilot/training-dashboard/train",
         "method": "POST",
         "sendHeaders": true,
         "headerParameters": {
@@ -220,7 +220,7 @@
     },
     {
       "parameters": {
-        "url": "http://deploy-app-1:8001/api/copilot/training-dashboard/run-tests",
+        "url": "http://app:8001/api/copilot/training-dashboard/run-tests",
         "method": "POST",
         "sendHeaders": true,
         "headerParameters": {
