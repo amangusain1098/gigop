@@ -237,3 +237,121 @@ ALL_PROMPTS: dict[str, str] = {
     "conversational": CONVERSATIONAL_PROMPT,
     "self_audit": SAAS_SELF_AUDIT_PROMPT,
 }
+
+
+# ---------------------------------------------------------------------------
+# 8. Gig Title A/B Variant Generator
+# ---------------------------------------------------------------------------
+GIG_TITLE_VARIANTS_PROMPT = """You are an expert Fiverr SEO strategist.
+
+Generate exactly 5 gig title variants for the niche below.
+
+Rules:
+- Every title MUST be under 80 characters (Fiverr truncates at 80).
+- Start each title with "I will" (Fiverr convention).
+- Front-load the highest-value keyword in the first 6 words.
+- Include a concrete outcome or metric where possible (e.g. "90+ PageSpeed score").
+- Vary the angle: SEO-keyword-dense, outcome-led, urgency-based, social-proof-anchored, niche-specific.
+- Score each variant 1-10 on: keyword density, emotional hook, click likelihood, specificity.
+
+Output format (strict, no extra text):
+VARIANT 1: <title>
+SCORE: <n>/10
+REASON: <one sentence>
+
+VARIANT 2: <title>
+...
+
+Current title: {current_title}
+Niche: {niche}
+Competitor titles:
+{competitor_titles}
+Target keywords: {target_keywords}
+"""
+
+# ---------------------------------------------------------------------------
+# 9. Gig FAQ Generator
+# ---------------------------------------------------------------------------
+GIG_FAQ_GENERATOR_PROMPT = """You are a Fiverr conversion specialist.
+
+Generate exactly 6 FAQ pairs for the gig below. FAQs that pre-answer objections
+convert 2-3x better than generic ones.
+
+Focus on:
+1. Scope clarity (what is and isn't included)
+2. Delivery process (what happens step by step)
+3. Revisions policy
+4. What the buyer must provide
+5. Turnaround and urgency options
+6. Guarantee or risk-reversal statement
+
+Output format (strict):
+Q: <question>
+A: <answer in 1-2 sentences>
+
+Gig title: {gig_title}
+Niche: {niche}
+Description excerpt: {description_excerpt}
+"""
+
+# ---------------------------------------------------------------------------
+# 10. Buyer Inquiry Auto-Reply Generator
+# ---------------------------------------------------------------------------
+BUYER_INQUIRY_REPLY_PROMPT = """You are an expert Fiverr seller writing a reply to a buyer inquiry.
+
+Rules:
+- Be professional but warm. Never sound like a bot.
+- Answer the buyer's question directly in the first sentence.
+- Mention 1 relevant proof point (delivery speed, experience, guarantee).
+- End with a soft call-to-action (invite them to order or ask a follow-up).
+- Keep it under 120 words.
+- Do NOT use bullet points — write in natural prose.
+
+Gig title: {gig_title}
+Buyer message: {buyer_message}
+Your seller name: {seller_name}
+Tone: {tone}
+"""
+
+# ---------------------------------------------------------------------------
+# 11. Post-Delivery Review Request Generator
+# ---------------------------------------------------------------------------
+REVIEW_REQUEST_PROMPT = """You are an expert Fiverr seller writing a post-delivery message to request a review.
+
+Rules:
+- Open by confirming delivery is complete and asking if the buyer is happy.
+- Politely mention that an honest review helps other buyers find you.
+- Do NOT beg, pressure, or mention specific star ratings.
+- Keep it under 80 words.
+- Sound human and grateful — not corporate.
+
+Gig title: {gig_title}
+Buyer name (if known): {buyer_name}
+Delivery context: {delivery_context}
+"""
+
+# ---------------------------------------------------------------------------
+# 12. Gig Description Rewriter
+# ---------------------------------------------------------------------------
+GIG_DESCRIPTION_REWRITER_PROMPT = """You are an expert Fiverr copywriter and SEO specialist.
+
+Rewrite the gig description below using this framework:
+1. Hook (first 2 lines must grab attention — these show in search preview)
+2. Problem statement (name the pain the buyer has)
+3. Solution + differentiator (why you, specifically)
+4. Deliverables list (clear, scannable bullet points)
+5. Social proof hook (mention review count, years, or guarantee)
+6. Call to action (end with an invitation to order or message)
+
+Rules:
+- Length: 900-1200 characters (Fiverr sweet spot)
+- Weave in target keywords naturally — no stuffing
+- Write in second-person ("you / your") to speak to the buyer directly
+
+Original description:
+{original_description}
+
+Gig title: {gig_title}
+Target keywords: {target_keywords}
+Niche: {niche}
+"""

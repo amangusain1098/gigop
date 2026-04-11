@@ -108,3 +108,90 @@ class SaaSSelfAuditResult:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+# ---------------------------------------------------------------------------
+# New Copilot Schemas — Round 3 additions
+# ---------------------------------------------------------------------------
+
+@dataclass(slots=True)
+class TitleVariant:
+    """A single scored title variant."""
+    variant: str
+    score: int  # 1-10
+    reason: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class TitleVariantsResult:
+    """Result from generate_title_variants()."""
+    current_title: str
+    variants: list[TitleVariant]
+    top_pick: str
+    raw_output: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["variants"] = [v.to_dict() if isinstance(v, TitleVariant) else v for v in self.variants]
+        return payload
+
+
+@dataclass(slots=True)
+class FAQPair:
+    """A single FAQ question/answer pair."""
+    question: str
+    answer: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class FAQGenerationResult:
+    """Result from generate_faqs()."""
+    gig_title: str
+    pairs: list[FAQPair]
+    raw_output: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["pairs"] = [p.to_dict() if isinstance(p, FAQPair) else p for p in self.pairs]
+        return payload
+
+
+@dataclass(slots=True)
+class InquiryReplyResult:
+    """Result from generate_inquiry_reply()."""
+    reply_text: str
+    word_count: int
+    tone: str
+    raw_output: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class ReviewRequestResult:
+    """Result from generate_review_request()."""
+    message_text: str
+    word_count: int
+    raw_output: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class DescriptionRewriteResult:
+    """Result from rewrite_description()."""
+    rewritten_description: str
+    char_count: int
+    keywords_used: list[str]
+    raw_output: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)

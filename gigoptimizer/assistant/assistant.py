@@ -86,7 +86,21 @@ _CAPABILITY = {
     "what is this", "what is gigoptimizer",
 }
 
-_CONVERSATIONAL_INTENTS = {"greeting", "thanks", "how_are_you", "identity", "capability"}
+_CONVERSATIONAL_INTENTS = {"greeting", "thanks", "how_are_you", "identity", "capability",
+                          "pricing_question", "comparison"}
+
+_PRICING_QUESTION = {
+    "how much does this cost", "what is the price", "how much do you charge",
+    "what are your rates", "whats the cost", "how much is it",
+    "what is your pricing", "do you offer a discount", "is there a free plan",
+    "what does it cost", "cost", "price", "pricing", "how much",
+    "what is the fee", "what are the fees", "subscription cost",
+}
+_COMPARISON = {
+    "vs", "versus", "compare", "compared to", "difference between",
+    "which is better", "what is the difference", "whats the difference",
+    "compare fiverr vs upwork", "fiverr or upwork",
+}
 
 
 def _classify_intent(user_text):
@@ -126,6 +140,15 @@ def _classify_intent(user_text):
 
     if canon in _CAPABILITY or any(canon.startswith(c) for c in _CAPABILITY):
         return "capability"
+
+    if canon in _PRICING_QUESTION or any(canon.startswith(p) for p in _PRICING_QUESTION):
+        return "pricing_question"
+
+    # Comparison: look for "vs", "versus", "compare" anywhere in short messages
+    if word_count <= 8 and any(kw in words for kw in ("vs", "versus", "compare", "compared")):
+        return "comparison"
+    if canon in _COMPARISON or any(canon.startswith(c) for c in _COMPARISON):
+        return "comparison"
 
     return "task"
 
@@ -703,3 +726,303 @@ class AIAssistant:
                 parts = re.split(r"[,;|]", value)
                 return [part.strip().strip("[]\"'") for part in parts if part.strip()]
         return []
+
+    # -----------------------------------------------------------------------
+    # New Copilot Methods — Round 3
+    # -----------------------------------------------------------------------
+
+    def generate_title_variants(
+        self,
+        *,
+        current_title: str,
+        niche: str,
+        competitor_titles: tuple | list = (),
+        target_keywords: tuple | list = (),
+    ):
+        """Generate 5 scored alternative gig title variants.
+
+        Returns :class:`~gigoptimizer.assistant.schemas.TitleVariantsResult`.
+        """
+        from .prompts import GIG_TITLE_VARIANTS_PROMPT
+        from .schemas import TitleVariant, TitleVariantsResult
+
+        prompt = render_prompt(
+            GIG_TITLE_VARIANTS_PROMPT,
+            current_title=current_title,
+            niche=niche,
+            competitor_titles="\n".join(f"- {t}" for t in competitor_titles) if competitor_titles else "None provided",
+            target_keywords=", ".join(target_keywords) if target_keywords else "None specified",
+        )
+        response, fallback_used, warnings = self._call(
+            prompt,
+            feature="generate_title_variants",
+            temperature=0.5,
+            max_tokens=900,
+        )
+        raw = response.text
+
+        # Parse VARIANT N: / SCORE: / REASON: blocks
+        variants: list[TitleVariant] = []
+        lines = raw.splitlines()
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            m = re.match(r"^VARIANT\s*\d+\s*:\s*(.+)$", line, re.IGNORECASE)
+            if m:
+                variant_text = m.group(1).strip()
+                score_val = 7
+                reason_val = ""
+                # Look ahead for SCORE and REASON
+                for j in range(i + 1, min(i + 4, len(lines))):
+                    sl = lines[j].strip()
+                    sm = re.match(r"^SCORE\s*:\s*(\d+)", sl, re.IGNORECASE)
+                    rm = re.match(r"^REASON\s*:\s*(.+)$", sl, re.IGNORECASE)
+                    if sm:
+                        score_val = min(10, max(1, int(sm.group(1))))
+                    if rm:
+                        reason_val = rm.group(1).strip()
+                variants.append(TitleVariant(variant=variant_text, score=score_val, reason=reason_val))
+            i += 1
+
+        # Fallback: split by numbered list if structured parse found nothing
+        if not variants:
+            for line in lines:
+                line = line.strip().lstrip("0123456789.-) ")
+                if line and len(line) > 10:
+                    variants.append(TitleVariant(variant=line, score=7, reason=""))
+
+        top_pick = max(variants, key=lambda v: v.score).variant if variants else current_title
+
+        result = TitleVariantsResult(
+            current_title=current_title,
+            variants=variants,
+            top_pick=top_pick,
+            raw_output=raw,
+        )
+        envelope = self._envelope(
+            "generate_title_variants",
+            response,
+            result.to_dict(),
+            score=None,
+            fallback_used=fallback_used,
+            warnings=warnings,
+        )
+        return envelope, result
+
+    def generate_faqs(
+        self,
+        *,
+        gig_title: str,
+        niche: str,
+        description_excerpt: str = "",
+    ):
+        """Generate 6 conversion-optimised FAQ pairs for a Fiverr gig.
+
+        Returns :class:`~gigoptimizer.assistant.schemas.FAQGenerationResult`.
+        """
+        from .prompts import GIG_FAQ_GENERATOR_PROMPT
+        from .schemas import FAQGenerationResult, FAQPair
+
+        prompt = render_prompt(
+            GIG_FAQ_GENERATOR_PROMPT,
+            gig_title=gig_title,
+            niche=niche,
+            description_excerpt=description_excerpt or "Not provided",
+        )
+        response, fallback_used, warnings = self._call(
+            prompt,
+            feature="generate_faqs",
+            temperature=0.5,
+            max_tokens=800,
+        )
+        raw = response.text
+
+        pairs: list[FAQPair] = []
+        lines = raw.splitlines()
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            q_match = re.match(r"^Q\d*[:.]\s*(.+)$", line, re.IGNORECASE)
+            if not q_match:
+                q_match = re.match(r"^(?:Question\s*\d*[:.]\s*)(.+)$", line, re.IGNORECASE)
+            if q_match:
+                question = q_match.group(1).strip().rstrip("?") + "?"
+                answer = ""
+                for j in range(i + 1, min(i + 5, len(lines))):
+                    al = lines[j].strip()
+                    a_match = re.match(r"^A\d*[:.]\s*(.+)$", al, re.IGNORECASE)
+                    if not a_match:
+                        a_match = re.match(r"^(?:Answer\s*\d*[:.]\s*)(.+)$", al, re.IGNORECASE)
+                    if a_match:
+                        answer = a_match.group(1).strip()
+                        i = j
+                        break
+                if question and answer:
+                    pairs.append(FAQPair(question=question, answer=answer))
+            i += 1
+
+        result = FAQGenerationResult(
+            gig_title=gig_title,
+            pairs=pairs,
+            raw_output=raw,
+        )
+        envelope = self._envelope(
+            "generate_faqs",
+            response,
+            result.to_dict(),
+            score=None,
+            fallback_used=fallback_used,
+            warnings=warnings,
+        )
+        return envelope, result
+
+    def generate_inquiry_reply(
+        self,
+        *,
+        buyer_message: str,
+        gig_title: str,
+        seller_name: str = "",
+        tone: str = "professional",
+    ):
+        """Generate a professional reply to a buyer inquiry.
+
+        Returns :class:`~gigoptimizer.assistant.schemas.InquiryReplyResult`.
+        """
+        from .prompts import BUYER_INQUIRY_REPLY_PROMPT
+        from .schemas import InquiryReplyResult
+
+        prompt = render_prompt(
+            BUYER_INQUIRY_REPLY_PROMPT,
+            gig_title=gig_title,
+            buyer_message=buyer_message,
+            seller_name=seller_name or "the seller",
+            tone=tone,
+        )
+        response, fallback_used, warnings = self._call(
+            prompt,
+            feature="generate_inquiry_reply",
+            temperature=0.55,
+            max_tokens=300,
+        )
+        raw = response.text
+
+        # Clean any preamble the model might add
+        reply_text = raw.strip()
+        for prefix in ("here is", "here's", "reply:", "response:"):
+            lower = reply_text.lower()
+            if lower.startswith(prefix):
+                reply_text = reply_text[len(prefix):].lstrip(": \n")
+
+        word_count = len(reply_text.split())
+        result = InquiryReplyResult(
+            reply_text=reply_text,
+            word_count=word_count,
+            tone=tone,
+            raw_output=raw,
+        )
+        envelope = self._envelope(
+            "generate_inquiry_reply",
+            response,
+            result.to_dict(),
+            score=None,
+            fallback_used=fallback_used,
+            warnings=warnings,
+        )
+        return envelope, result
+
+    def generate_review_request(
+        self,
+        *,
+        gig_title: str,
+        buyer_name: str = "",
+        delivery_context: str = "",
+    ):
+        """Generate a short post-delivery review request message.
+
+        Returns :class:`~gigoptimizer.assistant.schemas.ReviewRequestResult`.
+        """
+        from .prompts import REVIEW_REQUEST_PROMPT
+        from .schemas import ReviewRequestResult
+
+        prompt = render_prompt(
+            REVIEW_REQUEST_PROMPT,
+            gig_title=gig_title,
+            buyer_name=buyer_name or "there",
+            delivery_context=delivery_context or "Standard delivery completed",
+        )
+        response, fallback_used, warnings = self._call(
+            prompt,
+            feature="generate_review_request",
+            temperature=0.55,
+            max_tokens=200,
+        )
+        raw = response.text
+
+        message_text = raw.strip()
+        word_count = len(message_text.split())
+        result = ReviewRequestResult(
+            message_text=message_text,
+            word_count=word_count,
+            raw_output=raw,
+        )
+        envelope = self._envelope(
+            "generate_review_request",
+            response,
+            result.to_dict(),
+            score=None,
+            fallback_used=fallback_used,
+            warnings=warnings,
+        )
+        return envelope, result
+
+    def rewrite_description(
+        self,
+        *,
+        original_description: str,
+        gig_title: str,
+        niche: str,
+        target_keywords: tuple | list = (),
+    ):
+        """Rewrite a gig description using the 6-section copywriting framework.
+
+        Returns :class:`~gigoptimizer.assistant.schemas.DescriptionRewriteResult`.
+        """
+        from .prompts import GIG_DESCRIPTION_REWRITER_PROMPT
+        from .schemas import DescriptionRewriteResult
+
+        prompt = render_prompt(
+            GIG_DESCRIPTION_REWRITER_PROMPT,
+            original_description=original_description,
+            gig_title=gig_title,
+            niche=niche,
+            target_keywords=", ".join(target_keywords) if target_keywords else "None specified",
+        )
+        response, fallback_used, warnings = self._call(
+            prompt,
+            feature="rewrite_description",
+            temperature=0.45,
+            max_tokens=700,
+        )
+        raw = response.text
+
+        rewritten = raw.strip()
+        char_count = len(rewritten)
+
+        # Find which target keywords appear in the rewrite
+        keywords_used = [kw for kw in target_keywords if kw.lower() in rewritten.lower()]
+
+        result = DescriptionRewriteResult(
+            rewritten_description=rewritten,
+            char_count=char_count,
+            keywords_used=keywords_used,
+            raw_output=raw,
+        )
+        envelope = self._envelope(
+            "rewrite_description",
+            response,
+            result.to_dict(),
+            score=None,
+            fallback_used=fallback_used,
+            warnings=warnings,
+        )
+        return envelope, result
