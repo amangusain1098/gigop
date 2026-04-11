@@ -47,6 +47,7 @@ from ..services import (
     TagGapAnalyzer,
     PriceAlertService,
 )
+from ..services.copilot_learning_engine import CopilotLearningEngine
 from .security import SecurityHeadersMiddleware, require_csrf
 from .scheduler import WeeklyReportScheduler
 from .websocket_manager import DashboardWebSocketManager
