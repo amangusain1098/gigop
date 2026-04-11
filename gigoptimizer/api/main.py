@@ -1921,6 +1921,24 @@ def create_app() -> FastAPI:
             "assistant_history": list(reversed(repository.list_assistant_messages(gig_id=gig_id, limit=12))),
         }
 
+    @app.get("/api/assistant/sessions/count")
+    async def assistant_sessions_count(_: None = Depends(require_auth)) -> dict:
+        """Return total and active (modified within 30 min) conversation session counts."""
+        import time as _time
+        conversations_dir = config.data_dir / "conversations"
+        total = 0
+        active = 0
+        cutoff = _time.time() - 1800  # 30 minutes
+        if conversations_dir.exists():
+            for p in conversations_dir.glob("*.jsonl"):
+                total += 1
+                try:
+                    if p.stat().st_mtime >= cutoff:
+                        active += 1
+                except OSError:
+                    pass
+        return {"active_sessions": active, "total_sessions": total}
+
     @app.post("/api/settings")
     async def save_settings(payload: dict = Body(...), _: None = Depends(require_auth), __: None = Depends(require_csrf)) -> dict:
         return settings_service.update_settings(payload)
