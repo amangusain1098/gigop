@@ -1,386 +1,339 @@
-# GigOptimizer Pro — Codex V2 Frontend Brief
+# GigOptimizer Pro — V2 Frontend Brief for Codex
 
 **Date:** 2026-04-12
-**Branch:** main (work directly on main, commit incrementally)
-**Last commit:** `750386b chore(v2): Claude + Codex role prompts`
+**Branch:** main
+**Your role:** Frontend Engineer — React + TypeScript + CSS
 
 ---
 
-## Context
+## What Is GigOptimizer Pro?
 
-The current frontend (`App.tsx`, 1914 lines) is a single massive component.
-It works but it has serious problems:
-- One God component with 30+ `useState` calls — impossible to maintain
-- No navigation / routing — everything is stacked vertically
-- No sidebar — user scrolls endlessly to find sections
-- No component separation — everything is in `App.tsx`
-- Mobile experience is poor — long scrolling page with no navigation
+A production SaaS AI platform that helps Fiverr sellers:
+- Optimize their gig titles, descriptions, tags, and packages using AI
+- Track and beat their competitors on page one
+- Get real-time SEO scores, keyword analysis, and market data
+- Have a built-in AI copilot that learns from every conversation and gets smarter daily
 
-**V2 goal: Turn it into a real SaaS dashboard** — sidebar navigation, split into separate page components, fast, mobile-first, clean UI.
+The backend is fully built (FastAPI + PostgreSQL + Redis). Your job in v2 is to make the frontend a real, modern SaaS product — not a scrolling wall of cards.
 
 ---
 
-## V2 Architecture Target
+## What Exists Today (v1)
+
+One massive file: `App.tsx` (1914 lines), with:
+- 30+ `useState` calls in a single component
+- No navigation — everything stacks vertically, user scrolls forever
+- No sidebar or routing
+- No page separation
+- Basic mobile support only
+- Flash messages instead of toast notifications
+- No loading skeletons or empty states
+
+It works but it is not scalable and looks like a prototype.
+
+---
+
+## What V2 Needs to Be
+
+A proper SaaS dashboard with:
+- **Sidebar navigation** — user clicks to go between sections instead of scrolling
+- **Separated pages** — each section is its own component
+- **Shared UI system** — reusable Button, Card, Badge, Toast, Skeleton components
+- **Custom hooks** — auth, CSRF, assistant SSE all extracted out of App.tsx
+- **Mobile first** — works perfectly on phone including iOS safe areas
+- **AI learning UI** — the most important new section: show the user how the AI is getting smarter every day with live stats, feedback buttons, and training controls
+
+---
+
+## The AI Learning System (Most Important Part of V2)
+
+The backend already has a full AI learning engine (`CopilotLearningEngine`). It:
+- Ingests every conversation the user has with the copilot
+- Builds a vocabulary model (TF-IDF) from all conversations
+- Learns bigram patterns (word pairs that commonly follow each other)
+- Predicts word completions based on what it has learned
+- Runs training cycles on a schedule (every 6 hours by default)
+- Tracks vocabulary growth, document count, and learning events
+
+**What is missing: the UI to make this visible and interactive.**
+
+The user currently has no idea the AI is learning. They can't see it happening, can't feed it, can't control it. V2 fixes this.
+
+---
+
+## V2 Folder Structure (Target)
 
 ```
 frontend/src/
-  App.tsx                          ← slim root: auth, bootstrap, routing only (~200 lines)
+  App.tsx                         ← slim root: auth, bootstrap, router (~150 lines)
   layout/
-    Sidebar.tsx                    ← left nav
-    TopBar.tsx                     ← top header with user/status
-    Layout.tsx                     ← wraps Sidebar + TopBar + <Outlet>
+    Sidebar.tsx                   ← left nav
+    TopBar.tsx                    ← top bar with live status
+    Layout.tsx                    ← wraps sidebar + topbar + page content
   pages/
-    GigOptimizerPage.tsx           ← gig URL input, run analysis, results
-    CompetitorPage.tsx             ← competitor table, comparison, radar chart
-    CopilotPage.tsx                ← AI assistant chat panel
-    TrainingDashboard.tsx          ← copilot learning stats (already exists, move here)
-    MetricsPage.tsx                ← live metrics chart, keyword scores
-    SettingsPage.tsx               ← connectors health, queue review, job runs
+    GigOptimizerPage.tsx          ← gig analysis, title/desc/tag results
+    CompetitorPage.tsx            ← competitor table, comparison, radar chart
+    CopilotPage.tsx               ← AI assistant chat panel
+    AIBrainPage.tsx               ← NEW: AI learning dashboard (see below)
+    MetricsPage.tsx               ← live metrics, keyword quality
+    SettingsPage.tsx              ← connectors, queue review, job runs
   components/
     ui/
-      Button.tsx                   ← shared button variants
-      Card.tsx                     ← shared card container
-      Badge.tsx                    ← status badges (active/error/queued)
-      Toast.tsx                    ← replace all flash messages
-      Spinner.tsx                  ← loading spinner
-      Skeleton.tsx                 ← loading skeletons for data cards
+      Button.tsx
+      Card.tsx
+      Badge.tsx
+      Toast.tsx
+      Skeleton.tsx
     charts/
       MetricsLineChart.tsx
       RadarScoreChart.tsx
+      VocabGrowthChart.tsx        ← NEW: shows vocab size over time
   hooks/
-    useBootstrap.ts                ← bootstrap fetch + polling logic
-    useCsrf.ts                     ← csrf token + refresh
-    useAssistant.ts                ← assistant SSE streaming logic
-  types.ts                         ← keep as-is, add v2 types
-  api.ts                           ← keep as-is, add new helpers
+    useBootstrap.ts
+    useCsrf.ts
+    useAssistant.ts
+  types.ts
+  api.ts
 ```
 
 ---
 
-## Tasks (do in this order)
+## Task 1 — Shared UI Components
 
----
+Create `frontend/src/components/ui/`. These are used everywhere else.
 
-### Task 1 — Shared UI components (no logic, just UI)
-
-**Files to create:** `frontend/src/components/ui/`
-
-#### `Button.tsx`
+### Button.tsx
 ```tsx
 type Variant = 'primary' | 'secondary' | 'danger' | 'ghost'
 type Size = 'sm' | 'md' | 'lg'
-interface Props {
-  variant?: Variant
-  size?: Size
-  loading?: boolean
+
+interface ButtonProps {
+  variant?: Variant       // default: 'primary'
+  size?: Size             // default: 'md'
+  loading?: boolean       // shows spinner, disables click
   disabled?: boolean
   onClick?: () => void
   children: React.ReactNode
   type?: 'button' | 'submit'
-  className?: string
 }
 ```
-- `loading` shows a small inline spinner + disables button
-- Variants map to CSS classes: `.btn`, `.btn--primary`, `.btn--secondary`, `.btn--danger`, `.btn--ghost`
+CSS classes: `.btn`, `.btn--primary`, `.btn--secondary`, `.btn--danger`, `.btn--ghost`, `.btn--sm`, `.btn--lg`, `.btn--loading`
 
-#### `Badge.tsx`
+### Badge.tsx
 ```tsx
-type Status = 'active' | 'ok' | 'error' | 'warning' | 'queued' | 'pending'
-interface Props { status: Status; label?: string }
+type Status = 'active' | 'ok' | 'error' | 'warning' | 'queued' | 'pending' | 'idle'
+
+interface BadgeProps {
+  status: Status
+  label?: string   // if omitted, uses status as label
+}
+// renders: ● active  (coloured dot + text)
 ```
-- Maps to existing CSS `.status--active`, `.status--error` etc.
-- Dot indicator + label text
 
-#### `Card.tsx`
+### Card.tsx
 ```tsx
-interface Props {
+interface CardProps {
   title?: string
   subtitle?: string
-  action?: React.ReactNode    // button/badge in card header
+  action?: React.ReactNode    // top-right slot: badge, button, etc.
   children: React.ReactNode
   className?: string
+  loading?: boolean           // shows skeleton overlay when true
 }
 ```
 
-#### `Toast.tsx`
-Replace all `setMessage` / `setError` flash section with a proper toast system.
-- `useToast()` hook returns `{ toast }` where `toast.success(msg)`, `toast.error(msg)`, `toast.info(msg)`
-- Toasts appear bottom-right, auto-dismiss after 4s
-- Max 3 toasts visible at once, stack vertically
-
-#### `Skeleton.tsx`
+### Toast.tsx + useToast hook
+Replace all `setMessage` / `setError` state with a toast system.
 ```tsx
-interface Props { width?: string; height?: string; className?: string }
-// renders an animated loading placeholder div
-```
-Use in every data-loading section.
+// useToast.ts
+export function useToast() {
+  // returns: toast.success(msg), toast.error(msg), toast.info(msg), toast.warning(msg)
+}
 
----
-
-### Task 2 — Sidebar layout
-
-**Files to create:** `frontend/src/layout/Sidebar.tsx`, `Layout.tsx`, `TopBar.tsx`
-
-#### Sidebar nav items:
-```
-🏠  Dashboard          → /
-🎯  Gig Optimizer      → /gig
-📊  Competitors        → /competitors
-🤖  Copilot Chat       → /copilot
-📈  Metrics            → /metrics
-🧠  Training           → /training
-⚙️  Settings           → /settings
+// ToastContainer.tsx — render at root level inside App.tsx
+// Toasts appear bottom-right, auto-dismiss after 4s
+// Max 3 visible, stack upward
+// Each toast has: icon + message + close button
 ```
 
-- Sidebar is 240px wide on desktop, collapses to icon-only (48px) on mobile
-- Active item: left border accent + background highlight
-- Bottom of sidebar: logged-in username + logout button
-- Sidebar state (collapsed/expanded) saved in `localStorage` with key `gigop-sidebar`
-
-#### TopBar:
-- App name/logo left
-- Live status indicator right: green dot + "Live" when WebSocket connected, grey dot + "Offline" when not
-- On mobile: hamburger icon to open sidebar as overlay
-
-#### Layout wrapper:
+### Skeleton.tsx
 ```tsx
-// Layout.tsx
-<div className="layout">
-  <Sidebar />
-  <div className="layout__main">
-    <TopBar />
-    <main className="layout__content">
-      {children}
-    </main>
-  </div>
-</div>
+interface SkeletonProps {
+  width?: string    // default: '100%'
+  height?: string   // default: '1rem'
+  rounded?: boolean // for circular avatars etc
+}
+// renders: animated grey shimmer div
+```
+
+CSS for shimmer:
+```css
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.skeleton {
+  background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s infinite;
+  border-radius: 4px;
+}
 ```
 
 ---
 
-### Task 3 — Extract pages from App.tsx
+## Task 2 — Sidebar + Layout
 
-Split the current monolithic `App.tsx` into page components. **Do not delete logic** — move it as-is, then clean up.
+### Sidebar.tsx
 
-| Page | Current section in App.tsx | What it contains |
-|---|---|---|
-| `GigOptimizerPage.tsx` | hero section + commands card + content-grid (first) | Gig URL input, title suggestions, description, tags, packages |
-| `CompetitorPage.tsx` | competitor table + radar chart | Competitor records table, sort, comparison timeline |
-| `CopilotPage.tsx` | assistant panel | Chat messages, SSE streaming, input bar |
-| `MetricsPage.tsx` | charts section + keyword quality | Line chart, radar chart, keyword scores, scraper visibility |
-| `TrainingDashboard.tsx` | already exists as `CopilotTrainingDashboard.tsx` | Move to pages/, keep identical |
-| `SettingsPage.tsx` | queue review + job runs + health + knowledge base | All admin/config sections |
+Navigation items (in order):
+```
+🏠  Dashboard          → overview with key metrics
+🎯  Gig Optimizer      → run gig analysis
+📊  Competitors        → competitor table + radar chart
+🤖  Copilot            → AI assistant chat
+🧠  AI Brain           → NEW: AI learning stats (most important)
+📈  Metrics            → live metrics + keyword scores
+⚙️  Settings           → connectors, queue, job runs
+```
 
-**Rules when extracting:**
-- Each page gets its own props interface with only what it needs from bootstrap state
-- Shared state (csrf, auth, bootstrap data) comes via props or a context — do NOT duplicate state
-- Each page file must compile clean: `tsc --noEmit`
+Behaviour:
+- 240px wide on desktop
+- Collapses to 48px icon-only on tablet (≤ 1024px), expand on hover
+- On mobile (≤ 768px): hidden by default, slides in as overlay when hamburger tapped
+- Active item: left border accent (3px) + light background highlight
+- Bottom: username chip + logout button
+
+### TopBar.tsx
+- Left: app logo + current page title
+- Right side chips (small, styled):
+  - WebSocket status: `● Live` (green) or `○ Offline` (grey)
+  - Active sessions: `💬 3 active` (fetched from `/api/assistant/sessions/count` every 60s)
+- Mobile: hamburger menu button on the left
+
+### Layout.tsx
+```tsx
+export default function Layout({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="layout">
+      <Sidebar />
+      <div className="layout__body">
+        <TopBar />
+        <main className="layout__content">{children}</main>
+      </div>
+    </div>
+  )
+}
+```
 
 ---
 
-### Task 4 — Custom hooks
+## Task 3 — Custom Hooks
 
-**File:** `frontend/src/hooks/useBootstrap.ts`
+Extract logic out of App.tsx.
+
+### useBootstrap.ts
 ```ts
-// Wraps loadBootstrap() — handles polling every 30s, returns { data, loading, refresh }
 export function useBootstrap(): {
   data: BootstrapPayload | null
   loading: boolean
+  error: string | null
   refresh: () => Promise<void>
 }
+// Fetches on mount, re-fetches every 30s
+// On error: sets error state, does not crash
 ```
 
-**File:** `frontend/src/hooks/useCsrf.ts`
+### useCsrf.ts
 ```ts
-// Returns current csrf token + a refresh function
 export function useCsrf(data: BootstrapPayload | null): {
   csrfToken: string
   refreshCsrf: () => Promise<string>
 }
+// csrfToken = data?.state.auth.csrf_token ?? ''
+// refreshCsrf: calls loadBootstrap(), returns new token
 ```
 
-**File:** `frontend/src/hooks/useAssistant.ts`
+### useAssistant.ts
 ```ts
-// Wraps all assistant SSE logic currently in App.tsx (~200 lines)
-export function useAssistant(csrfToken: string, onCsrfRefresh: () => Promise<string>): {
+export function useAssistant(csrfToken: string, refreshCsrf: () => Promise<string>): {
   messages: AssistantHistoryMessage[]
   busy: boolean
+  waitingForFirstChunk: boolean
   sendMessage: (text: string) => Promise<void>
   clearHistory: () => void
   initialized: boolean
   sessionId: string | null
 }
+// Wraps all SSE streaming logic from App.tsx (~200 lines)
 ```
 
 ---
 
-### Task 5 — Mobile & iOS improvements
+## Task 4 — Split App.tsx Into Pages
 
-**File:** `frontend/src/App.css`
+Move sections from the 1914-line App.tsx into their own page files.
+Do NOT delete logic — move it exactly as-is first, then clean up.
 
-Add to existing CSS:
+| Page File | What Goes There |
+|---|---|
+| `GigOptimizerPage.tsx` | Gig URL input, run button, title options, description options, tag suggestions, package recommendations |
+| `CompetitorPage.tsx` | Competitor records table, sort controls, comparison timeline, radar chart |
+| `CopilotPage.tsx` | Chat messages list, SSE streaming, input bar, session history |
+| `MetricsPage.tsx` | Line chart (impressions/clicks/orders), radar chart, keyword quality card, scraper visibility |
+| `SettingsPage.tsx` | Queue review, job runs table, connector health, knowledge base, dataset upload |
+| `AIBrainPage.tsx` | NEW — see Task 5 below |
 
-```css
-/* Sidebar overlay on mobile */
-@media (max-width: 768px) {
-  .sidebar {
-    position: fixed;
-    left: -240px;
-    transition: left 0.25s ease;
-    z-index: 200;
-    height: 100vh;
-  }
-  .sidebar--open {
-    left: 0;
-  }
-  .sidebar-overlay {
-    display: none;
-    position: fixed;
-    inset: 0;
-    background: rgba(0,0,0,0.4);
-    z-index: 199;
-  }
-  .sidebar--open ~ .sidebar-overlay {
-    display: block;
-  }
-}
-
-/* iOS safe area — chat compose bar */
-.compose-inner {
-  padding-bottom: max(12px, env(safe-area-inset-bottom));
-}
-
-/* Sticky bottom bars above iOS Safari toolbar */
-.chat-input-row,
-.compose-bar {
-  position: sticky;
-  bottom: 0;
-  z-index: 100;
-}
-
-/* Card grid responsive */
-.content-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: 1rem;
-}
-
-@media (max-width: 480px) {
-  .content-grid {
-    grid-template-columns: 1fr;
-  }
-}
-```
+Each page receives only what it needs via props. Use `useCsrf` and `useBootstrap` hooks instead of prop-drilling everything.
 
 ---
 
-### Task 6 — Loading skeletons
+## Task 5 — AI Brain Page (Most Important New Feature)
 
-Every data card must show a `<Skeleton>` while loading instead of being empty.
+**File:** `frontend/src/pages/AIBrainPage.tsx`
 
-Priority order:
-1. Competitor table (most visible)
-2. Live metrics chart
-3. Keyword quality card
-4. Training dashboard stats
+This page shows the user exactly how their AI copilot is learning and growing.
+The backend already provides all data from `GET /api/copilot/training-dashboard`.
 
-Use `Skeleton` component from Task 1.
+### Sections to build:
 
----
-
-### Task 7 — Empty states
-
-Every list/table must have a proper empty state when data is `[]` or `null`:
-
-```tsx
-// Example pattern
-{competitors.length === 0 ? (
-  <div className="empty-state">
-    <span className="empty-state__icon">📭</span>
-    <p>No competitors found yet.</p>
-    <p className="empty-state__hint">Run a gig analysis to populate this table.</p>
-  </div>
-) : (
-  <table>...</table>
-)}
+#### 1. Learning Stats Bar (top of page)
+Four stat cards in a row:
 ```
-
-CSS for `.empty-state`:
-```css
-.empty-state {
-  text-align: center;
-  padding: 3rem 1rem;
-  color: var(--text-muted);
-}
-.empty-state__icon { font-size: 2rem; display: block; margin-bottom: 0.5rem; }
-.empty-state__hint { font-size: 0.85rem; margin-top: 0.25rem; }
+┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
+│  Vocabulary     │ │  Documents      │ │  Training Runs  │ │  Bigram Pairs   │
+│  12,847 words   │ │  438 ingested   │ │  47 cycles      │ │  8,231 pairs    │
+│  ↑ +342 today   │ │  ↑ +12 today    │ │  last: 2h ago   │ │  learned        │
+└─────────────────┘ └─────────────────┘ └─────────────────┘ └─────────────────┘
 ```
+Data source: `response.model.vocab_size`, `response.model.doc_count`, `response.totals`, `response.model.bigram_count`
 
----
+#### 2. Top Learned Words (word cloud style table)
+Show top 20 words the AI has learned ranked by frequency × IDF score.
+Each row: word | frequency | IDF score | relevance bar
+Data source: `response.model.top_words`
 
-### Task 8 — Live session count chip (backend already built)
-
-**Endpoint ready:** `GET /api/assistant/sessions/count` → `{ active_sessions: N, total_sessions: N }`
-
-In `TopBar.tsx`, fetch this on mount and every 60s:
-```tsx
-<span className="chip chip--live">💬 {activeSessions} active</span>
+#### 3. Word Prediction Demo
+A live input where user types a partial word or phrase and sees what the AI predicts.
 ```
-
-CSS:
-```css
-.chip { padding: 2px 10px; border-radius: 999px; font-size: 0.78rem; font-weight: 600; }
-.chip--live { background: #dcfce7; color: #16a34a; }
+Type a word: [ fiverr___________ ]   →   Predictions:
+                                         1. fiverr gig (score: 0.94)
+                                         2. fiverr seller (score: 0.87)
+                                         3. fiverr ranking (score: 0.81)
 ```
+Calls `GET /api/copilot/training-dashboard/predict?q=<input>&top_n=8`
+Debounce: 300ms after user stops typing.
 
----
-
-## Build Verification (run after every task)
-
-```bash
-cd frontend && npm run build
-# Must complete with 0 TypeScript errors, 0 build errors
+#### 4. Recent Learning Activity (feed)
+Scrollable feed of the last 20 learning events:
 ```
-
----
-
-## Commit Convention
-
+● 2h ago   Auto training cycle — ingested 12 conversations, +342 tokens
+● 5h ago   Manual ingest — "SEO guide.txt" — +891 tokens, 23 new words
+● 11h ago  Auto training cycle — ingested 8 conversations, +201 tokens
 ```
-feat(sidebar): add collapsible sidebar with nav items
-feat(ui): add Button, Badge, Card, Toast components
-refactor(app): extract GigOptimizerPage from App.tsx
-fix(mobile): iOS safe area for compose bar
+Data source: `response.recent_learning`
+
+#### 5. Training Controls
+Three action buttons in a card:
 ```
-
-Push after each task — do not batch everything into one commit.
-
----
-
-## Critical Constraints
-
-1. **Do NOT touch any file outside `frontend/`** — backend is Claude's territory
-2. **Do NOT truncate existing files** — always write complete file content
-3. **Do NOT install new npm packages** without confirming first
-4. **TypeScript must be strict** — no `any` types, no `@ts-ignore`
-5. **Do NOT break the CSRF flow** — `CopilotTrainingDashboard` already has `postJson()` with CSRF retry — keep that pattern in all new POST calls
-6. **Escalate to Claude if you need:**
-   - A new API endpoint
-   - Changes to auth/session logic
-   - Backend error investigation
-
----
-
-## API Reference (what's already available)
-
-| Endpoint | Method | Purpose |
-|---|---|---|
-| `/api/bootstrap` | GET | Full app state, auth, csrf_token |
-| `/api/assistant/chat/stream` | GET | SSE streaming chat |
-| `/api/assistant/sessions/count` | GET | Active/total session counts |
-| `/api/copilot/training-dashboard` | GET | Training stats |
-| `/api/copilot/training-dashboard/train` | POST | Trigger training |
-| `/api/copilot/training-dashboard/run-tests` | POST | Run test suite |
-| `/api/copilot/training-dashboard/schedule` | GET/PUT | Training schedule |
-| `/api/fiverr/analyze` | POST | Run gig analysis |
-| `/api/fiverr/competitors` | GET | Competitor records |
+[▶ Run Training Now]   [🧪 
