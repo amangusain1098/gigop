@@ -52,7 +52,7 @@ jobs:
 
             rm -rf "$RELEASE_DIR"
             mkdir -p "$RELEASE_DIR" "$APP_DIR"
-            tar -xzf /tmp/gigoptimizer-release.tgz -C "$RELEASE_DIR"
+            tar -xzf /tmp/artifacts/gigoptimizer-release.tgz -C "$RELEASE_DIR"
 
             if [ ! -f "$APP_DIR/.env.production" ]; then
               cp "$RELEASE_DIR/.env.production.example" "$APP_DIR/.env.production"
@@ -68,4 +68,4 @@ jobs:
 
             bash "$APP_DIR/deploy/restart-stack.sh"
 
-            rm -rf "$RELEASE_DIR" /tmp/gigoptimizer-release.tgz
+            rm -rf "$RELEASE_DIR" /tmp/artifacts/gigoptimizer-release.tgz
