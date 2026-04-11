@@ -129,162 +129,57 @@
     },
     {
       "parameters": {
-        "select": "channel",
-        "channelId": {
-          "__rl": true,
-          "value": "={{ $vars.SLACK_CHANNEL_ID }}",
-          "mode": "id"
-        },
-        "text": "",
-        "blocksUi": {
-          "blocksValues": [
+        "method": "POST",
+        "url": "YOUR_SLACK_WEBHOOK_URL",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
             {
-              "type": "header",
-              "text": {
-                "type": "plain_text",
-                "text": "\ud83e\udde0 GigOptimizer Copilot \u2014 4-Hour Learning Digest",
-                "emoji": true
-              }
-            },
-            {
-              "type": "section",
-              "fields": [
-                {
-                  "type": "mrkdwn",
-                  "text": "*Vocabulary*\n={{ $json.vocab_size.toLocaleString() }} words"
-                },
-                {
-                  "type": "mrkdwn",
-                  "text": "*Docs ingested*\n={{ $json.doc_count }}"
-                },
-                {
-                  "type": "mrkdwn",
-                  "text": "*Tokens learned*\n={{ $json.total_tokens.toLocaleString() }}"
-                },
-                {
-                  "type": "mrkdwn",
-                  "text": "*New words*\n={{ $json.total_new_words.toLocaleString() }}"
-                },
-                {
-                  "type": "mrkdwn",
-                  "text": "*Bigrams*\n={{ $json.bigram_count.toLocaleString() }}"
-                },
-                {
-                  "type": "mrkdwn",
-                  "text": "*Cron cycles*\n={{ $json.cron_cycles }}"
-                }
-              ]
-            },
-            {
-              "type": "section",
-              "fields": [
-                {
-                  "type": "mrkdwn",
-                  "text": "*Tests* ={{ $json.test_icon }}\n={{ $json.test_passed }}/={{ $json.test_total }} passed"
-                },
-                {
-                  "type": "mrkdwn",
-                  "text": "*Schedule*\n={{ $json.schedule_enabled }}"
-                },
-                {
-                  "type": "mrkdwn",
-                  "text": "*Next training run*\n={{ $json.next_run }}"
-                },
-                {
-                  "type": "mrkdwn",
-                  "text": "*Model version*\nv={{ $json.version }}"
-                }
-              ]
-            },
-            {
-              "type": "section",
-              "text": {
-                "type": "mrkdwn",
-                "text": "*Recent learning events*\n={{ $json.recent_lines }}"
-              }
-            },
-            {
-              "type": "section",
-              "text": {
-                "type": "mrkdwn",
-                "text": "*Sample predictions for \"fiverr\u2026\"*\n={{ $json.comp_lines }}"
-              }
-            },
-            {
-              "type": "divider"
+              "name": "Content-Type",
+              "value": "application/json"
             }
           ]
         },
-        "otherOptions": {
-          "mrkdwn": true
-        },
-        "url": "YOUR_SLACK_WEBHOOK_URL"
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={\n  \"text\": \"*GigOptimizer Copilot \u2014 Learning Digest*\",\n  \"blocks\": [\n    {\n      \"type\": \"header\",\n      \"text\": { \"type\": \"plain_text\", \"text\": \"\ud83e\udd16 Copilot Learning Digest\" }\n    },\n    {\n      \"type\": \"section\",\n      \"fields\": [\n        { \"type\": \"mrkdwn\", \"text\": \"*Total Tokens:*\\n{{ $json.vocab_model.total_tokens }}\" },\n        { \"type\": \"mrkdwn\", \"text\": \"*Vocab Size:*\\n{{ $json.vocab_model.vocab_size }}\" },\n        { \"type\": \"mrkdwn\", \"text\": \"*Training Runs:*\\n{{ $json.learning_stats.training_runs }}\" },\n        { \"type\": \"mrkdwn\", \"text\": \"*Test Status:*\\n{{ $json.test_results.status }}\" }\n      ]\n    },\n    {\n      \"type\": \"section\",\n      \"text\": { \"type\": \"mrkdwn\", \"text\": \"*Last Updated:* {{ $json.vocab_model.last_updated }}\" }\n    }\n  ]\n}"
       },
       "id": "n8n-node-slack-digest",
       "name": "Slack \u2014 Learning Digest",
-      "type": "n8n-nodes-base.slack",
-      "typeVersion": 2.2,
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
         1160,
         260
-      ],
-      "credentials": {
-        "slackApi": {
-          "id": "slack-bot",
-          "name": "Slack Bot Token"
-        }
-      }
+      ]
     },
     {
       "parameters": {
-        "select": "channel",
-        "channelId": {
-          "__rl": true,
-          "value": "={{ $vars.SLACK_CHANNEL_ID }}",
-          "mode": "id"
-        },
-        "text": "",
-        "blocksUi": {
-          "blocksValues": [
+        "method": "POST",
+        "url": "YOUR_SLACK_WEBHOOK_URL",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
             {
-              "type": "header",
-              "text": {
-                "type": "plain_text",
-                "text": "\ud83d\udea8 GigOptimizer Copilot \u2014 TEST SUITE FAILING",
-                "emoji": true
-              }
-            },
-            {
-              "type": "section",
-              "text": {
-                "type": "mrkdwn",
-                "text": "*Action required:* The Copilot test suite has failed.\n\n*Status:* ={{ $json.test_icon }} `={{ $json.test_status.toUpperCase() }}`\n*Passed:* ={{ $json.test_passed }}/={{ $json.test_total }}\n\nGo to the *Training Dashboard \u2192 Tests* tab to view the full output and debug."
-              }
-            },
-            {
-              "type": "divider"
+              "name": "Content-Type",
+              "value": "application/json"
             }
           ]
         },
-        "otherOptions": {
-          "mrkdwn": true
-        },
-        "url": "YOUR_SLACK_WEBHOOK_URL"
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={\n  \"text\": \"\ud83d\udea8 *GigOptimizer Copilot \u2014 Test Failure Alert*\",\n  \"blocks\": [\n    {\n      \"type\": \"header\",\n      \"text\": { \"type\": \"plain_text\", \"text\": \"\ud83d\udea8 Copilot Test Failures Detected\" }\n    },\n    {\n      \"type\": \"section\",\n      \"fields\": [\n        { \"type\": \"mrkdwn\", \"text\": \"*Status:*\\n{{ $json.status }}\" },\n        { \"type\": \"mrkdwn\", \"text\": \"*Failed:*\\n{{ $json.failed }}\" },\n        { \"type\": \"mrkdwn\", \"text\": \"*Passed:*\\n{{ $json.passed }}\" },\n        { \"type\": \"mrkdwn\", \"text\": \"*Errors:*\\n{{ $json.errors }}\" }\n      ]\n    }\n  ]\n}"
       },
       "id": "n8n-node-slack-alert",
       "name": "Slack \u2014 Test Failure Alert",
-      "type": "n8n-nodes-base.slack",
-      "typeVersion": 2.2,
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
         1160,
         480
-      ],
-      "credentials": {
-        "slackApi": {
-          "id": "slack-bot",
-          "name": "Slack Bot Token"
-        }
-      }
+      ]
     },
     {
       "parameters": {
