@@ -463,6 +463,7 @@ function App() {
             role: 'assistant',
             text: response.assistant.reply,
             suggestions: response.assistant.suggestions ?? [],
+            createdAt: new Date().toISOString(),
           },
         ])
       }
@@ -480,7 +481,7 @@ function App() {
     if (!question) return
     setAssistantBusy(true)
     setAssistantWaitingForFirstChunk(true)
-    setAssistantMessages((current) => [...current, { role: 'user', text: question }])
+    setAssistantMessages((current) => [...current, { role: 'user', text: question, createdAt: new Date().toISOString() }])
     setAssistantInput('')
     if (assistantInputRef.current) {
       assistantInputRef.current.style.height = 'auto'
@@ -541,7 +542,7 @@ function App() {
             if (!hasStarted) {
               hasStarted = true
               setAssistantWaitingForFirstChunk(false)
-              setAssistantMessages((current) => [...current, { role: 'assistant', text: token }])
+              setAssistantMessages((current) => [...current, { role: 'assistant', text: token, createdAt: new Date().toISOString() }])
             } else {
               setAssistantMessages((current) => {
                 const next = [...current]
@@ -565,14 +566,15 @@ function App() {
       })
     } catch (reason) {
       const detail = reason instanceof Error ? reason.message : 'Assistant request failed.'
-      setAssistantMessages((current) => [
-        ...current,
-        {
-          role: 'assistant',
-          text: detail,
-          suggestions: [],
-        },
-      ])
+        setAssistantMessages((current) => [
+          ...current,
+          {
+            role: 'assistant',
+            text: detail,
+            suggestions: [],
+            createdAt: new Date().toISOString(),
+          },
+        ])
     } finally {
       setAssistantWaitingForFirstChunk(false)
       setAssistantBusy(false)
@@ -838,6 +840,12 @@ function App() {
     },
     recent_topics: [],
   }) as CopilotTrainingStatus
+  const copilotMeta = ((data as any)?.copilot ?? (data as any)?.copilot_learning ?? {}) as Record<string, any>
+  const configMeta = ((data as any)?.config ?? {}) as Record<string, any>
+  const latestAssistantMessage = [...assistantMessages].reverse().find((entry) => entry.role === 'assistant')
+  const latestAssistantTimestamp = latestAssistantMessage?.createdAt
+    ? new Date(latestAssistantMessage.createdAt).toLocaleString()
+    : '--'
   const extensionInstall = data.extension_install ?? {
     enabled: false,
     download_url: '/downloads/fiverr-market-capture.zip',
@@ -1057,6 +1065,20 @@ function App() {
             <button className="secondary" onClick={() => void sendAssistantMessage('What has the copilot learned from recent chats and uploads?')} disabled={assistantBusy}>
               Ask what it learned
             </button>
+          </div>
+        </article>
+
+        <article className="card">
+          <div className="card-head"><h2>n8n Automation</h2><span className="status status--queued">monitoring</span></div>
+          <div className="meta-grid">
+            <MetaItem label="AI Provider" value={String(copilotMeta.provider ?? configMeta.ai_provider ?? 'n8n')} />
+            <MetaItem label="Webhook URL" value={String(copilotMeta.model ?? '--')} />
+            <MetaItem label="Last copilot response" value={latestAssistantTimestamp} />
+          </div>
+          <div className="pill-row">
+            {['Daily gig health', 'Competitor alert', 'Knowledge refresh', 'Report generator', 'Stripe sync'].map((workflow) => (
+              <span className="pill" key={workflow}>{workflow}</span>
+            ))}
           </div>
         </article>
       </section>
@@ -1837,6 +1859,7 @@ function mapAssistantHistory(items: Array<Record<string, any>>, payload: Bootstr
       text: String(item.content ?? '').trim(),
       suggestions: item.role === 'assistant' ? ((item.metadata?.suggestions as string[] | undefined) ?? []) : undefined,
       feedbackRating: item.role === 'assistant' ? (Number(item.metadata?.feedback?.rating ?? 0) || undefined) : undefined,
+      createdAt: String(item.created_at ?? '').trim() || undefined,
     }))
     .filter((item) => item.text)
   if (!mapped.length) return []

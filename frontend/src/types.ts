@@ -189,6 +189,7 @@ export interface AssistantHistoryMessage {
   text: string
   suggestions?: string[]
   feedbackRating?: number | null
+  createdAt?: string
 }
 
 export interface CopilotTrainingStatus {
