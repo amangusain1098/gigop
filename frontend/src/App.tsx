@@ -196,6 +196,11 @@ function App() {
       })
       return
     }
+    if (event.type === 'scraper_done') {
+      setMessage('Scraper finished — dashboard updated.')
+      void refresh()
+      return
+    }
     if (event.type === 'security_update') {
       setData({
         ...data,

@@ -1559,7 +1559,10 @@ def create_app() -> FastAPI:
         memory = ConversationMemory(normalized_session_id, data_dir=config.data_dir / "conversations")
         memory.add("user", message)
         memory_context = memory.summary()
-        prompt_message = f"[Recent context]\n{memory_context}\n\n[Current question]\n{message}"
+        if memory_context.strip():
+            prompt_message = f"[Recent context]\n{memory_context}\n\n[Current question]\n{message}"
+        else:
+            prompt_message = message
         topic_tags = copilot_training_service.classify_topics(message)
         start_copilot_query_sync(message)
         retrieval_query_parts = [
@@ -1681,8 +1684,6 @@ def create_app() -> FastAPI:
                         snippet = snippet[:600].rstrip() + "..."
                     source = str(doc.get("filename") or doc.get("document_id") or f"doc_{idx}")
                     grounding_lines.append(f"[{idx}] {source}:\n{snippet}")
-                if memory_context.strip():
-                    grounding_lines.insert(0, f"[Recent context]\n{memory_context}")
                 grounded_context = "\n\n".join(grounding_lines).strip() or None
 
                 envelope = await asyncio.to_thread(

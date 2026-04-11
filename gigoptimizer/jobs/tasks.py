@@ -194,6 +194,7 @@ def _execute_job(
             repository=repository,
             event_bus=event_bus,
             state=state,
+            run_type=run_type,
             summary=_summarize_state(state, run_type=run_type),
         )
     except Exception as exc:
@@ -231,6 +232,7 @@ def _finish_success(
     repository: BlueprintRepository,
     event_bus: JobEventBus,
     state: dict[str, Any],
+    run_type: str,
     summary: str,
 ) -> dict[str, Any]:
     result_payload = {
@@ -253,6 +255,20 @@ def _finish_success(
     completed = repository.get_agent_run(run_id) or {}
     event_bus.publish("state", state)
     event_bus.publish("job_completed", completed)
+    if run_type in {"pipeline", "marketplace_compare", "marketplace_scrape", "manual_compare"}:
+        results = int(
+            (state.get("scraper_run") or {}).get("total_results")
+            or (state.get("gig_comparison") or {}).get("competitor_count")
+            or 0
+        )
+        event_bus.publish(
+            "scraper_done",
+            {
+                "run_type": run_type,
+                "status": "completed",
+                "results": results,
+            },
+        )
     _send_job_success_alert(runtime=runtime, run_id=run_id, state=state, completed=completed)
     return completed
 
