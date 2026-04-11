@@ -1825,19 +1825,12 @@ function buildAssistantMessages(payload: BootstrapPayload) {
 
 function getAssistantSessionId(storageKey: string) {
   try {
-    const existing = window.sessionStorage.getItem(storageKey)
-    if (existing) {
-      return existing
-    }
-    const next =
-      typeof window.crypto?.randomUUID === 'function'
-        ? window.crypto.randomUUID()
-        : `session-${Date.now()}-${Math.random().toString(16).slice(2)}`
-    window.sessionStorage.setItem(storageKey, next)
-    return next
-  } catch {
-    return 'global'
-  }
+    const stored = sessionStorage.getItem(storageKey)
+    if (stored && stored.length > 4) return stored
+  } catch { /* sessionStorage blocked */ }
+  const id = `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
+  try { sessionStorage.setItem(storageKey, id) } catch { /* ignore */ }
+  return id
 }
 
 function mapAssistantHistory(items: Array<Record<string, any>>, payload: BootstrapPayload | null) {
