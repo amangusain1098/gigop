@@ -32,6 +32,7 @@ import type {
   ScraperSummary,
 } from './types'
 import './App.css'
+import CopilotTrainingDashboard from './CopilotTrainingDashboard'
 
 type TitleOption = { label: string; title: string; rationale: string }
 type DescriptionOption = { label: string; summary: string; text: string; paired_title?: string; notes?: string[] }
@@ -70,6 +71,7 @@ function App() {
   const [autoCompareEnabled, setAutoCompareEnabled] = useState(false)
   const [autoCompareMinutes, setAutoCompareMinutes] = useState(5)
   const [assistantOpen, setAssistantOpen] = useState(false)
+  const [showTrainingDashboard, setShowTrainingDashboard] = useState(false)
   const [assistantInput, setAssistantInput] = useState('')
   const [assistantBusy, setAssistantBusy] = useState(false)
   const [assistantWaitingForFirstChunk, setAssistantWaitingForFirstChunk] = useState(false)
@@ -940,10 +942,14 @@ function App() {
           <button onClick={() => postJob('manual_compare', { gig_url: gigUrl, search_terms: splitTerms(terms), competitor_input: manualInput })} disabled={busy === 'manual_compare' || !manualInput.trim()}>{busy === 'manual_compare' ? 'Queueing...' : 'Analyze manual input'}</button>
           <button onClick={() => postJob('weekly_report', { use_live_connectors: liveMode })} disabled={busy === 'weekly_report'}>{busy === 'weekly_report' ? 'Queueing...' : 'Run weekly report'}</button>
           <button className="secondary" onClick={() => void refresh()} disabled={busy === 'refresh'}>Refresh dashboard</button>
+          <button className="secondary" onClick={() => setShowTrainingDashboard(v => !v)}>{showTrainingDashboard ? 'Back to Dashboard' : 'Training Dashboard'}</button>
         </div>
       </section>
 
-      <section className="content-grid">
+      {showTrainingDashboard ? (
+        <CopilotTrainingDashboard />
+      ) : (<>
+            <section className="content-grid">
         <article className="card">
           <div className="card-head"><h2>Marketplace settings</h2><span>{slackSettings.configured ? 'Slack ready' : 'Slack optional'}</span></div>
           <div className="form-grid">
@@ -1729,6 +1735,8 @@ function App() {
           </div>
         </aside>
       ) : null}
+      </>
+      )}
     </main>
   )
 }

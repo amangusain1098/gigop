@@ -180,6 +180,7 @@ def create_app() -> FastAPI:
     database_manager = dashboard_service.database_manager
     repository = dashboard_service.repository
     copilot_training_service = CopilotTrainingService(config, repository)
+    _learning_engine = CopilotLearningEngine(config.data_dir)
     try:
         from gigoptimizer.assistant.api_routes import build_assistant
         from gigoptimizer.assistant.training import AssistantTrainer
@@ -329,12 +330,54 @@ def create_app() -> FastAPI:
         app.state.knowledge_service = knowledge_service
         app.state.copilot_learning_service = copilot_learning_service
         app.state.copilot_training_service = copilot_training_service
+        app.state.learning_engine = _learning_engine
         app.state.manhwa_service = manhwa_service
         app.state.websocket_manager = websocket_manager
         event_bus.subscribe(relay_bus_event)
         event_bus.start()
         app.state.scheduler_status = scheduler.start()
+
+        # --- Copilot Learning Engine cron loop ---
+        import asyncio as _asyncio
+
+        async def _learning_cron_loop():
+            import logging as _logging
+            _log = _logging.getLogger("copilot.learning.cron")
+            conversations_dir = config.data_dir / "conversations"
+            while True:
+                try:
+                    schedule = _learning_engine.get_schedule()
+                    if schedule.get("enabled", True):
+                        interval_s = schedule.get("interval_seconds", 21600)
+                        next_run_str = schedule.get("next_run")
+                        if next_run_str:
+                            from datetime import datetime, timezone as _tz
+                            next_run = datetime.fromisoformat(next_run_str)
+                            now = datetime.now(_tz.utc)
+                            if now < next_run:
+                                wait_s = (next_run - now).total_seconds()
+                                await _asyncio.sleep(min(wait_s, 3600))
+                                continue
+                        _log.info("Copilot learning cron: running training cycle")
+                        await _asyncio.to_thread(
+                            _learning_engine.run_training_cycle, conversations_dir
+                        )
+                        _log.info("Copilot learning cron: cycle complete")
+                    await _asyncio.sleep(300)  # check schedule every 5 min
+                except _asyncio.CancelledError:
+                    break
+                except Exception as _exc:
+                    _log.warning("Copilot learning cron error: %s", _exc)
+                    await _asyncio.sleep(60)
+
+        _cron_task = _asyncio.create_task(_learning_cron_loop())
+
         yield
+        _cron_task.cancel()
+        try:
+            await _asyncio.shield(_cron_task)
+        except Exception:
+            pass
         scheduler.stop()
         event_bus.unsubscribe(relay_bus_event)
         event_bus.stop()
@@ -2406,6 +2449,93 @@ def create_app() -> FastAPI:
                 await websocket.receive_text()
         except WebSocketDisconnect:
             websocket_manager.disconnect(websocket)
+
+
+    # ===========================================================================
+    # Copilot Training Dashboard Endpoints
+    # ===========================================================================
+
+    @app.get("/api/copilot/training-dashboard")
+    async def copilot_training_dashboard(_: None = Depends(require_auth)) -> dict:
+        """Full dashboard state: vocab model, learning log, test results, schedule."""
+        return _learning_engine.get_dashboard_stats()
+
+    @app.post("/api/copilot/training-dashboard/ingest")
+    async def copilot_ingest_text(
+        payload: dict,
+        _: None = Depends(require_auth),
+        __: None = Depends(require_csrf),
+    ) -> dict:
+        """Manually ingest a text document into the learning corpus."""
+        text = str(payload.get("text", "")).strip()
+        source = str(payload.get("source", "manual")).strip() or "manual"
+        source_type = str(payload.get("source_type", "manual")).strip() or "manual"
+        if not text:
+            raise HTTPException(status_code=422, detail="text field is required")
+        result = await asyncio.to_thread(
+            _learning_engine.ingest_text, text, source, source_type
+        )
+        return result
+
+    @app.post("/api/copilot/training-dashboard/train")
+    async def copilot_run_training(
+        _: None = Depends(require_auth),
+        __: None = Depends(require_csrf),
+    ) -> dict:
+        """Trigger a manual training cycle (ingests conversations + updates schedule)."""
+        conversations_dir = config.data_dir / "conversations"
+        result = await asyncio.to_thread(
+            _learning_engine.run_training_cycle, conversations_dir
+        )
+        await websocket_manager.broadcast_json({
+            "type": "copilot_training",
+            "payload": {"status": "cycle_complete", "result": result},
+        })
+        return result
+
+    @app.post("/api/copilot/training-dashboard/run-tests")
+    async def copilot_run_tests(
+        _: None = Depends(require_auth),
+        __: None = Depends(require_csrf),
+    ) -> dict:
+        """Run the pure-Python test suites and return results."""
+        import pathlib as _pathlib
+        repo_root = _pathlib.Path(__file__).parent.parent.parent
+        result = await asyncio.to_thread(_learning_engine.run_tests, repo_root)
+        return result
+
+    @app.get("/api/copilot/training-dashboard/predict")
+    async def copilot_predict(
+        q: str = "",
+        top_n: int = 8,
+        _: None = Depends(require_auth),
+    ) -> dict:
+        """Return query/word completions for a partial input."""
+        if not q.strip():
+            return {"completions": []}
+        completions = await asyncio.to_thread(
+            _learning_engine.predict_completions, q, min(top_n, 20)
+        )
+        return {"query": q, "completions": completions}
+
+    @app.get("/api/copilot/training-dashboard/schedule")
+    async def copilot_get_schedule(_: None = Depends(require_auth)) -> dict:
+        return _learning_engine.get_schedule()
+
+    @app.put("/api/copilot/training-dashboard/schedule")
+    async def copilot_set_schedule(
+        payload: dict,
+        _: None = Depends(require_auth),
+        __: None = Depends(require_csrf),
+    ) -> dict:
+        """Update the cron schedule: {interval: '6h'|'12h'|'24h'|'48h', enabled: bool}"""
+        interval = str(payload.get("interval", "6h"))
+        enabled = bool(payload.get("enabled", True))
+        try:
+            return _learning_engine.set_schedule(interval, enabled)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+
 
     return app
 
