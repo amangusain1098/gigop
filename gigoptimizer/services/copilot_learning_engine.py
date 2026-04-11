@@ -213,23 +213,43 @@ class CopilotLearningEngine:
     def run_tests(self, repo_root: Path) -> dict:
         started = time.monotonic()
         try:
+            tests_dir = repo_root / "tests"
+            if not tests_dir.exists():
+                # Running inside Docker where tests are not copied in
+                result = {
+                    "run_at": _utc_now(), "status": "skipped", "total": 0,
+                    "passed": 0, "failed": 0, "errors": 0, "elapsed_s": 0,
+                    "output_tail": (
+                        "Tests directory not found at " + str(tests_dir) + ".\n"
+                        "The test suite is only available in the source repo, "
+                        "not inside the production Docker image.\n"
+                        "Run locally with: python -m unittest discover -s tests -v"
+                    ),
+                }
+                self._tests_file.write_text(json.dumps(result, indent=2), encoding="utf-8")
+                return result
+
+            # Run the 4 copilot-relevant suites by name (tests/__init__.py required)
             proc = subprocess.run(
                 [sys.executable, "-m", "unittest",
-                 "tests.test_copilot_round3", "tests.test_marketplace_reader",
-                 "tests.test_conversation_memory", "tests.test_assistant", "-v"],
+                 "tests.test_copilot_round3",
+                 "tests.test_assistant",
+                 "tests.test_conversation_memory",
+                 "tests.test_marketplace_reader",
+                 "-v"],
                 capture_output=True, text=True, cwd=str(repo_root), timeout=120,
             )
             output = proc.stderr + proc.stdout
             elapsed = round(time.monotonic() - started, 2)
             m_ran = re.search(r"Ran (\d+) tests?", output)
             total = int(m_ran.group(1)) if m_ran else 0
-            failed = len(re.findall(r"\nFAIL:", output, re.MULTILINE))
-            errors = len(re.findall(r"\nERROR:", output, re.MULTILINE))
-            passed = total - failed - errors
+            failed = len(re.findall(r"^FAIL:", output, re.MULTILINE))
+            errors = len(re.findall(r"^ERROR:", output, re.MULTILINE))
+            passed = max(0, total - failed - errors)
             status = "pass" if proc.returncode == 0 else "fail"
             result = {"run_at": _utc_now(), "status": status, "total": total,
                       "passed": passed, "failed": failed, "errors": errors,
-                      "elapsed_s": elapsed, "output_tail": output[-2000:]}
+                      "elapsed_s": elapsed, "output_tail": output[-3000:]}
         except Exception as exc:
             result = {"run_at": _utc_now(), "status": "error", "total": 0,
                       "passed": 0, "failed": 0, "errors": 0, "elapsed_s": 0, "output_tail": str(exc)}
@@ -383,28 +403,3 @@ class CopilotLearningEngine:
                        "interval_seconds": self.INTERVALS[self.DEFAULT_INTERVAL],
                        "last_run": None, "next_run": None, "run_count": 0, "created_at": _utc_now()}
             self._save_schedule(default)
-            return default
-        try:
-            return json.loads(self._schedule_file.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
-
-    def _save_schedule(self, schedule: dict) -> None:
-        self._schedule_file.write_text(json.dumps(schedule, indent=2), encoding="utf-8")
-
-    def _load_test_results(self) -> dict:
-        if not self._tests_file.exists():
-            return {"status": "never_run", "total": 0, "passed": 0, "failed": 0, "errors": 0}
-        try:
-            return json.loads(self._tests_file.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
-
-    def _list_corpus_docs(self, limit: int = 50) -> list[dict]:
-        docs = []
-        for p in sorted(self._corpus_dir.glob("*.json"), key=lambda x: x.stat().st_mtime, reverse=True)[:limit]:
-            try:
-                docs.append(json.loads(p.read_text(encoding="utf-8")))
-            except Exception:
-                continue
-        return docs
