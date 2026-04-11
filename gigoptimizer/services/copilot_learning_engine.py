@@ -403,3 +403,32 @@ class CopilotLearningEngine:
                        "interval_seconds": self.INTERVALS[self.DEFAULT_INTERVAL],
                        "last_run": None, "next_run": None, "run_count": 0, "created_at": _utc_now()}
             self._save_schedule(default)
+            return default
+        try:
+            return json.loads(self._schedule_file.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def _save_schedule(self, schedule: dict) -> None:
+        self._schedule_file.write_text(json.dumps(schedule, indent=2), encoding="utf-8")
+
+    def _load_test_results(self) -> dict:
+        if not self._tests_file.exists():
+            return {"status": "never_run", "total": 0, "passed": 0, "failed": 0, "errors": 0}
+        try:
+            return json.loads(self._tests_file.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def _list_corpus_docs(self, limit: int = 50) -> list[dict]:
+        docs = []
+        for p in sorted(
+            self._corpus_dir.glob("*.json"),
+            key=lambda x: x.stat().st_mtime,
+            reverse=True,
+        )[:limit]:
+            try:
+                docs.append(json.loads(p.read_text(encoding="utf-8")))
+            except Exception:
+                continue
+        return docs
