@@ -1266,15 +1266,18 @@ function App() {
             {pageOneTopTen.length ? pageOneTopTen.map((item) => (
               <div className="row row--stacked" key={`${item.url}-${item.rank_position ?? item.title}`}>
                 <div className="row-topline">
-                  <strong>#{item.rank_position ?? '?'} {item.title}</strong>
-                  <span className={`status status--${item.is_first_page ? 'active' : 'queued'}`}>{item.is_first_page ? 'page one' : 'tracked'}</span>
+                  <span className="rank-badge">#{item.rank_position ?? '?'}</span>
+                  <strong>{item.title}</strong>
+                  <span className={`status status--${item.is_first_page ? 'ok' : 'queued'}`}>
+                    {item.is_first_page ? 'page 1' : 'tracked'}
+                  </span>
                 </div>
-                <p>{item.seller_name || 'Unknown seller'}</p>
+                <p className="row-seller">{item.seller_name || 'Unknown seller'} {(item.badges ?? []).join(' · ')}</p>
                 <p>{(item.why_on_page_one ?? item.win_reasons ?? []).join(' ') || 'No ranking reasons captured yet.'}</p>
                 <div className="row-metrics">
                   <span>{currency(item.starting_price)}</span>
-                  <span>{item.rating ?? '--'} ★</span>
-                  <span>{item.reviews_count ?? '--'} reviews</span>
+                  <span>{item.rating ?? '--'} ★ ({item.reviews_count ?? 0})</span>
+                  <span>{item.delivery_days ? `${item.delivery_days}d delivery` : ''}</span>
                 </div>
               </div>
             )) : <p className="inline-note">{comparison.message || 'No live Fiverr page-one gigs matched this keyword yet. Try a more specific phrase.'}</p>}

@@ -1107,6 +1107,28 @@ pre {
   flex: 1;
   color: #d8eeff;
 }
+
+.rank-badge {
+  min-width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: rgba(70, 177, 255, 0.15);
+  border: 1px solid rgba(70, 177, 255, 0.3);
+  color: #46b1ff;
+  font-size: 0.8rem;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.row-seller {
+  font-size: 0.82rem;
+  color: #6a8aaa;
+  margin: 4px 0;
+}
+
 .feed-item {
   padding: 12px 0;
   border-bottom: 1px solid rgba(145, 177, 211, 0.08);
