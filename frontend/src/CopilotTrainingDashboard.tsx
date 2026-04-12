@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { fetchJson } from './api'
+import { useBootstrap } from './hooks/useBootstrap'
+import { useCsrf } from './hooks/useCsrf'
 
 interface TopWord { word: string; freq: number; idf: number }
 interface ModelStats { vocab_size: number; doc_count: number; bigram_count: number; top_words: TopWord[] }
@@ -54,6 +56,8 @@ const labelStyle: React.CSSProperties = { display: 'flex', flexDirection: 'colum
 type Panel = 'overview' | 'predict' | 'tests' | 'corpus' | 'schedule' | 'ingest'
 
 export default function CopilotTrainingDashboard() {
+  const { data: bootstrap } = useBootstrap()
+  const { csrfToken, refreshCsrf } = useCsrf(bootstrap)
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
@@ -100,13 +104,29 @@ export default function CopilotTrainingDashboard() {
 
   function flash(m: string) { setMsg(m); setTimeout(() => setMsg(''), 4000) }
 
+  const withCsrfRetry = useCallback(async <T,>(operation: (token: string) => Promise<T>) => {
+    try {
+      return await operation(csrfToken)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      if (!/csrf|403/i.test(detail)) {
+        throw error
+      }
+
+      const nextToken = await refreshCsrf()
+      return operation(nextToken)
+    }
+  }, [csrfToken, refreshCsrf])
+
   async function runTraining() {
     setBusy('train')
     try {
-      const r = await fetchJson<{ steps: unknown[] }>('/api/copilot/training-dashboard/train', {
-        method: 'POST', headers: { 'X-CSRF-Token': 'skip' }, body: JSON.stringify({}),
-      })
-      flash(`Training cycle complete — ${r.steps?.length ?? 0} step(s) run`)
+      const r = await withCsrfRetry((token) =>
+        fetchJson<{ steps: unknown[] }>('/api/copilot/training-dashboard/train', {
+          method: 'POST', body: JSON.stringify({}),
+        }, token),
+      )
+      flash(`Training cycle complete — ${r!.steps?.length ?? 0} step(s) run`)
       void load()
     } catch (e) { flash('Training failed: ' + String(e)) }
     finally { setBusy('') }
@@ -116,9 +136,11 @@ export default function CopilotTrainingDashboard() {
     setBusy('tests')
     setTestOutput('')
     try {
-      const r = await fetchJson<TestResults>('/api/copilot/training-dashboard/run-tests', {
-        method: 'POST', headers: { 'X-CSRF-Token': 'skip' }, body: JSON.stringify({}),
-      })
+      const r = await withCsrfRetry((token) =>
+        fetchJson<TestResults>('/api/copilot/training-dashboard/run-tests', {
+          method: 'POST', body: JSON.stringify({}),
+        }, token),
+      )
       setTestOutput(r.output_tail ?? '')
       void load()
       setTimeout(() => logRef.current?.scrollIntoView({ behavior: 'smooth' }), 300)
@@ -130,13 +152,15 @@ export default function CopilotTrainingDashboard() {
     if (!ingestText.trim()) { flash('Enter text to ingest'); return }
     setBusy('ingest')
     try {
-      const r = await fetchJson<{ ingested: boolean; tokens_learned?: number; new_words?: number }>(
-        '/api/copilot/training-dashboard/ingest',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': 'skip' },
-          body: JSON.stringify({ text: ingestText, source: ingestSource || 'manual-ui', source_type: 'manual' }),
-        }
+      const r = await withCsrfRetry((token) =>
+        fetchJson<{ ingested: boolean; tokens_learned?: number; new_words?: number }>(
+          '/api/copilot/training-dashboard/ingest',
+          {
+            method: 'POST',
+            body: JSON.stringify({ text: ingestText, source: ingestSource || 'manual-ui', source_type: 'manual' }),
+          },
+          token
+        )
       )
       if (r.ingested) {
         flash(`Ingested: ${r.tokens_learned ?? 0} tokens, ${r.new_words ?? 0} new words`)
@@ -153,11 +177,12 @@ export default function CopilotTrainingDashboard() {
   async function saveSchedule() {
     setBusy('schedule')
     try {
-      await fetchJson('/api/copilot/training-dashboard/schedule', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': 'skip' },
-        body: JSON.stringify({ interval: scheduleInterval, enabled: scheduleEnabled }),
-      })
+      await withCsrfRetry((token) =>
+        fetchJson('/api/copilot/training-dashboard/schedule', {
+          method: 'PUT',
+          body: JSON.stringify({ interval: scheduleInterval, enabled: scheduleEnabled }),
+        }, token)
+      )
       flash('Schedule saved')
       void load()
     } catch (e) { flash('Save failed: ' + String(e)) }
@@ -165,7 +190,7 @@ export default function CopilotTrainingDashboard() {
   }
 
   if (loading && !stats) return (
-    <div style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>Loading Copilot Training Dashboard…</div>
+    <div style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>Loading Copilot Training Dashboard...</div>
   )
   if (loadError) return (
     <div style={{ padding: 40 }}>
@@ -178,12 +203,12 @@ export default function CopilotTrainingDashboard() {
   const tr = s.test_results
   const sc = s.schedule
   const PANELS: [Panel, string][] = [
-    ['overview', '📊 Overview'],
-    ['predict', '🔮 Word Prediction'],
-    ['tests', '🧪 Tests'],
-    ['corpus', '📂 Corpus'],
-    ['schedule', '⏰ Schedule'],
-    ['ingest', '➕ Ingest'],
+    ['overview', 'Overview'],
+    ['predict', 'Word Prediction'],
+    ['tests', 'Tests'],
+    ['corpus', 'Corpus'],
+    ['schedule', 'Schedule'],
+    ['ingest', 'Ingest'],
   ]
 
   return (
@@ -191,16 +216,16 @@ export default function CopilotTrainingDashboard() {
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
         <div>
-          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700 }}>🧠 Copilot Training Dashboard</h1>
+          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700 }}>Copilot Training Dashboard</h1>
           <p style={{ margin: '4px 0 0', color: '#64748b', fontSize: 13 }}>
-            Model v{s.version} · {s.model.vocab_size.toLocaleString()} words · {s.model.doc_count} docs ingested
+            Model v{s.version} &middot; {s.model.vocab_size.toLocaleString()} words &middot; {s.model.doc_count} docs ingested
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button onClick={() => void runTraining()} disabled={busy === 'train'} style={btnStyle('#3b82f6')}>
-            {busy === 'train' ? '⏳ Training…' : '▶ Run Training Cycle'}
+            {busy === 'train' ? 'Training...' : 'Run Training Cycle'}
           </button>
-          <button onClick={() => void load()} style={btnStyle('#64748b')}>↻ Refresh</button>
+          <button onClick={() => void load()} style={btnStyle('#64748b')}>Refresh</button>
         </div>
       </div>
 
@@ -213,21 +238,19 @@ export default function CopilotTrainingDashboard() {
       {/* KPI cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, marginBottom: 24 }}>
         {([
-          { label: 'Vocabulary', value: s.model.vocab_size.toLocaleString(), icon: '📚', color: '#3b82f6' },
-          { label: 'Documents', value: s.totals.total_docs?.toLocaleString() ?? '0', icon: '📄', color: '#8b5cf6' },
-          { label: 'Tokens Learned', value: s.totals.total_tokens?.toLocaleString() ?? '0', icon: '🔤', color: '#06b6d4' },
-          { label: 'New Words', value: s.totals.total_new_words?.toLocaleString() ?? '0', icon: '✨', color: '#f59e0b' },
-          { label: 'Bigrams', value: s.model.bigram_count.toLocaleString(), icon: '🔗', color: '#64748b' },
-          { label: 'Cron Cycles', value: sc.run_count?.toString() ?? '0', icon: '⏰', color: '#64748b' },
+          { label: 'Vocabulary', value: s.model.vocab_size.toLocaleString(), color: '#3b82f6' },
+          { label: 'Documents', value: s.totals.total_docs?.toLocaleString() ?? '0', color: '#8b5cf6' },
+          { label: 'Tokens Learned', value: s.totals.total_tokens?.toLocaleString() ?? '0', color: '#06b6d4' },
+          { label: 'New Words', value: s.totals.total_new_words?.toLocaleString() ?? '0', color: '#f59e0b' },
+          { label: 'Bigrams', value: s.model.bigram_count.toLocaleString(), color: '#64748b' },
+          { label: 'Cron Cycles', value: sc.run_count?.toString() ?? '0', color: '#64748b' },
           {
             label: 'Tests',
             value: tr.status === 'never_run' ? 'Not run' : `${tr.passed}/${tr.total}`,
-            icon: tr.status === 'pass' ? '✅' : tr.status === 'never_run' ? '⬜' : '❌',
             color: statusColor(tr.status),
           },
-        ] as { label: string; value: string; icon: string; color: string }[]).map(card => (
+        ] as { label: string; value: string; color: string }[]).map(card => (
           <div key={card.label} style={kpiCard(card.color)}>
-            <div style={{ fontSize: 20, marginBottom: 4 }}>{card.icon}</div>
             <div style={{ fontSize: 18, fontWeight: 700, color: card.color }}>{card.value}</div>
             <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>{card.label}</div>
           </div>
@@ -249,7 +272,7 @@ export default function CopilotTrainingDashboard() {
         ))}
       </div>
 
-      {/* ── Overview ── */}
+      {/* Overview */}
       {activePanel === 'overview' && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
           <div style={panelStyle}>
@@ -262,11 +285,11 @@ export default function CopilotTrainingDashboard() {
                   borderRadius: 20, padding: '3px 10px', fontSize: 12, color: '#1e293b',
                   fontWeight: w.freq > 5 ? 600 : 400,
                 }}>
-                  {w.word}<span style={{ color: '#94a3b8', fontSize: 10, marginLeft: 4 }}>×{w.freq}</span>
+                  {w.word}<span style={{ color: '#94a3b8', fontSize: 10, marginLeft: 4 }}>{'×'}{w.freq}</span>
                 </span>
               ))}
               {s.model.top_words.length === 0 && (
-                <p style={{ color: '#94a3b8', fontSize: 13 }}>No vocabulary yet — run a training cycle to populate.</p>
+                <p style={{ color: '#94a3b8', fontSize: 13 }}>No vocabulary yet -- run a training cycle to populate.</p>
               )}
             </div>
           </div>
@@ -281,7 +304,7 @@ export default function CopilotTrainingDashboard() {
                   <div>
                     <div style={{ fontWeight: 600, color: '#1e293b' }}>{ev.source}</div>
                     <div style={{ color: '#64748b' }}>
-                      {ev.tokens_learned != null ? `${ev.tokens_learned} tokens · ${ev.new_words ?? 0} new words · ` : ''}{ts(ev.timestamp)}
+                      {ev.tokens_learned != null ? `${ev.tokens_learned} tokens / ${ev.new_words ?? 0} new words / ` : ''}{ts(ev.timestamp)}
                     </div>
                   </div>
                 </div>
@@ -290,11 +313,11 @@ export default function CopilotTrainingDashboard() {
           </div>
 
           <div style={panelStyle}>
-            <h3 style={panelTitle}>⏰ Cron Schedule</h3>
+            <h3 style={panelTitle}>Cron Schedule</h3>
             <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
               <tbody>
                 {([
-                  ['Status', sc.enabled ? '🟢 Active' : '🔴 Paused'],
+                  ['Status', sc.enabled ? 'Active' : 'Paused'],
                   ['Interval', sc.interval],
                   ['Last Run', ts(sc.last_run)],
                   ['Next Run', ts(sc.next_run)],
@@ -310,7 +333,7 @@ export default function CopilotTrainingDashboard() {
           </div>
 
           <div style={panelStyle}>
-            <h3 style={panelTitle}>🧪 Latest Test Results</h3>
+            <h3 style={panelTitle}>Latest Test Results</h3>
             {tr.status === 'never_run'
               ? <div>
                   <p style={{ color: '#94a3b8', fontSize: 13, marginBottom: 12 }}>Tests have not been run yet.</p>
@@ -327,8 +350,8 @@ export default function CopilotTrainingDashboard() {
                   </div>
                   <div style={{ fontSize: 12, color: '#64748b' }}>
                     <span style={{ color: statusColor(tr.status), fontWeight: 600 }}>{tr.status.toUpperCase()}</span>
-                    {tr.elapsed_s != null ? ` · ${tr.elapsed_s}s` : ''}
-                    {tr.run_at ? ` · ${ts(tr.run_at)}` : ''}
+                    {tr.elapsed_s != null ? ` / ${tr.elapsed_s}s` : ''}
+                    {tr.run_at ? ` / ${ts(tr.run_at)}` : ''}
                   </div>
                 </div>
             }
@@ -336,16 +359,15 @@ export default function CopilotTrainingDashboard() {
         </div>
       )}
 
-      {/* ── Word Prediction ── */}
+      {/* Word Prediction */}
       {activePanel === 'predict' && (
         <div style={panelStyle}>
-          <h3 style={panelTitle}>🔮 AI Word and Query Prediction</h3>
+          <h3 style={panelTitle}>AI Word and Query Prediction</h3>
           <p style={{ color: '#64748b', fontSize: 13, marginBottom: 16 }}>
-            Type a partial query. The copilot predicts completions from its learned vocabulary —
-            this powers unpredictable-question handling in real conversations.
+            Type a partial query. The copilot predicts completions from its learned vocabulary.
           </p>
           <input value={predictQuery} onChange={e => setPredictQuery(e.target.value)}
-            placeholder="e.g. optimize my fi…" style={inputStyle} autoFocus />
+            placeholder="e.g. optimize my fi..." style={inputStyle} autoFocus />
           {completions.length > 0 && (
             <div style={{ marginTop: 16 }}>
               <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 8 }}>
@@ -354,7 +376,6 @@ export default function CopilotTrainingDashboard() {
               {completions.map((c, i) => (
                 <div key={i} onClick={() => setPredictQuery(c.full_suggestion)}
                   style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', marginBottom: 6, borderRadius: 8, background: '#f8fafc', border: '1px solid #e2e8f0', cursor: 'pointer' }}>
-                  <span style={{ fontSize: 16 }}>{c.type === 'phrase' ? '🔗' : '🔤'}</span>
                   <div style={{ flex: 1 }}>
                     <span style={{ fontWeight: 600, color: '#1e293b' }}>{c.full_suggestion}</span>
                     <span style={{ fontSize: 11, color: '#94a3b8', marginLeft: 8 }}>+{c.completion}</span>
@@ -368,7 +389,7 @@ export default function CopilotTrainingDashboard() {
           )}
           {predictQuery.trim() && completions.length === 0 && (
             <p style={{ color: '#94a3b8', fontSize: 13, marginTop: 16 }}>
-              No completions for "{predictQuery}" — ingest more documents or run a training cycle to expand vocabulary.
+              No completions for &quot;{predictQuery}&quot; -- ingest more documents or run a training cycle.
             </p>
           )}
           {s.model.vocab_size === 0 && (
@@ -379,13 +400,13 @@ export default function CopilotTrainingDashboard() {
         </div>
       )}
 
-      {/* ── Tests ── */}
+      {/* Tests */}
       {activePanel === 'tests' && (
         <div style={panelStyle}>
-          <h3 style={panelTitle}>🧪 Test Suite</h3>
+          <h3 style={panelTitle}>Test Suite</h3>
           <div style={{ display: 'flex', gap: 10, marginBottom: 20 }}>
             <button onClick={() => void runTests()} disabled={busy === 'tests'} style={btnStyle('#3b82f6')}>
-              {busy === 'tests' ? '⏳ Running…' : '▶ Run All Tests'}
+              {busy === 'tests' ? 'Running...' : 'Run All Tests'}
             </button>
           </div>
           {tr.status !== 'never_run' && (
@@ -396,7 +417,7 @@ export default function CopilotTrainingDashboard() {
                 { label: 'Passed', value: tr.passed, color: '#22c55e' },
                 { label: 'Failed', value: tr.failed, color: '#ef4444' },
                 { label: 'Errors', value: tr.errors, color: '#f59e0b' },
-                { label: 'Time', value: tr.elapsed_s != null ? `${tr.elapsed_s}s` : '—', color: '#64748b' },
+                { label: 'Time', value: tr.elapsed_s != null ? `${tr.elapsed_s}s` : '--', color: '#64748b' },
               ] as { label: string; value: string | number; color: string }[]).map(item => (
                 <div key={item.label} style={kpiCard(item.color)}>
                   <div style={{ fontSize: 18, fontWeight: 700, color: item.color }}>{item.value}</div>
@@ -406,7 +427,7 @@ export default function CopilotTrainingDashboard() {
             </div>
           )}
           <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 8 }}>
-            Suites: test_copilot_round3 · test_marketplace_reader · test_conversation_memory · test_assistant
+            Suites: test_copilot_round3 / test_marketplace_reader / test_conversation_memory / test_assistant
           </div>
           {(testOutput || tr.output_tail) && (
             <pre ref={logRef} style={{
@@ -419,10 +440,10 @@ export default function CopilotTrainingDashboard() {
         </div>
       )}
 
-      {/* ── Corpus ── */}
+      {/* Corpus */}
       {activePanel === 'corpus' && (
         <div style={panelStyle}>
-          <h3 style={panelTitle}>📂 Ingested Corpus ({s.corpus_docs.length} documents)</h3>
+          <h3 style={panelTitle}>Ingested Corpus ({s.corpus_docs.length} documents)</h3>
           {s.corpus_docs.length === 0
             ? <p style={{ color: '#94a3b8', fontSize: 13 }}>No documents ingested yet. Use the Ingest tab to add training data.</p>
             : s.corpus_docs.map(doc => (
@@ -431,9 +452,9 @@ export default function CopilotTrainingDashboard() {
                   <span style={{ fontWeight: 600, fontSize: 13 }}>{sourceIcon(doc.source_type)} {doc.source}</span>
                   <span style={{ fontSize: 11, color: '#94a3b8' }}>{ts(doc.ingested_at)}</span>
                 </div>
-                <div style={{ fontSize: 12, color: '#64748b', marginBottom: 6 }}>{doc.token_count} tokens · {doc.source_type}</div>
+                <div style={{ fontSize: 12, color: '#64748b', marginBottom: 6 }}>{doc.token_count} tokens / {doc.source_type}</div>
                 <div style={{ fontSize: 12, color: '#94a3b8', fontStyle: 'italic' }}>
-                  {doc.text_preview.slice(0, 180)}{doc.text_preview.length > 180 ? '…' : ''}
+                  {doc.text_preview.slice(0, 180)}{doc.text_preview.length > 180 ? '...' : ''}
                 </div>
               </div>
             ))
@@ -441,13 +462,12 @@ export default function CopilotTrainingDashboard() {
         </div>
       )}
 
-      {/* ── Schedule ── */}
+      {/* Schedule */}
       {activePanel === 'schedule' && (
         <div style={panelStyle}>
-          <h3 style={panelTitle}>⏰ Cron Training Schedule</h3>
+          <h3 style={panelTitle}>Cron Training Schedule</h3>
           <p style={{ color: '#64748b', fontSize: 13, marginBottom: 20 }}>
             The copilot automatically scans your conversations and ingests new Q&amp;A pairs on this schedule.
-            The more frequently it runs, the faster it learns from real user interactions.
           </p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 400 }}>
             <label style={labelStyle}>
@@ -465,7 +485,7 @@ export default function CopilotTrainingDashboard() {
               Enable automatic cron training
             </label>
             <button onClick={() => void saveSchedule()} disabled={busy === 'schedule'} style={btnStyle('#3b82f6')}>
-              {busy === 'schedule' ? '⏳ Saving…' : '💾 Save Schedule'}
+              {busy === 'schedule' ? 'Saving...' : 'Save Schedule'}
             </button>
           </div>
           <div style={{ marginTop: 24, background: '#f8fafc', borderRadius: 8, padding: 16, border: '1px solid #e2e8f0' }}>
@@ -473,7 +493,7 @@ export default function CopilotTrainingDashboard() {
             <table style={{ fontSize: 13, borderCollapse: 'collapse', width: '100%' }}>
               <tbody>
                 {([
-                  ['Status', sc.enabled ? '🟢 Enabled' : '🔴 Disabled'],
+                  ['Status', sc.enabled ? 'Enabled' : 'Disabled'],
                   ['Interval', `${sc.interval} (${sc.interval_seconds}s)`],
                   ['Last Run', ts(sc.last_run)],
                   ['Next Run', ts(sc.next_run)],
@@ -490,13 +510,12 @@ export default function CopilotTrainingDashboard() {
         </div>
       )}
 
-      {/* ── Ingest ── */}
+      {/* Ingest */}
       {activePanel === 'ingest' && (
         <div style={panelStyle}>
-          <h3 style={panelTitle}>➕ Manually Ingest Training Data</h3>
+          <h3 style={panelTitle}>Manually Ingest Training Data</h3>
           <p style={{ color: '#64748b', fontSize: 13, marginBottom: 20 }}>
-            Paste any text — gig descriptions, FAQs, conversations, docs — to teach the copilot new vocabulary.
-            Longer, domain-specific content produces better word prediction.
+            Paste any text -- gig descriptions, FAQs, conversations, docs -- to teach the copilot new vocabulary.
           </p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 700 }}>
             <label style={labelStyle}>
@@ -507,17 +526,17 @@ export default function CopilotTrainingDashboard() {
             <label style={labelStyle}>
               Text to ingest
               <textarea value={ingestText} onChange={e => setIngestText(e.target.value)}
-                placeholder="Paste gig descriptions, FAQs, help docs, or any domain text here…"
+                placeholder="Paste gig descriptions, FAQs, help docs, or any domain text here..."
                 rows={10} style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }} />
             </label>
             <div style={{ display: 'flex', gap: 10 }}>
               <button onClick={() => void submitIngest()} disabled={busy === 'ingest' || !ingestText.trim()} style={btnStyle('#22c55e')}>
-                {busy === 'ingest' ? '⏳ Ingesting…' : '➕ Ingest Text'}
+                {busy === 'ingest' ? 'Ingesting...' : 'Ingest Text'}
               </button>
               <button onClick={() => { setIngestText(''); setIngestSource('') }} style={btnStyle('#64748b')}>Clear</button>
             </div>
             <div style={{ background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 8, padding: 12, fontSize: 12, color: '#166534' }}>
-              💡 <strong>Tip:</strong> After ingesting, switch to the Word Prediction tab to verify the new completions work.
+              <strong>Tip:</strong> After ingesting, switch to the Word Prediction tab to verify the new completions work.
             </div>
           </div>
         </div>
