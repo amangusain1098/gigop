@@ -253,6 +253,49 @@ class CopilotLearningEngine:
         self._save_schedule(schedule)
         return schedule
 
+    def build_slack_digest(self) -> dict:
+        """Build a Slack Block Kit payload summarising the current learning state."""
+        stats = self._load_stats()
+        schedule = self._load_schedule()
+        test_results = self._load_test_results()
+        top_words = sorted(
+            [(w, s["ttf"], s.get("idf", 1.0)) for w, s in self._vocab.items()],
+            key=lambda x: x[1] * x[2], reverse=True,
+        )[:5]
+        top_word_text = ", ".join(w for w, _, _ in top_words) if top_words else "none yet"
+        test_status = test_results.get("status", "never_run")
+        test_emoji = "\u2705" if test_status == "passed" else ("\u274c" if test_status == "failed" else "\u23f3")
+        next_run = schedule.get("next_run") or "not scheduled"
+        blocks = [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": "GigOptimizer Copilot — Learning Digest"},
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*Vocab size:*\n{len(self._vocab):,} words"},
+                    {"type": "mrkdwn", "text": f"*Documents ingested:*\n{self._doc_count:,}"},
+                    {"type": "mrkdwn", "text": f"*Total tokens:*\n{stats.get('total_tokens', 0):,}"},
+                    {"type": "mrkdwn", "text": f"*Training cycles:*\n{stats.get('cycles_run', 0)}"},
+                ],
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*Top learned words:*\n{top_word_text}"},
+                    {"type": "mrkdwn", "text": f"*Tests:*\n{test_emoji} {test_status}"},
+                ],
+            },
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"*Next auto-training:* {next_run}"},
+            },
+            {"type": "divider"},
+        ]
+        return {"blocks": blocks, "text": "GigOptimizer Copilot Learning Digest"}
+
+
     # --- Private helpers ---
 
     def _recompute_idf(self) -> None:
