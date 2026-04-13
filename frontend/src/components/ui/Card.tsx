@@ -31,11 +31,9 @@ export default function Card({
           {action ? <div className="ui-card__action">{action}</div> : null}
         </header>
       ) : null}
-
       <div className="ui-card__body">{children}</div>
-
       {loading ? (
-        <div className="ui-card__loading" aria-hidden="true">
+        <div className="ui-card__loading">
           <Skeleton height="1.1rem" width="48%" />
           <Skeleton height="0.9rem" width="72%" />
           <Skeleton height="5rem" width="100%" />

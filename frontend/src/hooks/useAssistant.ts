@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { fetchJson } from '../api'
-import type { AssistantHistoryMessage, CopilotTrainingStatus } from '../types'
+import { fetchJson, streamAssistantReply } from '../api'
+
+interface AssistantHistoryMessage {
+  id?: string
+  role: 'user' | 'assistant'
+  text: string
+  suggestions?: string[]
+  pending?: boolean
+  provider?: string
+}
 
 interface UseAssistantResult {
   messages: AssistantHistoryMessage[]
@@ -47,14 +55,13 @@ function mapAssistantHistory(items: Array<Record<string, unknown>>): AssistantHi
       return Number(left.id ?? 0) - Number(right.id ?? 0)
     })
     .map((item) => ({
-      id: typeof item.id === 'number' ? item.id : Number(item.id ?? 0) || undefined,
+      id: String(item.id ?? `${item.role ?? 'assistant'}-${item.created_at ?? Math.random().toString(36).slice(2, 8)}`),
       role: (item.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
       text: String(item.content ?? '').trim(),
-      suggestions: item.role === 'assistant' ? ((item.metadata as { suggestions?: string[] } | undefined)?.suggestions ?? []) : undefined,
-      feedbackRating: item.role === 'assistant'
-        ? (Number((item.metadata as { feedback?: { rating?: number } } | undefined)?.feedback?.rating ?? 0) || undefined)
-        : undefined,
-      createdAt: String(item.created_at ?? '').trim() || undefined,
+      suggestions: item.role === 'assistant' ? (Array.isArray((item.metadata as { suggestions?: unknown } | undefined)?.suggestions)
+        ? ((item.metadata as { suggestions?: string[] } | undefined)?.suggestions ?? [])
+        : []) : undefined,
+      provider: item.role === 'assistant' ? String((item.metadata as { provider?: unknown } | undefined)?.provider ?? '') || undefined : undefined,
     }))
     .filter((item) => item.text)
 }
@@ -88,13 +95,10 @@ export function useAssistant(
   }, [csrfToken, refreshCsrf])
 
   const sendMessageFallback = useCallback(async (question: string) => {
-    setWaitingForFirstChunk(true)
-
     const response = await withCsrfRetry((token) =>
       fetchJson<{
-        assistant: { reply: string; suggestions?: string[] }
+        assistant: { reply: string; suggestions?: string[]; provider?: string }
         assistant_history?: Array<Record<string, unknown>>
-        copilot_training?: CopilotTrainingStatus
       }>(
         '/api/assistant/chat',
         {
@@ -117,10 +121,11 @@ export function useAssistant(
     setMessages((current) => [
       ...current,
       {
+        id: `assistant-${Date.now().toString(36)}`,
         role: 'assistant',
         text: response.assistant.reply,
         suggestions: response.assistant.suggestions ?? [],
-        createdAt: new Date().toISOString(),
+        provider: response.assistant.provider,
       },
     ])
   }, [withCsrfRetry])
@@ -129,117 +134,80 @@ export function useAssistant(
     const question = text.trim()
     if (!question) return
 
+    const userMessageId = `user-${Date.now().toString(36)}`
+    const assistantMessageId = `assistant-${Date.now().toString(36)}`
+
     setBusy(true)
     setWaitingForFirstChunk(true)
-    setMessages((current) => [...current, { role: 'user', text: question, createdAt: new Date().toISOString() }])
+    setMessages((current) => [
+      ...current,
+      { id: userMessageId, role: 'user', text: question },
+      { id: assistantMessageId, role: 'assistant', text: '', suggestions: [], pending: true },
+    ])
 
     try {
-      if (typeof ReadableStream === 'undefined') {
-        await sendMessageFallback(question)
-        return
+      let streamError = ''
+      let streamedText = ''
+      let streamFinished = false
+      let streamedSuggestions: string[] = []
+
+      await withCsrfRetry((token) =>
+        streamAssistantReply(
+          '/api/assistant/chat/stream',
+          { message: question, session_id: sessionIdRef.current },
+          {
+            onChunk: (chunk) => {
+              streamedText += chunk
+              setWaitingForFirstChunk(false)
+              setMessages((current) => current.map((entry) => (
+                entry.id === assistantMessageId
+                  ? { ...entry, text: streamedText, pending: true, suggestions: streamedSuggestions }
+                  : entry
+              )))
+            },
+            onSuggestions: (suggestions) => {
+              streamedSuggestions = suggestions
+              setMessages((current) => current.map((entry) => (
+                entry.id === assistantMessageId
+                  ? { ...entry, suggestions }
+                  : entry
+              )))
+            },
+            onDone: (payload) => {
+              streamFinished = true
+              const nextMessages = mapAssistantHistory(Array.isArray(payload.assistant_history) ? payload.assistant_history : [])
+              if (nextMessages.length) {
+                setMessages(nextMessages)
+                return
+              }
+              const assistant = payload.assistant as { reply?: unknown; suggestions?: unknown; provider?: unknown } | undefined
+              setMessages((current) => current.map((entry) => (
+                entry.id === assistantMessageId
+                  ? {
+                    ...entry,
+                    text: String(assistant?.reply ?? streamedText).trim(),
+                    suggestions: Array.isArray(assistant?.suggestions) ? assistant?.suggestions as string[] : streamedSuggestions,
+                    pending: false,
+                    provider: String(assistant?.provider ?? '') || undefined,
+                  }
+                  : entry
+              )))
+            },
+            onError: (detail) => {
+              streamError = detail
+            },
+          },
+          token,
+        ),
+      )
+
+      if (streamError) {
+        throw new Error(streamError)
       }
 
-      await withCsrfRetry(async (token) => {
-        const response = await fetch('/api/assistant/stream', {
-          method: 'POST',
-          credentials: 'same-origin',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': token,
-          },
-          body: JSON.stringify({
-            message: question,
-            session_id: sessionIdRef.current,
-          }),
-        })
-
-        if (response.status === 401) {
-          window.location.href = '/login'
-          throw new Error('Authentication required.')
-        }
-
-        if (!response.ok) {
-          let detail = response.statusText
-          try {
-            const payload = await response.json()
-            detail = payload.error ?? payload.detail ?? payload.message ?? JSON.stringify(payload)
-          } catch {
-            detail = await response.text()
-          }
-          throw new Error(detail || `Request failed with status ${response.status}`)
-        }
-
-        if (!response.body) {
-          throw new Error('Streaming response body is unavailable.')
-        }
-
-        const reader = response.body.getReader()
-        const decoder = new TextDecoder()
-        let buffer = ''
-        let reply = ''
-        let createdAssistantBubble = false
-
-        while (true) {
-          const { value, done } = await reader.read()
-          if (done) break
-
-          buffer += decoder.decode(value, { stream: true })
-          const chunks = buffer.split('\n\n')
-          buffer = chunks.pop() ?? ''
-
-          for (const chunk of chunks) {
-            const line = chunk.trim()
-            if (!line.startsWith('data:')) continue
-
-            const tokenValue = line.slice(5).trim()
-            if (tokenValue === '[DONE]') {
-              setWaitingForFirstChunk(false)
-              continue
-            }
-
-            if (tokenValue.startsWith('[SUGGESTIONS]')) {
-              try {
-                const suggestions: string[] = JSON.parse(tokenValue.slice(13))
-                setMessages((current) => {
-                  const next = [...current]
-                  const lastIndex = next.length - 1
-                  const lastEntry = next[lastIndex]
-                  if (lastEntry && lastEntry.role === 'assistant') {
-                    next[lastIndex] = { ...lastEntry, suggestions }
-                  }
-                  return next
-                })
-              } catch { /* ignore */ }
-              continue
-            }
-
-            if (!createdAssistantBubble) {
-              createdAssistantBubble = true
-              setWaitingForFirstChunk(false)
-              setMessages((current) => [
-                ...current,
-                { role: 'assistant', text: tokenValue, createdAt: new Date().toISOString() },
-              ])
-              reply += tokenValue
-              continue
-            }
-
-            reply += tokenValue
-            setMessages((current) => {
-              const next = [...current]
-              const lastIndex = next.length - 1
-              const lastEntry = next[lastIndex]
-              if (!lastEntry || lastEntry.role !== 'assistant') {
-                next.push({ role: 'assistant', text: reply, createdAt: new Date().toISOString() })
-                return next
-              }
-
-              next[lastIndex] = { ...lastEntry, text: reply }
-              return next
-            })
-          }
-        }
-      })
+      if (!streamFinished) {
+        await sendMessageFallback(question)
+      }
     } catch {
       await sendMessageFallback(question)
     } finally {

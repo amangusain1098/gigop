@@ -1,31 +1,31 @@
 import type { ToastItem } from './useToast'
-
 import './index.css'
 
-const TOAST_ICONS: Record<ToastItem['tone'], string> = {
+const TONE_ICON: Record<ToastItem['tone'], string> = {
   success: '✓',
   error: '!',
   info: 'i',
   warning: '!',
 }
 
-interface ToastProps {
+export default function Toast({
+  toast,
+  onClose,
+}: {
   toast: ToastItem
   onClose: (id: string) => void
-}
-
-export default function Toast({ toast, onClose }: ToastProps) {
+}) {
   return (
-    <div className={`toast toast--${toast.tone}`} role="status" aria-live="polite">
-      <span className="toast__icon" aria-hidden="true">
-        {TOAST_ICONS[toast.tone]}
-      </span>
-      <p className="toast__message">{toast.message}</p>
+    <div className={`toast toast--${toast.tone}`} role="status">
+      <span className="toast__icon" aria-hidden="true">{TONE_ICON[toast.tone]}</span>
+      <div className="toast__body">
+        <p>{toast.message}</p>
+      </div>
       <button
         type="button"
         className="toast__close"
-        onClick={() => onClose(toast.id)}
         aria-label="Dismiss notification"
+        onClick={() => onClose(toast.id)}
       >
         ×
       </button>

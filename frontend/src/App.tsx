@@ -96,13 +96,11 @@ export default function App() {
   async function postJob(jobType: string, payload: Record<string, unknown> = {}) {
     if (!data) return
     setBusy(jobType)
-    setError('')
-    setMessage('')
     try {
       await withCsrfRetry((token) => fetchJson('/api/v2/jobs', { method: 'POST', body: JSON.stringify({ job_type: jobType, ...payload }) }, token))
       setMessage(`Queued ${jobType.replaceAll('_', ' ')} job.`)
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Job request failed.')
+      toast.error(reason instanceof Error ? reason.message : 'Job request failed.')
     } finally {
       setBusy('')
     }
@@ -111,14 +109,12 @@ export default function App() {
   async function queueRecommendation(actionType: string, proposedValue: unknown) {
     if (!data) return
     setBusy(actionType)
-    setError('')
-    setMessage('')
     try {
       await withCsrfRetry((token) => fetchJson('/api/marketplace/recommendations/apply', { method: 'POST', body: JSON.stringify({ action_type: actionType, proposed_value: proposedValue }) }, token))
       setMessage('Recommendation added to the HITL queue.')
       void refresh()
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to queue the recommendation.')
+      toast.error(reason instanceof Error ? reason.message : 'Unable to queue the recommendation.')
     } finally {
       setBusy('')
     }
@@ -127,14 +123,13 @@ export default function App() {
   async function reviewQueue(recordId: string, action: 'approve' | 'reject') {
     if (!data) return
     setBusy(`${action}-${recordId}`)
-    setError('')
-    setMessage('')
+    const targetRecord = (data.state.queue?.length ? data.state.queue : data.queue).find((item) => item.id === recordId)
     try {
       await withCsrfRetry((token) => fetchJson(`/api/queue/${recordId}/${action}`, { method: 'POST', body: JSON.stringify({ reviewer_notes: '' }) }, token))
       setMessage(`Queue item ${action}d.`)
       void refresh()
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Queue action failed.')
+      toast.error(reason instanceof Error ? reason.message : 'Queue action failed.')
     } finally {
       setBusy('')
     }
@@ -143,8 +138,6 @@ export default function App() {
   async function saveMarketplaceSettings() {
     if (!data) return
     setBusy('save-settings')
-    setError('')
-    setMessage('')
     try {
       await withCsrfRetry((token) => fetchJson('/api/settings', {
         method: 'POST',
@@ -156,7 +149,7 @@ export default function App() {
       setMessage('Marketplace settings saved.')
       void refresh()
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to save settings.')
+      toast.error(reason instanceof Error ? reason.message : 'Unable to save settings.')
     } finally {
       setBusy('')
     }
@@ -169,7 +162,7 @@ export default function App() {
       const response = await withCsrfRetry((token) => fetchJson<{ result: { detail: string } }>('/api/settings/notifications/test', { method: 'POST', body: JSON.stringify({ channel }) }, token))
       setMessage(response.result.detail)
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : `Unable to test ${channel}.`)
+      toast.error(reason instanceof Error ? reason.message : `Unable to test ${channel}.`)
     } finally {
       setBusy('')
     }
@@ -188,7 +181,7 @@ export default function App() {
       setMessage(`Uploaded ${knowledgeFile.name} to the copilot knowledge base.`)
       void refresh()
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Dataset upload failed.')
+      toast.error(reason instanceof Error ? reason.message : 'Dataset upload failed.')
     } finally {
       setBusy('')
     }
@@ -202,13 +195,39 @@ export default function App() {
       setMessage('Dataset removed from the copilot knowledge base.')
       void refresh()
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Dataset deletion failed.')
+      toast.error(reason instanceof Error ? reason.message : 'Dataset deletion failed.')
     } finally {
       setBusy('')
     }
   }
 
-  async function reviewSecurityAttempt(attemptId: string, action: 'save' | 'discard') {
+  async function askCopilotAboutDataset(filename: string) {
+    setActivePage('copilot')
+    await sendAssistantMessage(`What can I use from ${filename} for my Fiverr gig right now?`)
+  }
+
+  async function sendCopilotPositiveFeedback(message: AssistantMessage) {
+    await withCsrfRetry((token) => ingestTrainingText({
+      content: message.text,
+      source_type: 'user_feedback_positive',
+      source: 'copilot_chat',
+      message_id: message.id,
+    }, token))
+    toast.success('Positive feedback sent to the AI Brain.')
+  }
+
+  async function sendCopilotNegativeFeedback(message: AssistantMessage, reason: string) {
+    await withCsrfRetry((token) => ingestTrainingText({
+      content: message.text,
+      source_type: 'feedback_negative',
+      source: 'copilot_chat',
+      message_id: message.id,
+      context: reason,
+    }, token))
+    toast.info('Negative feedback saved for review.')
+  }
+
+  async function handleLogout() {
     if (!data) return
     setBusy(`security-${action}-${attemptId}`)
     try {
@@ -218,17 +237,20 @@ export default function App() {
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Security review action failed.')
     } finally {
-      setBusy('')
+      window.location.href = '/login'
     }
   }
 
   async function copyExtensionToken(token: string) {
-    if (!token) return
+    if (!token) {
+      toast.warning('No extension API token is configured yet.')
+      return
+    }
     try {
       await navigator.clipboard.writeText(token)
       setMessage('Extension token copied to clipboard.')
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to copy the extension token.')
+      toast.error(reason instanceof Error ? reason.message : 'Unable to copy the extension token.')
     }
   }
 

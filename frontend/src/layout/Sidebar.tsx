@@ -17,13 +17,13 @@ export interface SidebarItem {
 }
 
 export const SIDEBAR_ITEMS: SidebarItem[] = [
-  { key: 'dashboard', icon: '🏠', label: 'Dashboard' },
-  { key: 'optimizer', icon: '🎯', label: 'Gig Optimizer' },
-  { key: 'competitors', icon: '📊', label: 'Competitors' },
-  { key: 'copilot', icon: '🤖', label: 'Copilot' },
-  { key: 'brain', icon: '🧠', label: 'AI Brain' },
-  { key: 'metrics', icon: '📈', label: 'Metrics' },
-  { key: 'settings', icon: '⚙️', label: 'Settings' },
+  { key: 'dashboard', icon: 'DB', label: 'Dashboard' },
+  { key: 'optimizer', icon: 'GO', label: 'Gig Optimizer' },
+  { key: 'competitors', icon: 'CP', label: 'Competitors' },
+  { key: 'copilot', icon: 'AI', label: 'Copilot' },
+  { key: 'brain', icon: 'BR', label: 'AI Brain' },
+  { key: 'metrics', icon: 'MX', label: 'Metrics' },
+  { key: 'settings', icon: 'ST', label: 'Settings' },
 ]
 
 interface SidebarProps {
@@ -47,12 +47,12 @@ export default function Sidebar({
     <>
       <button
         type="button"
-        className={`sidebar-backdrop ${mobileOpen ? 'is-open' : ''}`}
+        className={`sidebar-overlay ${mobileOpen ? 'sidebar-overlay--open' : ''}`}
         aria-label="Close navigation"
         onClick={onCloseMobile}
       />
 
-      <aside className={`sidebar ${mobileOpen ? 'is-open' : ''}`}>
+      <aside className={`sidebar ${mobileOpen ? 'sidebar--open' : ''}`}>
         <div className="sidebar__brand">
           <span className="sidebar__brand-mark">GO</span>
           <div className="sidebar__brand-copy">
@@ -66,14 +66,14 @@ export default function Sidebar({
             <button
               key={item.key}
               type="button"
-              className={`sidebar__item ${activePage === item.key ? 'is-active' : ''}`}
+              className={`sidebar__item ${activePage === item.key ? 'sidebar__item--active' : ''}`}
               onClick={() => {
                 onNavigate(item.key)
                 onCloseMobile?.()
               }}
             >
               <span className="sidebar__icon" aria-hidden="true">{item.icon}</span>
-              <span className="sidebar__label">{item.label}</span>
+              <span className="nav-label">{item.label}</span>
             </button>
           ))}
         </nav>

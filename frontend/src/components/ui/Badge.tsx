@@ -5,16 +5,13 @@ type Status = 'active' | 'ok' | 'error' | 'warning' | 'queued' | 'pending' | 'id
 export interface BadgeProps {
   status: Status
   label?: string
-  className?: string
 }
 
-export default function Badge({ status, label, className = '' }: BadgeProps) {
-  const classes = ['badge', `badge--${status}`, className].filter(Boolean).join(' ')
-
+export default function Badge({ status, label }: BadgeProps) {
   return (
-    <span className={classes}>
-      <span className="badge__dot" aria-hidden="true" />
-      <span className="badge__label">{label ?? status}</span>
+    <span className={`ui-badge ui-badge--${status}`}>
+      <span className="ui-badge__dot" aria-hidden="true" />
+      {label ?? status}
     </span>
   )
 }
