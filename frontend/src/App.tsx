@@ -1,4 +1,4 @@
-import { startTransition, useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { startTransition, useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent, type ReactNode } from 'react'
 import {
   CartesianGrid,
   Line,
@@ -12,7 +12,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import { createDashboardSocket, fetchJson, loadBootstrap } from './api'
+import { createDashboardSocket, fetchJson, loadBootstrap, streamAssistantReply } from './api'
 import type { BootstrapPayload, CompetitorRecord, DashboardEvent, DatasetRecord, JobRun, LegacyState, QueueRecord } from './types'
 import './App.css'
 
@@ -20,6 +20,14 @@ type TitleOption = { label: string; title: string; rationale: string }
 type DescriptionOption = { label: string; summary: string; text: string; paired_title?: string; notes?: string[] }
 type PersonaFocus = { persona: string; score: number; pain_point: string; emphasis: string[] }
 type RecommendedPackage = { name: string; price: number; delivery_days?: number | null; highlights?: string[] }
+type AssistantMessage = {
+  id: string
+  role: 'user' | 'assistant'
+  text: string
+  suggestions?: string[]
+  pending?: boolean
+  provider?: string
+}
 type CompetitorRecommendation = {
   rank_position?: number
   competitor_title: string
@@ -53,8 +61,7 @@ function App() {
   const [assistantOpen, setAssistantOpen] = useState(false)
   const [assistantInput, setAssistantInput] = useState('')
   const [assistantBusy, setAssistantBusy] = useState(false)
-  const [assistantMessages, setAssistantMessages] = useState<Array<{ role: 'user' | 'assistant'; text: string; suggestions?: string[] }>>([])
-  const [assistantInitialized, setAssistantInitialized] = useState(false)
+  const [assistantMessages, setAssistantMessages] = useState<AssistantMessage[]>([])
   const [knowledgeFile, setKnowledgeFile] = useState<File | null>(null)
   const datasetInputRef = useRef<HTMLInputElement | null>(null)
   const assistantLogRef = useRef<HTMLDivElement | null>(null)
@@ -98,22 +105,27 @@ function App() {
     return () => window.cancelAnimationFrame(frame)
   }, [assistantOpen, assistantMessages.length, assistantBusy])
 
+  useEffect(() => {
+    if (!assistantOpen) return
+    resizeAssistantTextarea(assistantInputRef.current)
+  }, [assistantInput, assistantOpen])
+
   function applyBootstrap(payload: BootstrapPayload) {
     setData(payload)
     const marketplace = payload.state.notifications?.marketplace ?? {}
-    setGigUrl(String(marketplace.my_gig_url ?? payload.state.gig_comparison?.gig_url ?? ''))
-    setTerms((marketplace.search_terms ?? payload.state.gig_comparison?.detected_search_terms ?? []).join(', '))
+    const comparisonGigUrl = String(payload.state.gig_comparison?.gig_url ?? '').trim()
+    const comparisonTerms = Array.isArray(payload.state.gig_comparison?.detected_search_terms)
+      ? payload.state.gig_comparison?.detected_search_terms ?? []
+      : []
+    const savedGigUrl = String(marketplace.my_gig_url ?? '').trim()
+    const savedTerms = Array.isArray(marketplace.search_terms) ? marketplace.search_terms : []
+    setGigUrl(comparisonGigUrl || savedGigUrl)
+    setTerms((comparisonTerms.length ? comparisonTerms : savedTerms).join(', '))
     setMaxResults(Number(marketplace.max_results ?? 10))
     setAutoCompareEnabled(Boolean(marketplace.auto_compare_enabled ?? false))
     setAutoCompareMinutes(Number(marketplace.auto_compare_interval_minutes ?? 5))
     const nextAssistantMessages = buildAssistantMessages(payload)
-    if (nextAssistantMessages.length) {
-      setAssistantMessages(nextAssistantMessages)
-      setAssistantInitialized(true)
-    } else if (!assistantInitialized) {
-      setAssistantMessages(buildAssistantMessages(payload))
-      setAssistantInitialized(true)
-    }
+    setAssistantMessages(nextAssistantMessages)
   }
 
   function applyEvent(event: DashboardEvent) {
@@ -326,43 +338,101 @@ function App() {
     if (!data) return
     const question = (prefill ?? assistantInput).trim()
     if (!question) return
+    const userMessageId = `user-${Date.now()}`
+    const assistantMessageId = `assistant-${Date.now()}`
     setAssistantBusy(true)
-    setAssistantMessages((current) => [...current, { role: 'user', text: question }])
+    setAssistantMessages((current) => [
+      ...current,
+      { id: userMessageId, role: 'user', text: question },
+      { id: assistantMessageId, role: 'assistant', text: '', suggestions: [], pending: true },
+    ])
     setAssistantInput('')
+    window.requestAnimationFrame(() => resizeAssistantTextarea(assistantInputRef.current))
     try {
-      const response = await withCsrfRetry((csrfToken) =>
-        fetchJson<{ assistant: { reply: string; suggestions?: string[] }; assistant_history?: Array<Record<string, any>> }>(
-          '/api/assistant/chat',
+      let streamError = ''
+      let streamedText = ''
+      let streamFinished = false
+
+      await withCsrfRetry((csrfToken) =>
+        streamAssistantReply(
+          '/api/assistant/chat/stream',
+          { message: question },
           {
-            method: 'POST',
-            body: JSON.stringify({ message: question }),
+            onChunk: (chunk) => {
+              streamedText += chunk
+              setAssistantMessages((current) => current.map((entry) => (
+                entry.id === assistantMessageId
+                  ? { ...entry, text: streamedText, pending: true }
+                  : entry
+              )))
+            },
+            onDone: (payload) => {
+              streamFinished = true
+              const nextMessages = mapAssistantHistory(payload.assistant_history ?? [], data)
+              if (nextMessages.length) {
+                setAssistantMessages(nextMessages)
+                return
+              }
+              const assistant = payload.assistant ?? {}
+              setAssistantMessages((current) => current.map((entry) => (
+                entry.id === assistantMessageId
+                  ? {
+                    ...entry,
+                    text: String(assistant.reply ?? streamedText).trim(),
+                    suggestions: assistant.suggestions ?? [],
+                    pending: false,
+                    provider: assistant.provider,
+                  }
+                  : entry
+              )))
+            },
+            onError: (detail) => {
+              streamError = detail
+            },
           },
           csrfToken,
         ),
       )
-      const nextMessages = mapAssistantHistory(response.assistant_history ?? [], data)
-      if (nextMessages.length) {
-        setAssistantMessages(nextMessages)
-      } else {
-        setAssistantMessages((current) => [
-          ...current,
-          {
-            role: 'assistant',
-            text: response.assistant.reply,
-            suggestions: response.assistant.suggestions ?? [],
-          },
-        ])
+
+      if (streamError) {
+        throw new Error(streamError)
+      }
+
+      if (!streamFinished) {
+        const response = await withCsrfRetry((csrfToken) =>
+          fetchJson<{ assistant: { reply: string; suggestions?: string[]; provider?: string }; assistant_history?: Array<Record<string, any>> }>(
+            '/api/assistant/chat',
+            {
+              method: 'POST',
+              body: JSON.stringify({ message: question }),
+            },
+            csrfToken,
+          ),
+        )
+        const nextMessages = mapAssistantHistory(response.assistant_history ?? [], data)
+        if (nextMessages.length) {
+          setAssistantMessages(nextMessages)
+        } else {
+          setAssistantMessages((current) => current.map((entry) => (
+            entry.id === assistantMessageId
+              ? {
+                ...entry,
+                text: response.assistant.reply,
+                suggestions: response.assistant.suggestions ?? [],
+                pending: false,
+                provider: response.assistant.provider,
+              }
+              : entry
+          )))
+        }
       }
     } catch (reason) {
       const detail = reason instanceof Error ? reason.message : 'Assistant request failed.'
-      setAssistantMessages((current) => [
-        ...current,
-        {
-          role: 'assistant',
-          text: detail,
-          suggestions: [],
-        },
-      ])
+      setAssistantMessages((current) => current.map((entry) => (
+        entry.id === assistantMessageId
+          ? { ...entry, text: detail, suggestions: [], pending: false }
+          : entry
+      )))
     } finally {
       setAssistantBusy(false)
     }
@@ -434,6 +504,11 @@ function App() {
     }
   }
 
+  function handleAssistantInput(event: ChangeEvent<HTMLTextAreaElement>) {
+    setAssistantInput(event.target.value)
+    resizeAssistantTextarea(event.target)
+  }
+
   if (!data) {
     return <main className="shell loading">Preparing the blueprint dashboard...</main>
   }
@@ -444,6 +519,7 @@ function App() {
   const scraperRun = data.state.scraper_run ?? {}
   const hostinger = data.hostinger ?? {}
   const datasets = data.datasets ?? []
+  const copilotStatus = data.copilot ?? {}
   const aiSettings = (data.state.notifications?.ai ?? {}) as Record<string, any>
   const slackSettings = (data.state.notifications?.slack ?? {}) as Record<string, any>
   const myGig = (comparison.my_gig ?? {}) as Record<string, any>
@@ -456,6 +532,7 @@ function App() {
   const topRankedGig = (comparison.top_ranked_gig ?? pageOneTopTen[0] ?? {}) as Record<string, any>
   const topRankedReasons = (comparison.why_top_ranked_gig_is_first ?? topRankedGig.why_on_page_one ?? []) as string[]
   const assistantQuickPrompts = buildAssistantQuickPrompts(comparison, blueprint, scraperRun)
+  const assistantStarterPrompts = assistantQuickPrompts.slice(0, 3)
   const activeJob = data.job_runs.find((job: JobRun) => ['queued', 'running'].includes(job.status)) ?? data.job_runs[0]
   const competitorSource = pageOneTopTen.length ? pageOneTopTen : data.competitors
   const competitors = [...competitorSource].sort((a, b) => {
@@ -479,6 +556,8 @@ function App() {
   const assistantStatusLabel = aiSettings.enabled
     ? (aiSettings.configured ? `${assistantProviderLabel} configured` : `${assistantProviderLabel} fallback`)
     : 'local market fallback'
+  const copilotWorkflow = Array.isArray(copilotStatus.workflow) ? copilotStatus.workflow : []
+  const hasAssistantConversation = assistantMessages.some((entry) => entry.text.trim())
 
   return (
     <main className="shell">
@@ -930,6 +1009,30 @@ function App() {
           <ul className="bullet-list">{((comparison.top_search_titles ?? []) as string[]).map((item: string) => <li key={item}>{item}</li>)}</ul>
         </article>
         <article className="card">
+          <div className="card-head">
+            <h2>n8n copilot workflow</h2>
+            <span className={`status status--${String(copilotStatus.status ?? 'queued')}`}>{String(copilotStatus.provider ?? 'local')}</span>
+          </div>
+          <div className="meta-grid">
+            <MetaItem label="Model" value={String(copilotStatus.model ?? '--')} />
+            <MetaItem label="Webhook host" value={String(copilotStatus.webhook_host ?? '--')} />
+            <MetaItem label="Knowledge docs" value={String((copilotStatus.knowledge_documents ?? []).length ?? 0)} />
+            <MetaItem label="Cache" value={String(copilotStatus.cache_backend ?? '--')} />
+          </div>
+          <div className="workflow-grid">
+            {copilotWorkflow.map((step: Record<string, any>) => (
+              <div className={`workflow-step workflow-step--${String(step.status ?? 'queued')}`} key={String(step.id ?? step.label)}>
+                <span className="workflow-dot" aria-hidden="true" />
+                <div>
+                  <strong>{String(step.label ?? 'Workflow step')}</strong>
+                  <p>{String(step.detail ?? '--')}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+          {!copilotWorkflow.length ? <p className="inline-note">Copilot workflow details will appear here once the assistant status payload is available.</p> : null}
+        </article>
+        <article className="card">
           <div className="card-head"><h2>System health</h2><span className={`status status--${data.health.status}`}>{data.health.status}</span></div>
           <div className="table">{(data.state.setup_health?.connectors ?? []).map((item: Record<string, string>) => <div className="row" key={item.connector}><div><strong>{item.connector}</strong><p>{item.detail}</p></div><span className={`status status--${item.status}`}>{item.status}</span></div>)}</div>
         </article>
@@ -944,41 +1047,70 @@ function App() {
       {assistantOpen ? (
         <aside className="assistant-shell">
           <div className="assistant-head">
-            <div>
-              <p className="eyebrow">Gig Copilot</p>
-              <strong>Ask from live app data</strong>
-              <p className="assistant-subtitle">{assistantStatusLabel}</p>
-              <div className="pill-row">
-                <span className="pill">{String(comparison.primary_search_term ?? 'no primary term')}</span>
-                <span className="pill">{topRankedGig.title ? `#1 ${topRankedGig.seller_name || 'leader'}` : 'no live leader yet'}</span>
-                <span className="pill">{scraperRun.status ?? 'idle'} feed</span>
-                <span className="pill">{datasets.length} knowledge file(s)</span>
+            <div className="assistant-identity">
+              <div className="assistant-avatar" aria-hidden="true">AI</div>
+              <div>
+                <p className="eyebrow">Gig Copilot</p>
+                <strong>Ask from live app data</strong>
+                <p className="assistant-subtitle">Online · live gig data · {assistantStatusLabel}</p>
               </div>
             </div>
-            <button className="secondary" onClick={() => setAssistantOpen(false)}>Hide</button>
+            <button className="assistant-close-btn" onClick={() => setAssistantOpen(false)}>Close</button>
           </div>
-          <div className="pill-row assistant-quick-prompts">
-            {assistantQuickPrompts.map((suggestion) => (
-              <button
-                className="secondary pill-button"
-                key={suggestion}
-                onClick={() => void sendAssistantMessage(suggestion)}
-                disabled={assistantBusy}
-              >
-                {suggestion}
-              </button>
-            ))}
+          <div className="pill-row">
+            <span className="pill">{String(comparison.primary_search_term ?? 'no primary term')}</span>
+            <span className="pill">{topRankedGig.title ? `#1 ${topRankedGig.seller_name || 'leader'}` : 'no live leader yet'}</span>
+            <span className="pill">{scraperRun.status ?? 'idle'} feed</span>
+            <span className="pill">{datasets.length} knowledge file(s)</span>
           </div>
+          {hasAssistantConversation ? (
+            <div className="pill-row assistant-quick-prompts">
+              {assistantQuickPrompts.map((suggestion) => (
+                <button
+                  className="quick-prompt-chip"
+                  key={suggestion}
+                  onClick={() => void sendAssistantMessage(suggestion)}
+                  disabled={assistantBusy}
+                >
+                  {suggestion}
+                </button>
+              ))}
+            </div>
+          ) : null}
           <div className="assistant-log" ref={assistantLogRef}>
-            {assistantMessages.map((entry, index) => (
-              <div className={`assistant-bubble assistant-bubble--${entry.role}`} key={`${entry.role}-${index}`}>
-                <strong>{entry.role === 'assistant' ? 'Copilot' : 'You'}</strong>
-                <p>{entry.text}</p>
+            {!hasAssistantConversation && !assistantBusy ? (
+              <div className="assistant-welcome">
+                <div className="assistant-avatar assistant-avatar--large" aria-hidden="true">AI</div>
+                <strong>Gig Copilot is ready</strong>
+                <p>Optimize your gig, audit your site, generate content, and ask from live market data.</p>
+                <div className="assistant-welcome-chips">
+                  {assistantStarterPrompts.map((suggestion) => (
+                    <button
+                      className="suggestion-chip"
+                      key={suggestion}
+                      onClick={() => void sendAssistantMessage(suggestion)}
+                      disabled={assistantBusy}
+                    >
+                      {suggestion}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {assistantMessages.map((entry) => (
+              <div className={`assistant-bubble assistant-bubble--${entry.role}`} key={entry.id}>
+                <div className="assistant-bubble-meta">
+                  <strong>{entry.role === 'assistant' ? 'Copilot' : 'You'}</strong>
+                  {entry.provider ? <span className="assistant-provider-badge">{entry.provider}</span> : null}
+                </div>
+                <div className="bubble-body">
+                  {entry.pending && !entry.text.trim() ? <TypingDots /> : renderMarkdownContent(entry.text)}
+                </div>
                 {entry.suggestions?.length ? (
                   <div className="pill-row assistant-suggestion-row">
                     {entry.suggestions.map((suggestion) => (
                       <button
-                        className="secondary pill-button"
+                        className="suggestion-chip"
                         key={suggestion}
                         onClick={() => void sendAssistantMessage(suggestion)}
                         disabled={assistantBusy}
@@ -990,25 +1122,37 @@ function App() {
                 ) : null}
               </div>
             ))}
-            {assistantBusy ? (
+            {assistantBusy && !assistantMessages.some((entry) => entry.pending) ? (
               <div className="assistant-bubble assistant-bubble--assistant assistant-bubble--pending">
-                <strong>Copilot</strong>
-                <p>Thinking through your live gig data...</p>
+                <div className="assistant-bubble-meta">
+                  <strong>Copilot</strong>
+                </div>
+                <div className="bubble-body">
+                  <TypingDots />
+                </div>
               </div>
             ) : null}
           </div>
           <div className="assistant-compose">
-            <textarea
-              ref={assistantInputRef}
-              rows={3}
-              value={assistantInput}
-              onChange={(event) => setAssistantInput(event.target.value)}
-              onKeyDown={handleAssistantKeyDown}
-              placeholder="Ask anything about your gig, page-one competitors, title, pricing, trust, keywords, or what to change next..."
-            />
-            <button onClick={() => void sendAssistantMessage()} disabled={assistantBusy || !assistantInput.trim()}>
-              {assistantBusy ? 'Thinking...' : 'Send'}
-            </button>
+            <div className="compose-inner">
+              <textarea
+                ref={assistantInputRef}
+                rows={1}
+                value={assistantInput}
+                onChange={handleAssistantInput}
+                onInput={(event) => resizeAssistantTextarea(event.currentTarget)}
+                onKeyDown={handleAssistantKeyDown}
+                placeholder="Ask anything about your gig, page-one competitors, title, pricing, trust, keywords, or what to change next..."
+              />
+              <button
+                className="compose-send-btn"
+                onClick={() => void sendAssistantMessage()}
+                disabled={assistantBusy || !assistantInput.trim()}
+              >
+                {assistantBusy ? 'Thinking...' : 'Send'}
+              </button>
+            </div>
+            <p className="compose-hint">Enter to send. Shift + Enter for a new line.</p>
           </div>
         </aside>
       ) : null}
@@ -1069,6 +1213,7 @@ function buildAssistantMessages(payload: BootstrapPayload) {
   if (history.length) return history
   return [
     {
+      id: 'assistant-seed',
       role: 'assistant' as const,
       text: "Ask me anything about your live Fiverr market position. I answer from the current page-one leaderboard, your gig comparison, and your recent scraper feed.",
       suggestions: buildAssistantQuickPrompts(payload.state.gig_comparison ?? {}, (payload.state.gig_comparison ?? {}).implementation_blueprint ?? {}, payload.state.scraper_run ?? {}),
@@ -1090,6 +1235,7 @@ function mapAssistantHistory(items: Array<Record<string, any>>, payload: Bootstr
       return Number(left.id ?? 0) - Number(right.id ?? 0)
     })
     .map((item) => ({
+      id: String(item.id ?? `${item.role ?? 'assistant'}-${item.created_at ?? Math.random().toString(36).slice(2, 8)}`),
       role: (item.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
       text: String(item.content ?? '').trim(),
       suggestions: item.role === 'assistant' ? ((item.metadata?.suggestions as string[] | undefined) ?? []) : undefined,
@@ -1116,6 +1262,34 @@ function buildAssistantQuickPrompts(comparison: Record<string, any>, blueprint: 
     'How should I price my packages now?',
   ]
   return Array.from(new Set(prompts.filter(Boolean))).slice(0, 5)
+}
+
+function resizeAssistantTextarea(element: HTMLTextAreaElement | null) {
+  if (!element) return
+  element.style.height = 'auto'
+  element.style.height = `${Math.min(element.scrollHeight, 160)}px`
+}
+
+function TypingDots() {
+  return (
+    <div className="typing-dots" aria-hidden="true">
+      <span />
+      <span />
+      <span />
+    </div>
+  )
+}
+
+function renderMarkdownContent(text: string): ReactNode {
+  const lines = text.split('\n').filter((line) => line.trim())
+  if (!lines.length) {
+    return <p />
+  }
+  return (
+    <>
+      {lines.map((line, index) => <p key={`${index}-${line.slice(0, 24)}`}>{line}</p>)}
+    </>
+  )
 }
 
 function fileToBase64(file: File) {
