@@ -94,14 +94,14 @@ services:
     env_file:
       - ../.env.production
     environment:
-      N8N_HOST: 127.0.0.1
-      N8N_PORT: 5678
-      N8N_PROTOCOL: http
-      WEBHOOK_URL: http://127.0.0.1:5678/
-      N8N_EDITOR_BASE_URL: http://127.0.0.1:5678/
+      N8N_HOST: n8n.animha.co.in
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: https
+      WEBHOOK_URL: https://n8n.animha.co.in/
+      N8N_EDITOR_BASE_URL: https://n8n.animha.co.in/
       N8N_DIAGNOSTICS_ENABLED: "false"
       N8N_PERSONALIZATION_ENABLED: "false"
-      N8N_SECURE_COOKIE: "false"
+      N8N_SECURE_COOKIE: "true"
       N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
       N8N_RUNNERS_ENABLED: "true"
       DB_TYPE: sqlite
@@ -110,10 +110,16 @@ services:
     volumes:
       - n8n_data:/home/node/.n8n
       - ./n8n:/imports:ro
-    ports:
-      - "127.0.0.1:5678:5678"
+    expose:
+      - "5678"
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.n8n.rule: "Host(`n8n.animha.co.in`)"
+      traefik.http.routers.n8n.entrypoints: "websecure"
+      traefik.http.routers.n8n.tls.certresolver: "letsencrypt"
+      traefik.http.services.n8n.loadbalancer.server.port: "5678"
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:5678/healthz"]
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:5678/healthz"]
       interval: 30s
       timeout: 10s
       retries: 10
@@ -126,10 +132,6 @@ services:
     restart: unless-stopped
     env_file:
       - ../.env.production
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     command:
       [
         "postgres",
@@ -147,7 +149,9 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      # pg_isready with no args connects as the postgres system user — no
+      # host-side variable interpolation, no "unset variable" warnings.
+      test: ["CMD-SHELL", "pg_isready"]
       interval: 15s
       timeout: 5s
       retries: 5
