@@ -2,6 +2,7 @@ import { startTransition, useMemo, useEffect, useState, type KeyboardEvent } fro
 
 import { createDashboardSocket, fetchJson, loadBootstrap, streamAssistantReply } from './api'
 import { useToast } from './components/ui'
+import { useCsrf } from './hooks/useCsrf'
 import Layout from './layout/Layout'
 import type { AppPageKey } from './layout/Sidebar'
 import AIBrainPage from './pages/AIBrainPage'
@@ -71,6 +72,7 @@ export default function App() {
   const [fatalError, setFatalError] = useState('')
   const [extensionPromptDismissed, setExtensionPromptDismissed] = useState(false)
   const toast = useToast()
+  const { csrfToken, refreshCsrf } = useCsrf(data)
 
   useEffect(() => {
     let active = true
@@ -140,13 +142,14 @@ export default function App() {
   async function withCsrfRetry<T>(operation: (csrfToken: string) => Promise<T>): Promise<T> {
     if (!data) throw new Error('Dashboard is still loading.')
     try {
-      return await operation(data.state.auth.csrf_token)
+      return await operation(csrfToken)
     } catch (reason) {
       const detail = reason instanceof Error ? reason.message : 'Request failed.'
       if (!/csrf/i.test(detail)) throw reason
+      const nextToken = await refreshCsrf()
       const payload = await loadBootstrap()
       startTransition(() => applyBootstrap(payload))
-      return operation(payload.state.auth.csrf_token)
+      return operation(nextToken)
     }
   }
 
@@ -433,7 +436,7 @@ export default function App() {
       case 'copilot':
         return <CopilotPage messages={assistantMessages} busy={assistantBusy} input={assistantInput} onInputChange={setAssistantInput} onSendMessage={sendAssistantMessage} onKeyDown={handleAssistantKeyDown} assistantStarterPrompts={assistantStarterPrompts} assistantQuickPrompts={assistantQuickPrompts} />
       case 'brain':
-        return <AIBrainPage />
+        return <AIBrainPage csrfToken={csrfToken} refreshCsrf={refreshCsrf} />
       case 'metrics':
         return <MetricsPage metricsHistory={data.state.metrics_history} keywordScore={buildKeywordScore(comparison, report)} primarySearchTerm={textValue(comparison.primary_search_term)} marketAnchorPrice={currencyValue(numberValue(comparison.market_anchor_price))} scraperSummary={buildScraperSummary(comparison, scraperRun)} scraperLogs={buildScraperLogs(comparison, scraperRun)} trendingQueries={stringArray(recordValue(report.niche_pulse).trending_queries)} topSearchTitles={stringArray(comparison.top_search_titles)} connectorHealth={buildConnectorHealth(recordValue(data.state.setup_health).connectors, data.state.connector_status)} />
       case 'settings':
@@ -441,7 +444,7 @@ export default function App() {
       default:
         return null
     }
-  }, [activePage, assistantBusy, assistantInput, assistantMessages, assistantQuickPrompts, assistantStarterPrompts, autoCompareEnabled, autoCompareMinutes, blueprint, busy, comparison, comparisonHistory, competitors, data, datasets, extensionDownloadUrl, extensionGuideUrl, extensionPromptVisible, extensionToken, gigUrl, hostinger, knowledgeFile, liveMode, manualInput, maxResults, oneByOne, personaFocus, queue, report, scraperRun, slackSettings, sortKey, terms, titleOptions, topRankedGig, topRankedReasons, topTen])
+  }, [activePage, assistantBusy, assistantInput, assistantMessages, assistantQuickPrompts, assistantStarterPrompts, autoCompareEnabled, autoCompareMinutes, blueprint, busy, comparison, comparisonHistory, competitors, csrfToken, data, datasets, extensionDownloadUrl, extensionGuideUrl, extensionPromptVisible, extensionToken, gigUrl, hostinger, knowledgeFile, liveMode, manualInput, maxResults, oneByOne, personaFocus, queue, refreshCsrf, report, scraperRun, slackSettings, sortKey, terms, titleOptions, topRankedGig, topRankedReasons, topTen])
 
   return (
     <Layout

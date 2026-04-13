@@ -5,6 +5,18 @@ interface SessionCountPayload {
   total_sessions: number
 }
 
+export interface TrainingDashboardPayload {
+  stats?: Record<string, number>
+  top_words?: Array<Record<string, unknown>>
+  recent_activity?: Array<Record<string, unknown>>
+  schedule?: Record<string, unknown>
+  test_results?: Record<string, unknown>
+}
+
+export interface TrainingPredictionPayload {
+  predictions?: Array<Record<string, unknown> | string>
+}
+
 function buildHeaders(body?: BodyInit | null, csrfToken?: string) {
   const headers: Record<string, string> = {
   }
@@ -52,6 +64,31 @@ export function loadBootstrap() {
 
 export function fetchAssistantSessionsCount() {
   return fetchJson<SessionCountPayload>('/api/assistant/sessions/count', { method: 'GET' })
+}
+
+export function fetchTrainingDashboard() {
+  return fetchJson<TrainingDashboardPayload>('/api/copilot/training-dashboard', { method: 'GET' })
+}
+
+export function fetchTrainingPredictions(query: string, topN = 8) {
+  const params = new URLSearchParams({ q: query, top_n: String(topN) })
+  return fetchJson<TrainingPredictionPayload>(`/api/copilot/training-dashboard/predict?${params.toString()}`, { method: 'GET' })
+}
+
+export function runTrainingCycle(csrfToken: string) {
+  return fetchJson<Record<string, unknown>>('/api/copilot/training-dashboard/train', { method: 'POST', body: JSON.stringify({}) }, csrfToken)
+}
+
+export function runTrainingDashboardTests(csrfToken: string) {
+  return fetchJson<Record<string, unknown>>('/api/copilot/training-dashboard/run-tests', { method: 'POST', body: JSON.stringify({}) }, csrfToken)
+}
+
+export function ingestTrainingText(content: string, csrfToken: string) {
+  return fetchJson<Record<string, unknown>>('/api/copilot/training-dashboard/ingest', { method: 'POST', body: JSON.stringify({ content }) }, csrfToken)
+}
+
+export function updateTrainingSchedule(payload: Record<string, unknown>, csrfToken: string) {
+  return fetchJson<Record<string, unknown>>('/api/copilot/training-dashboard/schedule', { method: 'PUT', body: JSON.stringify(payload) }, csrfToken)
 }
 
 export interface AssistantStreamHandlers {
