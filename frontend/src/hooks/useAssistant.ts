@@ -197,6 +197,22 @@ export function useAssistant(
               continue
             }
 
+            if (tokenValue.startsWith('[SUGGESTIONS]')) {
+              try {
+                const suggestions: string[] = JSON.parse(tokenValue.slice(13))
+                setMessages((current) => {
+                  const next = [...current]
+                  const lastIndex = next.length - 1
+                  const lastEntry = next[lastIndex]
+                  if (lastEntry && lastEntry.role === 'assistant') {
+                    next[lastIndex] = { ...lastEntry, suggestions }
+                  }
+                  return next
+                })
+              } catch { /* ignore */ }
+              continue
+            }
+
             if (!createdAssistantBubble) {
               createdAssistantBubble = true
               setWaitingForFirstChunk(false)

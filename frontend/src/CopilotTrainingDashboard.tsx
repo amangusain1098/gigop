@@ -27,7 +27,7 @@ interface DashboardStats {
 interface Completion { type: string; completion: string; score: number; full_suggestion: string }
 
 function ts(iso: string | null | undefined) {
-  if (!iso) return '—'
+  if (!iso) return '--'
   try { return new Date(iso).toLocaleString() } catch { return iso }
 }
 function statusColor(s: string) {
@@ -37,10 +37,10 @@ function statusColor(s: string) {
   return '#f59e0b'
 }
 function sourceIcon(t: string) {
-  if (t === 'conversation') return '💬'
-  if (t === 'cron') return '⏰'
-  if (t === 'manual') return '✏️'
-  return '📄'
+  if (t === 'conversation') return '[chat]'
+  if (t === 'cron') return '[cron]'
+  if (t === 'manual') return '[edit]'
+  return '[doc]'
 }
 function btnStyle(bg: string): React.CSSProperties {
   return { background: bg, color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }
@@ -104,29 +104,24 @@ export default function CopilotTrainingDashboard() {
 
   function flash(m: string) { setMsg(m); setTimeout(() => setMsg(''), 4000) }
 
-  const withCsrfRetry = useCallback(async <T,>(operation: (token: string) => Promise<T>) => {
-    try {
-      return await operation(csrfToken)
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
-      if (!/csrf|403/i.test(detail)) {
-        throw error
-      }
-
-      const nextToken = await refreshCsrf()
-      return operation(nextToken)
-    }
-  }, [csrfToken, refreshCsrf])
-
   async function runTraining() {
     setBusy('train')
     try {
-      const r = await withCsrfRetry((token) =>
-        fetchJson<{ steps: unknown[] }>('/api/copilot/training-dashboard/train', {
+      let token = csrfToken
+      let r: { steps: unknown[] }
+      try {
+        r = await fetchJson<{ steps: unknown[] }>('/api/copilot/training-dashboard/train', {
           method: 'POST', body: JSON.stringify({}),
-        }, token),
-      )
-      flash(`Training cycle complete — ${r!.steps?.length ?? 0} step(s) run`)
+        }, token)
+      } catch (e) {
+        if (String(e).includes('CSRF') || String(e).includes('403')) {
+          token = await refreshCsrf()
+          r = await fetchJson<{ steps: unknown[] }>('/api/copilot/training-dashboard/train', {
+            method: 'POST', body: JSON.stringify({}),
+          }, token)
+        } else { throw e }
+      }
+      flash(`Training cycle complete: ${r!.steps?.length ?? 0} step(s) run`)
       void load()
     } catch (e) { flash('Training failed: ' + String(e)) }
     finally { setBusy('') }
@@ -136,11 +131,9 @@ export default function CopilotTrainingDashboard() {
     setBusy('tests')
     setTestOutput('')
     try {
-      const r = await withCsrfRetry((token) =>
-        fetchJson<TestResults>('/api/copilot/training-dashboard/run-tests', {
-          method: 'POST', body: JSON.stringify({}),
-        }, token),
-      )
+      const r = await fetchJson<TestResults>('/api/copilot/training-dashboard/run-tests', {
+        method: 'POST', body: JSON.stringify({}),
+      }, csrfToken)
       setTestOutput(r.output_tail ?? '')
       void load()
       setTimeout(() => logRef.current?.scrollIntoView({ behavior: 'smooth' }), 300)
@@ -152,15 +145,13 @@ export default function CopilotTrainingDashboard() {
     if (!ingestText.trim()) { flash('Enter text to ingest'); return }
     setBusy('ingest')
     try {
-      const r = await withCsrfRetry((token) =>
-        fetchJson<{ ingested: boolean; tokens_learned?: number; new_words?: number }>(
-          '/api/copilot/training-dashboard/ingest',
-          {
-            method: 'POST',
-            body: JSON.stringify({ text: ingestText, source: ingestSource || 'manual-ui', source_type: 'manual' }),
-          },
-          token
-        )
+      const r = await fetchJson<{ ingested: boolean; tokens_learned?: number; new_words?: number }>(
+        '/api/copilot/training-dashboard/ingest',
+        {
+          method: 'POST',
+          body: JSON.stringify({ text: ingestText, source: ingestSource || 'manual-ui', source_type: 'manual' }),
+        },
+        csrfToken
       )
       if (r.ingested) {
         flash(`Ingested: ${r.tokens_learned ?? 0} tokens, ${r.new_words ?? 0} new words`)
@@ -168,7 +159,7 @@ export default function CopilotTrainingDashboard() {
         setIngestSource('')
         void load()
       } else {
-        flash('Not ingested — text may be too short')
+        flash('Not ingested - text may be too short')
       }
     } catch (e) { flash('Ingest failed: ' + String(e)) }
     finally { setBusy('') }
@@ -177,12 +168,10 @@ export default function CopilotTrainingDashboard() {
   async function saveSchedule() {
     setBusy('schedule')
     try {
-      await withCsrfRetry((token) =>
-        fetchJson('/api/copilot/training-dashboard/schedule', {
-          method: 'PUT',
-          body: JSON.stringify({ interval: scheduleInterval, enabled: scheduleEnabled }),
-        }, token)
-      )
+      await fetchJson('/api/copilot/training-dashboard/schedule', {
+        method: 'PUT',
+        body: JSON.stringify({ interval: scheduleInterval, enabled: scheduleEnabled }),
+      }, csrfToken)
       flash('Schedule saved')
       void load()
     } catch (e) { flash('Save failed: ' + String(e)) }
@@ -285,7 +274,7 @@ export default function CopilotTrainingDashboard() {
                   borderRadius: 20, padding: '3px 10px', fontSize: 12, color: '#1e293b',
                   fontWeight: w.freq > 5 ? 600 : 400,
                 }}>
-                  {w.word}<span style={{ color: '#94a3b8', fontSize: 10, marginLeft: 4 }}>{'×'}{w.freq}</span>
+                  {w.word} <span style={{ color: '#94a3b8', fontSize: 10, marginLeft: 4 }}>x{w.freq}</span>
                 </span>
               ))}
               {s.model.top_words.length === 0 && (

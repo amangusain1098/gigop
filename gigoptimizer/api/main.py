@@ -1638,7 +1638,7 @@ def create_app() -> FastAPI:
         memory.add("user", message)
         memory_context = memory.summary()
         if memory_context.strip():
-            prompt_message = f"[Recent context]\n{memory_context}\n\n[Current question]\n{message}"
+            prompt_message = f"[Recent context]\n{memory_context}\n\n[User input]\n{message}"
         else:
             prompt_message = message
         topic_tags = copilot_training_service.classify_topics(message)
@@ -1867,12 +1867,19 @@ def create_app() -> FastAPI:
             if not reply_text:
                 yield "data: [DONE]\n\n"
                 return
-            for index in range(0, len(reply_text), 8):
-                chunk = reply_text[index : index + 8]
-                data_lines = chunk.splitlines() or [chunk]
-                event_payload = "".join(f"data: {line}\n" for line in data_lines)
-                yield f"{event_payload}\n"
+            # Send reply as words (split on spaces) so the frontend receives clean
+            # SSE tokens without embedded newlines that corrupt the data: prefix.
+            suggestions = (response_payload.get("assistant") or {}).get("suggestions", [])
+            words = reply_text.split(" ")
+            for i, word in enumerate(words):
+                token = word if i == 0 else " " + word
+                # Escape any newlines inside the token to avoid breaking SSE framing
+                token_safe = token.replace("\n", " ")
+                yield f"data: {token_safe}\n\n"
                 await asyncio.sleep(0.012)
+            if suggestions:
+                import json as _json
+                yield f"data: [SUGGESTIONS]{_json.dumps(suggestions)}\n\n"
             yield "data: [DONE]\n\n"
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
