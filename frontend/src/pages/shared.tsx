@@ -193,7 +193,7 @@ export interface SettingsPageProps {
 export interface CopilotPageProps {
   sessionId: string | null
   messages: Array<{
-    id?: number
+    id?: number | string
     role: 'user' | 'assistant'
     text: string
     suggestions?: string[]
@@ -206,7 +206,7 @@ export interface CopilotPageProps {
   onInputChange: (value: string) => void
   onSendMessage: (prefill?: string) => Promise<void>
   onExportChat: () => void
-  onSendFeedback: (messageId: number, rating: 1 | -1) => Promise<void>
+  onSendFeedback: (messageId: number | string, rating: 1 | -1) => Promise<void>
   quickPrompts: string[]
 }
 

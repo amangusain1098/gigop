@@ -73,7 +73,7 @@ export default function CopilotPage({
               <div className="assistant-feedback-row" style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
                 <button
                   className={`feedback-button ${entry.feedbackRating === 1 ? 'feedback-button--active' : ''}`}
-                  onClick={() => void onSendFeedback(entry.id as number, 1)}
+                  onClick={() => void onSendFeedback(entry.id as number | string, 1)}
                   disabled={busy}
                   style={{ fontSize: '11px', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer', background: entry.feedbackRating === 1 ? '#dcfce7' : '#f1f5f9', border: '1px solid #cbd5e1' }}
                 >
@@ -81,7 +81,7 @@ export default function CopilotPage({
                 </button>
                 <button
                   className={`feedback-button ${entry.feedbackRating === -1 ? 'feedback-button--active' : ''}`}
-                  onClick={() => void onSendFeedback(entry.id as number, -1)}
+                  onClick={() => void onSendFeedback(entry.id as number | string, -1)}
                   disabled={busy}
                   style={{ fontSize: '11px', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer', background: entry.feedbackRating === -1 ? '#fee2e2' : '#f1f5f9', border: '1px solid #cbd5e1' }}
                 >

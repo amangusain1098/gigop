@@ -3,6 +3,7 @@ import { fetchJson } from './api'
 import { useBootstrap } from './hooks/useBootstrap'
 import { useCsrf } from './hooks/useCsrf'
 import { useAssistant } from './hooks/useAssistant'
+import { useToast } from './components/ui/useToast'
 import Layout from './layout/Layout'
 import type { AppPageKey } from './layout/Sidebar'
 
@@ -20,6 +21,7 @@ export default function App() {
   const { data, loading, error: bootstrapError, refresh } = useBootstrap()
   const { csrfToken, refreshCsrf } = useCsrf(data)
   const assistant = useAssistant(csrfToken, refreshCsrf)
+  const toast = useToast()
 
   const [activePage, setActivePage] = useState<AppPageKey>('dashboard')
   const [gigUrl, setGigUrl] = useState('')
@@ -123,7 +125,6 @@ export default function App() {
   async function reviewQueue(recordId: string, action: 'approve' | 'reject') {
     if (!data) return
     setBusy(`${action}-${recordId}`)
-    const targetRecord = (data.state.queue?.length ? data.state.queue : data.queue).find((item) => item.id === recordId)
     try {
       await withCsrfRetry((token) => fetchJson(`/api/queue/${recordId}/${action}`, { method: 'POST', body: JSON.stringify({ reviewer_notes: '' }) }, token))
       setMessage(`Queue item ${action}d.`)
@@ -201,33 +202,7 @@ export default function App() {
     }
   }
 
-  async function askCopilotAboutDataset(filename: string) {
-    setActivePage('copilot')
-    await sendAssistantMessage(`What can I use from ${filename} for my Fiverr gig right now?`)
-  }
-
-  async function sendCopilotPositiveFeedback(message: AssistantMessage) {
-    await withCsrfRetry((token) => ingestTrainingText({
-      content: message.text,
-      source_type: 'user_feedback_positive',
-      source: 'copilot_chat',
-      message_id: message.id,
-    }, token))
-    toast.success('Positive feedback sent to the AI Brain.')
-  }
-
-  async function sendCopilotNegativeFeedback(message: AssistantMessage, reason: string) {
-    await withCsrfRetry((token) => ingestTrainingText({
-      content: message.text,
-      source_type: 'feedback_negative',
-      source: 'copilot_chat',
-      message_id: message.id,
-      context: reason,
-    }, token))
-    toast.info('Negative feedback saved for review.')
-  }
-
-  async function handleLogout() {
+  async function reviewSecurityAttempt(attemptId: string, action: 'save' | 'discard') {
     if (!data) return
     setBusy(`security-${action}-${attemptId}`)
     try {
@@ -235,9 +210,9 @@ export default function App() {
       setMessage(action === 'save' ? 'Security capture saved.' : 'Security capture discarded.')
       void refresh()
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Security review action failed.')
+      toast.error(reason instanceof Error ? reason.message : 'Security review action failed.')
     } finally {
-      window.location.href = '/login'
+      setBusy('')
     }
   }
 
@@ -297,7 +272,7 @@ export default function App() {
     URL.revokeObjectURL(anchor.href)
   }
 
-  async function sendAssistantFeedback(messageId: number, rating: 1 | -1) {
+  async function sendAssistantFeedback(messageId: number | string, rating: 1 | -1) {
     setBusy(`feedback-${messageId}`)
     try {
       await withCsrfRetry((token) => fetchJson('/api/assistant/feedback', { method: 'POST', body: JSON.stringify({ message_id: messageId, rating }) }, token))
