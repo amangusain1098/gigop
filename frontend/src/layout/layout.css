@@ -18,6 +18,7 @@
 .layout__content {
   min-width: 0;
   flex: 1;
+  padding-bottom: calc(20px + env(safe-area-inset-bottom));
 }
 
 .sidebar {
@@ -114,12 +115,12 @@
   color: #edf5ff;
 }
 
-.sidebar__item.is-active {
+.sidebar__item--active {
   background: rgba(70, 177, 255, 0.1);
   color: #f7fbff;
 }
 
-.sidebar__item.is-active::before {
+.sidebar__item--active::before {
   background: #46b1ff;
 }
 
@@ -132,7 +133,7 @@
   flex-shrink: 0;
 }
 
-.sidebar__label {
+.nav-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -165,9 +166,11 @@
   flex-shrink: 0;
 }
 
-.sidebar-backdrop {
+.sidebar-overlay {
+  display: none;
   position: fixed;
   inset: 0;
+  border: 0;
   background: rgba(3, 8, 16, 0.56);
   opacity: 0;
   pointer-events: none;
@@ -175,7 +178,7 @@
   z-index: 35;
 }
 
-.sidebar-backdrop.is-open {
+.sidebar-overlay--open {
   opacity: 1;
   pointer-events: auto;
 }
@@ -248,10 +251,6 @@
 }
 
 @media (max-width: 1024px) {
-  .layout {
-    grid-template-columns: 48px minmax(0, 1fr);
-  }
-
   .sidebar {
     width: 48px;
     overflow: hidden;
@@ -262,15 +261,15 @@
     width: 240px;
   }
 
-  .sidebar__brand-copy,
-  .sidebar__label,
-  .sidebar__footer {
+  .sidebar .nav-label,
+  .sidebar .sidebar__brand-copy,
+  .sidebar .sidebar__footer {
     opacity: 0;
     transition: opacity 140ms ease;
   }
 
+  .sidebar:hover .nav-label,
   .sidebar:hover .sidebar__brand-copy,
-  .sidebar:hover .sidebar__label,
   .sidebar:hover .sidebar__footer {
     opacity: 1;
   }
@@ -287,28 +286,55 @@
 
   .sidebar {
     position: fixed;
+    left: -240px;
+    width: 240px;
+    height: 100vh;
+    transition: left 0.25s ease;
+    z-index: 200;
+    overflow: visible;
+  }
+
+  .sidebar--open {
     left: 0;
-    width: min(82vw, 280px);
-    transform: translateX(-110%);
-    box-shadow: 0 26px 60px rgba(0, 0, 0, 0.35);
   }
 
-  .sidebar.is-open {
-    transform: translateX(0);
+  .sidebar-overlay {
+    display: block;
   }
 
-  .sidebar__brand-copy,
-  .sidebar__label,
-  .sidebar__footer {
+  .layout__body {
+    margin-left: 0;
+  }
+
+  .sidebar .nav-label,
+  .sidebar .sidebar__brand-copy,
+  .sidebar .sidebar__footer {
     opacity: 1;
   }
 
   .topbar {
     padding-top: calc(1rem + env(safe-area-inset-top));
+    padding-inline: 1rem;
   }
 
   .topbar__menu {
     display: inline-flex;
+  }
+
+  .topbar__right {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+}
+
+@media (max-width: 480px) {
+  .topbar {
+    align-items: flex-start;
+  }
+
+  .topbar__right {
+    width: 100%;
+    justify-content: flex-start;
   }
 }
 

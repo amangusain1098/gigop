@@ -1,63 +1,58 @@
-import { startTransition, useEffect, useRef, useState, type KeyboardEvent } from 'react'
-import {
-  CartesianGrid,
-  Line,
-  LineChart,
-  PolarAngleAxis,
-  PolarGrid,
-  Radar,
-  RadarChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts'
-import ReactMarkdown from 'react-markdown'
-import { createDashboardSocket, fetchJson, loadBootstrap } from './api'
-import type {
-  AssistantHistoryMessage,
-  BootstrapPayload,
-  ComparisonDiffPayload,
-  ComparisonTimelinePoint,
-  CompetitorRecord,
-  CopilotTrainingStatus,
-  DashboardEvent,
-  DatasetRecord,
-  FailedLoginAttemptRecord,
-  JobRun,
-  KeywordScore,
-  LegacyState,
-  QueueRecord,
-  ScraperLogRecord,
-  ScraperSummary,
-} from './types'
-import './App.css'
-import CopilotTrainingDashboard from './CopilotTrainingDashboard'
+import { startTransition, useMemo, useEffect, useState, type KeyboardEvent } from 'react'
 
-type TitleOption = { label: string; title: string; rationale: string }
-type DescriptionOption = { label: string; summary: string; text: string; paired_title?: string; notes?: string[] }
-type PersonaFocus = { persona: string; score: number; pain_point: string; emphasis: string[] }
-type RecommendedPackage = { name: string; price: number; delivery_days?: number | null; highlights?: string[] }
-type CompetitorRecommendation = {
-  rank_position?: number
-  competitor_title: string
-  competitor_url?: string
-  seller_name?: string
-  matched_term?: string
-  starting_price?: number | null
-  rating?: number | null
-  reviews_count?: number | null
-  conversion_proxy_score?: number
-  why_it_ranks?: string[]
-  primary_recommendation?: string
-  what_to_change?: string[]
-  expected_gain?: number
-  priority?: string
+import { createDashboardSocket, fetchJson, ingestTrainingText, loadBootstrap, streamAssistantReply } from './api'
+import { useToast } from './components/ui'
+import { useCsrf } from './hooks/useCsrf'
+import Layout from './layout/Layout'
+import type { AppPageKey } from './layout/Sidebar'
+import AIBrainPage from './pages/AIBrainPage'
+import CompetitorPage from './pages/CompetitorPage'
+import CopilotPage from './pages/CopilotPage'
+import DashboardPage from './pages/DashboardPage'
+import GigOptimizerPage from './pages/GigOptimizerPage'
+import {
+  activeJob,
+  buildAssistantMessages,
+  buildAssistantQuickPrompts,
+  buildComparisonDiff,
+  buildComparisonTimeline,
+  buildConnectorHealth,
+  buildKeywordScore,
+  buildScraperLogs,
+  buildScraperSummary,
+  clamp,
+  currencyValue,
+  fileToBase64,
+  mapAssistantHistory,
+  numberValue,
+  recordArray,
+  recordValue,
+  splitTerms,
+  stringArray,
+  textValue,
+  type AssistantMessage,
+  type CompetitorRecommendation,
+  type DescriptionOption,
+  type PersonaFocus,
+  type RecommendedPackage,
+  type TitleOption,
+} from './pages/appModel'
+import MetricsPage from './pages/MetricsPage'
+import SettingsPage from './pages/SettingsPage'
+import type { BootstrapPayload, CompetitorRecord, DashboardEvent, JobRun, LegacyState, QueueRecord } from './types'
+import './App.css'
+
+const PAGE_TITLES: Record<AppPageKey, string> = {
+  dashboard: 'Dashboard',
+  optimizer: 'Gig Optimizer',
+  competitors: 'Competitors',
+  copilot: 'Copilot',
+  brain: 'AI Brain',
+  metrics: 'Metrics',
+  settings: 'Settings',
 }
 
-function App() {
-  const extensionPromptDismissKey = 'gigoptimizer-extension-install-dismissed'
-  const assistantSessionStorageKey = 'gigoptimizer-assistant-session-id'
+export default function App() {
   const [data, setData] = useState<BootstrapPayload | null>(null)
   const [gigUrl, setGigUrl] = useState('')
   const [terms, setTerms] = useState('')
@@ -65,246 +60,121 @@ function App() {
   const [liveMode, setLiveMode] = useState(false)
   const [sortKey, setSortKey] = useState<'rank_position' | 'conversion_proxy_score' | 'reviews_count' | 'starting_price'>('rank_position')
   const [busy, setBusy] = useState('')
-  const [message, setMessage] = useState('')
-  const [error, setError] = useState('')
   const [maxResults, setMaxResults] = useState(10)
   const [autoCompareEnabled, setAutoCompareEnabled] = useState(false)
   const [autoCompareMinutes, setAutoCompareMinutes] = useState(5)
-  const [assistantOpen, setAssistantOpen] = useState(false)
-  const [showTrainingDashboard, setShowTrainingDashboard] = useState(false)
   const [assistantInput, setAssistantInput] = useState('')
   const [assistantBusy, setAssistantBusy] = useState(false)
-  const [assistantWaitingForFirstChunk, setAssistantWaitingForFirstChunk] = useState(false)
-  const [assistantMessages, setAssistantMessages] = useState<AssistantHistoryMessage[]>([])
-  const [assistantInitialized, setAssistantInitialized] = useState(false)
-  const [extensionInstalled, setExtensionInstalled] = useState(false)
-  const [showExtensionPrompt, setShowExtensionPrompt] = useState(false)
+  const [assistantMessages, setAssistantMessages] = useState<AssistantMessage[]>([])
   const [knowledgeFile, setKnowledgeFile] = useState<File | null>(null)
-  const datasetInputRef = useRef<HTMLInputElement | null>(null)
-  const assistantLogRef = useRef<HTMLDivElement | null>(null)
-  const assistantInputRef = useRef<HTMLTextAreaElement | null>(null)
-  const assistantSessionIdRef = useRef(getAssistantSessionId(assistantSessionStorageKey))
-  const lastMarketplaceSyncRef = useRef({ gigUrl: '', terms: '' })
+  const [activePage, setActivePage] = useState<AppPageKey>('dashboard')
+  const [wsLive, setWsLive] = useState(false)
+  const [fatalError, setFatalError] = useState('')
+  const [extensionPromptDismissed, setExtensionPromptDismissed] = useState(false)
+  const toast = useToast()
+  const { csrfToken, refreshCsrf } = useCsrf(data)
 
   useEffect(() => {
     let active = true
-
     async function init() {
       try {
         const payload = await loadBootstrap()
         if (!active) return
+        setFatalError('')
         startTransition(() => applyBootstrap(payload))
       } catch (reason) {
         if (!active) return
-        setError(reason instanceof Error ? reason.message : 'Unable to load dashboard.')
+        setFatalError(reason instanceof Error ? reason.message : 'Unable to load dashboard.')
       }
     }
-
-    init()
+    void init()
     const socket = createDashboardSocket((event) => {
       if (!active) return
       startTransition(() => applyEvent(event))
     })
-
+    socket.onopen = () => active && setWsLive(true)
+    socket.onclose = () => active && setWsLive(false)
+    socket.onerror = () => active && setWsLive(false)
     return () => {
       active = false
+      setWsLive(false)
       socket.close()
     }
   }, [])
 
-  useEffect(() => {
-    if (!assistantOpen) return
-    const frame = window.requestAnimationFrame(() => {
-      assistantLogRef.current?.scrollTo({
-        top: assistantLogRef.current.scrollHeight,
-        behavior: 'smooth',
-      })
-      assistantInputRef.current?.focus()
-    })
-    return () => window.cancelAnimationFrame(frame)
-  }, [assistantOpen, assistantMessages.length, assistantBusy, assistantWaitingForFirstChunk])
-
-  useEffect(() => {
-    let timer = 0
-    function handleExtensionMessage(event: MessageEvent) {
-      const payload = event.data
-      if (!payload || payload.source !== 'gigoptimizer-extension') return
-      if (payload.type === 'ready') {
-        setExtensionInstalled(true)
-        setShowExtensionPrompt(false)
-      }
-    }
-    window.addEventListener('message', handleExtensionMessage)
-    window.postMessage({ source: 'gigoptimizer-dashboard', type: 'gigoptimizer-extension-ping' }, window.location.origin)
-    timer = window.setTimeout(() => {
-      const dismissed = window.localStorage.getItem(extensionPromptDismissKey) === '1'
-      if (!dismissed) {
-        setShowExtensionPrompt(true)
-      }
-    }, 1200)
-    return () => {
-      window.removeEventListener('message', handleExtensionMessage)
-      window.clearTimeout(timer)
-    }
-  }, [])
-
-  function syncMarketplaceInputs(nextState: LegacyState) {
-    const marketplace = nextState.notifications?.marketplace ?? {}
-    const comparisonGigUrl = String(nextState.gig_comparison?.gig_url ?? '').trim()
-    const comparisonTerms = Array.isArray(nextState.gig_comparison?.detected_search_terms)
-      ? nextState.gig_comparison?.detected_search_terms ?? []
-      : []
-    const savedGigUrl = String(marketplace.my_gig_url ?? '').trim()
-    const savedTerms = Array.isArray(marketplace.search_terms) ? marketplace.search_terms : []
-    const nextGigUrl = savedGigUrl || comparisonGigUrl
-    const nextTerms = (savedTerms.length ? savedTerms : comparisonTerms).join(', ')
-    setGigUrl((current) => preserveMarketplaceDraft(current, lastMarketplaceSyncRef.current.gigUrl) ? current : nextGigUrl)
-    setTerms((current) => preserveMarketplaceDraft(current, lastMarketplaceSyncRef.current.terms) ? current : nextTerms)
-    lastMarketplaceSyncRef.current = { gigUrl: nextGigUrl, terms: nextTerms }
-    setMaxResults(Number(marketplace.max_results ?? 10))
-    setAutoCompareEnabled(Boolean(marketplace.auto_compare_enabled ?? false))
-    setAutoCompareMinutes(Number(marketplace.auto_compare_interval_minutes ?? 5))
-  }
-
   function applyBootstrap(payload: BootstrapPayload) {
     setData(payload)
-    syncMarketplaceInputs(payload.state)
-    const nextAssistantMessages = buildAssistantMessages(payload)
-    if (nextAssistantMessages.length) {
-      setAssistantMessages(nextAssistantMessages)
-      setAssistantInitialized(true)
-    } else if (!assistantInitialized) {
-      setAssistantMessages(buildAssistantMessages(payload))
-      setAssistantInitialized(true)
-    }
+    const marketplace = recordValue(payload.state.notifications?.marketplace)
+    const comparisonGigUrl = textValue(payload.state.gig_comparison?.gig_url).trim()
+    const comparisonTerms = stringArray(payload.state.gig_comparison?.detected_search_terms)
+    const savedGigUrl = textValue(marketplace.my_gig_url).trim()
+    const savedTerms = stringArray(marketplace.search_terms)
+    setGigUrl(comparisonGigUrl || savedGigUrl)
+    setTerms((comparisonTerms.length ? comparisonTerms : savedTerms).join(', '))
+    setMaxResults(numberValue(marketplace.max_results) ?? 10)
+    setAutoCompareEnabled(Boolean(marketplace.auto_compare_enabled ?? false))
+    setAutoCompareMinutes(numberValue(marketplace.auto_compare_interval_minutes) ?? 5)
+    setAssistantMessages(buildAssistantMessages(payload))
   }
 
   function applyEvent(event: DashboardEvent) {
-    if (!data) return
-    if (event.type === 'state') {
-      const nextState = event.payload as LegacyState
-      syncMarketplaceInputs(nextState)
-      setData({
-        ...data,
-        state: { ...data.state, ...nextState },
-        queue: nextState.queue ?? data.queue,
-      })
-      return
-    }
-    if (event.type === 'scraper_activity') {
-      setData({
-        ...data,
-        state: { ...data.state, scraper_run: event.payload },
-      })
-      return
-    }
-    if (event.type === 'scraper_done') {
-      setMessage('Scraper finished — dashboard updated.')
-      void refresh()
-      return
-    }
-    if (event.type === 'security_update') {
-      setData({
-        ...data,
-        security: event.payload,
-      })
-      return
-    }
-    if (event.type === 'copilot_training') {
-      setData({
-        ...data,
-        copilot_training: event.payload as CopilotTrainingStatus,
-      })
-      return
-    }
-    if (['job_queued', 'job_progress', 'job_completed', 'job_failed'].includes(event.type)) {
-      const incoming = event.payload as JobRun
-      setData({
-        ...data,
-        job_runs: [incoming, ...data.job_runs.filter((item) => item.run_id !== incoming.run_id)].slice(0, 25),
-      })
-      if (event.type === 'job_completed') {
-        void refresh()
+    setData((current) => {
+      if (!current) return current
+      if (event.type === 'state') {
+        const nextState = event.payload as LegacyState
+        return { ...current, state: { ...current.state, ...nextState }, queue: nextState.queue ?? current.queue }
       }
-    }
-  }
-
-  function seedPendingMarketplaceView(jobType: string, payload: Record<string, unknown>) {
-    if (!data || !['marketplace_compare', 'marketplace_scrape', 'manual_compare'].includes(jobType)) {
-      return
-    }
-    const nextGigUrl = String(payload.gig_url ?? gigUrl ?? '').trim()
-    const nextTerms = Array.isArray(payload.search_terms)
-      ? (payload.search_terms as unknown[]).map((item) => String(item).trim()).filter(Boolean)
-      : splitTerms(terms)
-    const comparisonSource = jobType === 'manual_compare' ? 'manual_pending' : 'live_pending'
-    setData({
-      ...data,
-      competitors: [],
-      state: {
-        ...data.state,
-        gig_comparison: {
-          ...(data.state.gig_comparison ?? {}),
-          status: 'running',
-          message: `Running ${jobType.replaceAll('_', ' ')} with the current keyword set...`,
-          gig_url: nextGigUrl,
-          primary_search_term: nextTerms[0] ?? '',
-          detected_search_terms: nextTerms,
-          competitor_count: 0,
-          top_search_titles: [],
-          title_patterns: nextTerms,
-          top_competitors: [],
-          top_ranked_gig: null,
-          why_top_ranked_gig_is_first: [],
-          first_page_top_10: [],
-          one_by_one_recommendations: [],
-          what_to_implement: [],
-          why_competitors_win: [],
-          my_advantages: [],
-          comparison_source: comparisonSource,
-        },
-      },
+      if (event.type === 'scraper_activity') {
+        return { ...current, state: { ...current.state, scraper_run: event.payload } }
+      }
+      if (['job_queued', 'job_progress', 'job_completed', 'job_failed'].includes(event.type)) {
+        const incoming = event.payload as JobRun
+        return { ...current, job_runs: [incoming, ...current.job_runs.filter((item) => item.run_id !== incoming.run_id)].slice(0, 25) }
+      }
+      return current
     })
+    if (event.type === 'job_completed' || event.type === 'scraper_done') {
+      if (event.type === 'scraper_done') toast.info('Scraper finished - dashboard updated.')
+      void refresh(false)
+    }
   }
 
   async function withCsrfRetry<T>(operation: (csrfToken: string) => Promise<T>): Promise<T> {
-    if (!data) {
-      throw new Error('Dashboard is still loading.')
-    }
+    if (!data) throw new Error('Dashboard is still loading.')
     try {
-      return await operation(data.state.auth.csrf_token)
+      return await operation(csrfToken)
     } catch (reason) {
       const detail = reason instanceof Error ? reason.message : 'Request failed.'
-      if (!/csrf/i.test(detail)) {
-        throw reason
-      }
+      if (!/csrf/i.test(detail)) throw reason
+      const nextToken = await refreshCsrf()
       const payload = await loadBootstrap()
       startTransition(() => applyBootstrap(payload))
-      return operation(payload.state.auth.csrf_token)
+      return operation(nextToken)
     }
   }
 
-  async function refresh() {
+  async function refresh(showToast = true) {
     try {
-      applyBootstrap(await loadBootstrap())
-      setMessage('Dashboard refreshed.')
-      setError('')
+      const payload = await loadBootstrap()
+      applyBootstrap(payload)
+      setFatalError('')
+      if (showToast) toast.info('Dashboard refreshed.')
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Refresh failed.')
+      const detail = reason instanceof Error ? reason.message : 'Refresh failed.'
+      toast.error(detail)
+      if (!data) setFatalError(detail)
     }
   }
 
   async function refreshHostinger() {
     if (!data) return
     setBusy('hostinger-refresh')
-    setError('')
-    setMessage('')
     try {
-      const response = await fetchJson<{ hostinger: Record<string, any> }>('/api/hostinger/status', { method: 'GET' })
+      const response = await fetchJson<{ hostinger: Record<string, unknown> }>('/api/hostinger/status', { method: 'GET' })
       setData({ ...data, hostinger: response.hostinger })
-      setMessage('Hostinger status refreshed.')
+      toast.success('Hostinger status refreshed.')
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to refresh Hostinger status.')
+      toast.error(reason instanceof Error ? reason.message : 'Unable to refresh Hostinger status.')
     } finally {
       setBusy('')
     }
@@ -313,24 +183,12 @@ function App() {
   async function postJob(jobType: string, payload: Record<string, unknown> = {}) {
     if (!data) return
     setBusy(jobType)
-    setError('')
-    setMessage('')
     try {
-      const response = await withCsrfRetry((csrfToken) =>
-        fetchJson<BootstrapPayload>(
-          '/api/v2/jobs',
-          {
-            method: 'POST',
-            body: JSON.stringify({ job_type: jobType, ...payload }),
-          },
-          csrfToken,
-        ),
-      )
+      const response = await withCsrfRetry((csrfToken) => fetchJson<BootstrapPayload>('/api/v2/jobs', { method: 'POST', body: JSON.stringify({ job_type: jobType, ...payload }) }, csrfToken))
       applyBootstrap(response)
-      seedPendingMarketplaceView(jobType, payload)
-      setMessage(`Queued ${jobType.replaceAll('_', ' ')} job.`)
+      toast.success(`Queued ${jobType.replaceAll('_', ' ')} job.`)
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Job request failed.')
+      toast.error(reason instanceof Error ? reason.message : 'Job request failed.')
     } finally {
       setBusy('')
     }
@@ -339,23 +197,12 @@ function App() {
   async function queueRecommendation(actionType: string, proposedValue: unknown) {
     if (!data) return
     setBusy(actionType)
-    setError('')
-    setMessage('')
     try {
-      const nextState = await withCsrfRetry((csrfToken) =>
-        fetchJson<LegacyState>(
-          '/api/marketplace/recommendations/apply',
-          {
-            method: 'POST',
-            body: JSON.stringify({ action_type: actionType, proposed_value: proposedValue }),
-          },
-          csrfToken,
-        ),
-      )
+      const nextState = await withCsrfRetry((csrfToken) => fetchJson<LegacyState>('/api/marketplace/recommendations/apply', { method: 'POST', body: JSON.stringify({ action_type: actionType, proposed_value: proposedValue }) }, csrfToken))
       setData({ ...data, state: { ...data.state, ...nextState }, queue: nextState.queue ?? data.queue })
-      setMessage('Recommendation added to the HITL queue.')
+      toast.success('Recommendation added to the review queue.')
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to queue the recommendation.')
+      toast.error(reason instanceof Error ? reason.message : 'Unable to queue the recommendation.')
     } finally {
       setBusy('')
     }
@@ -364,20 +211,21 @@ function App() {
   async function reviewQueue(recordId: string, action: 'approve' | 'reject') {
     if (!data) return
     setBusy(`${action}-${recordId}`)
-    setError('')
-    setMessage('')
+    const targetRecord = (data.state.queue?.length ? data.state.queue : data.queue).find((item) => item.id === recordId)
     try {
-      const nextState = await withCsrfRetry((csrfToken) =>
-        fetchJson<LegacyState>(
-          `/api/queue/${recordId}/${action}`,
-          { method: 'POST', body: JSON.stringify({ reviewer_notes: '' }) },
-          csrfToken,
-        ),
-      )
+      const nextState = await withCsrfRetry((csrfToken) => fetchJson<LegacyState>(`/api/queue/${recordId}/${action}`, { method: 'POST', body: JSON.stringify({ reviewer_notes: '' }) }, csrfToken))
       setData({ ...data, state: { ...data.state, ...nextState }, queue: nextState.queue ?? data.queue })
-      setMessage(`Queue item ${action}d.`)
+      if (action === 'approve' && targetRecord) {
+        void withCsrfRetry((token) => ingestTrainingText({
+          content: `Approved queue item for ${targetRecord.action_type}: ${targetRecord.proposed_value}`,
+          source_type: 'queue_approval',
+          source: 'settings_queue',
+          message_id: targetRecord.id,
+        }, token)).catch(() => undefined)
+      }
+      toast.success(`Queue item ${action}d.`)
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Queue action failed.')
+      toast.error(reason instanceof Error ? reason.message : 'Queue action failed.')
     } finally {
       setBusy('')
     }
@@ -386,37 +234,12 @@ function App() {
   async function saveMarketplaceSettings() {
     if (!data) return
     setBusy('save-settings')
-    setError('')
-    setMessage('')
     try {
-      const settings = await withCsrfRetry((csrfToken) =>
-        fetchJson<Record<string, any>>(
-          '/api/settings',
-          {
-            method: 'POST',
-            body: JSON.stringify({
-              marketplace: {
-                enabled: true,
-                my_gig_url: gigUrl,
-                search_terms: splitTerms(terms),
-                max_results: maxResults,
-                auto_compare_enabled: autoCompareEnabled,
-                auto_compare_interval_minutes: autoCompareMinutes,
-              },
-              slack: {
-                enabled: true,
-              },
-            }),
-          },
-          csrfToken,
-        ),
-      )
-      const notifications = settings
-      syncMarketplaceInputs({ ...data.state, notifications })
-      setData({ ...data, state: { ...data.state, notifications } })
-      setMessage('Marketplace settings saved.')
+      const settings = await withCsrfRetry((csrfToken) => fetchJson<Record<string, unknown>>('/api/settings', { method: 'POST', body: JSON.stringify({ marketplace: { enabled: true, my_gig_url: gigUrl, search_terms: splitTerms(terms), max_results: maxResults, auto_compare_enabled: autoCompareEnabled, auto_compare_interval_minutes: autoCompareMinutes }, slack: { enabled: true } }) }, csrfToken))
+      setData({ ...data, state: { ...data.state, notifications: settings } })
+      toast.success('Marketplace settings saved.')
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to save settings.')
+      toast.error(reason instanceof Error ? reason.message : 'Unable to save settings.')
     } finally {
       setBusy('')
     }
@@ -425,60 +248,13 @@ function App() {
   async function runNotificationTest(channel: 'slack') {
     if (!data) return
     setBusy(`test-${channel}`)
-    setError('')
-    setMessage('')
     try {
-      const response = await withCsrfRetry((csrfToken) =>
-        fetchJson<{ result: { detail: string } }>(
-          '/api/settings/notifications/test',
-          {
-            method: 'POST',
-            body: JSON.stringify({ channel }),
-          },
-          csrfToken,
-        ),
-      )
-      setMessage(response.result.detail)
+      const response = await withCsrfRetry((csrfToken) => fetchJson<{ result: { detail: string } }>('/api/settings/notifications/test', { method: 'POST', body: JSON.stringify({ channel }) }, csrfToken))
+      toast.success(response.result.detail)
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : `Unable to test ${channel}.`)
+      toast.error(reason instanceof Error ? reason.message : `Unable to test ${channel}.`)
     } finally {
       setBusy('')
-    }
-  }
-
-  async function sendAssistantMessageFallback(question: string) {
-    if (!data) return
-    setAssistantWaitingForFirstChunk(true)
-    try {
-      const response = await withCsrfRetry((csrfToken) =>
-        fetchJson<{ assistant: { reply: string; suggestions?: string[] }; assistant_history?: Array<Record<string, any>>; copilot_training?: CopilotTrainingStatus }>(
-          '/api/assistant/chat',
-          {
-            method: 'POST',
-            body: JSON.stringify({ message: question, session_id: assistantSessionIdRef.current }),
-          },
-          csrfToken,
-        ),
-      )
-      const nextMessages = mapAssistantHistory(response.assistant_history ?? [], data)
-      if (nextMessages.length) {
-        setAssistantMessages(nextMessages)
-      } else {
-        setAssistantMessages((current) => [
-          ...current,
-          {
-            role: 'assistant',
-            text: response.assistant.reply,
-            suggestions: response.assistant.suggestions ?? [],
-            createdAt: new Date().toISOString(),
-          },
-        ])
-      }
-      if (response.copilot_training) {
-        setData((current) => current ? { ...current, copilot_training: response.copilot_training } : current)
-      }
-    } finally {
-      setAssistantWaitingForFirstChunk(false)
     }
   }
 
@@ -486,195 +262,69 @@ function App() {
     if (!data) return
     const question = (prefill ?? assistantInput).trim()
     if (!question) return
+    const userMessageId = `user-${Date.now().toString(36)}`
+    const assistantMessageId = `assistant-${Date.now().toString(36)}`
     setAssistantBusy(true)
-    setAssistantWaitingForFirstChunk(true)
-    setAssistantMessages((current) => [...current, { role: 'user', text: question, createdAt: new Date().toISOString() }])
+    setAssistantMessages((current) => [...current, { id: userMessageId, role: 'user', text: question }, { id: assistantMessageId, role: 'assistant', text: '', suggestions: [], pending: true }])
     setAssistantInput('')
-    if (assistantInputRef.current) {
-      assistantInputRef.current.style.height = 'auto'
-    }
     try {
-      if (typeof ReadableStream === 'undefined') {
-        await sendAssistantMessageFallback(question)
-        return
+      let streamError = ''
+      let streamedText = ''
+      let streamFinished = false
+      let streamedSuggestions: string[] = []
+      await withCsrfRetry((csrfToken) => streamAssistantReply('/api/assistant/chat/stream', { message: question }, {
+        onChunk: (chunk) => {
+          streamedText += chunk
+          setAssistantMessages((current) => current.map((entry) => entry.id === assistantMessageId ? { ...entry, text: streamedText, pending: true, suggestions: streamedSuggestions } : entry))
+        },
+        onSuggestions: (suggestions) => {
+          streamedSuggestions = suggestions
+          setAssistantMessages((current) => current.map((entry) => entry.id === assistantMessageId ? { ...entry, suggestions } : entry))
+        },
+        onDone: (payload) => {
+          streamFinished = true
+          const nextMessages = mapAssistantHistory(recordArray(payload.assistant_history), data)
+          if (nextMessages.length) {
+            setAssistantMessages(nextMessages)
+            return
+          }
+          const assistant = recordValue(payload.assistant)
+          setAssistantMessages((current) => current.map((entry) => entry.id === assistantMessageId ? { ...entry, text: textValue(assistant.reply).trim() || streamedText.trim(), suggestions: stringArray(assistant.suggestions).length ? stringArray(assistant.suggestions) : streamedSuggestions, pending: false, provider: textValue(assistant.provider) || undefined } : entry))
+        },
+        onError: (detail) => {
+          streamError = detail
+        },
+      }, csrfToken))
+      if (streamError) throw new Error(streamError)
+      if (!streamFinished) {
+        const response = await withCsrfRetry((csrfToken) => fetchJson<{ assistant: { reply: string; suggestions?: string[]; provider?: string }; assistant_history?: Array<Record<string, unknown>> }>('/api/assistant/chat', { method: 'POST', body: JSON.stringify({ message: question }) }, csrfToken))
+        const nextMessages = mapAssistantHistory(response.assistant_history ?? [], data)
+        if (nextMessages.length) {
+          setAssistantMessages(nextMessages)
+        } else {
+          setAssistantMessages((current) => current.map((entry) => entry.id === assistantMessageId ? { ...entry, text: response.assistant.reply, suggestions: response.assistant.suggestions ?? [], pending: false, provider: response.assistant.provider } : entry))
+        }
       }
-      await withCsrfRetry(async (csrfToken) => {
-        const response = await fetch('/api/assistant/stream', {
-          method: 'POST',
-          credentials: 'same-origin',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': csrfToken,
-          },
-          body: JSON.stringify({ message: question, session_id: assistantSessionIdRef.current }),
-        })
-        if (response.status === 401) {
-          window.location.href = '/login'
-          throw new Error('Authentication required.')
-        }
-        if (!response.ok) {
-          let detail = response.statusText
-          try {
-            const payload = await response.json()
-            detail = payload.error ?? payload.detail ?? payload.message ?? JSON.stringify(payload)
-          } catch {
-            detail = await response.text()
-          }
-          throw new Error(detail || `Request failed with status ${response.status}`)
-        }
-        if (!response.body?.getReader) {
-          await sendAssistantMessageFallback(question)
-          return
-        }
-        const reader = response.body.getReader()
-        const decoder = new TextDecoder()
-        let buffer = ''
-        let hasStarted = false
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
-          buffer += decoder.decode(value, { stream: true })
-          const events = buffer.split('\n\n')
-          buffer = events.pop() ?? ''
-          for (const rawEvent of events) {
-            const dataLines = rawEvent
-              .split('\n')
-              .filter((line) => line.startsWith('data:'))
-              .map((line) => line.slice(5).trimStart())
-            if (!dataLines.length) continue
-            const token = dataLines.join('\n')
-            if (token === '[DONE]') {
-              return
-            }
-            if (!hasStarted) {
-              hasStarted = true
-              setAssistantWaitingForFirstChunk(false)
-              setAssistantMessages((current) => [...current, { role: 'assistant', text: token, createdAt: new Date().toISOString() }])
-            } else {
-              setAssistantMessages((current) => {
-                const next = [...current]
-                for (let index = next.length - 1; index >= 0; index -= 1) {
-                  if (next[index]?.role === 'assistant') {
-                    next[index] = {
-                      ...next[index],
-                      text: `${next[index].text}${token}`,
-                    }
-                    break
-                  }
-                }
-                return next
-              })
-            }
-          }
-        }
-        if (!hasStarted) {
-          await sendAssistantMessageFallback(question)
-        }
-      })
     } catch (reason) {
       const detail = reason instanceof Error ? reason.message : 'Assistant request failed.'
-        setAssistantMessages((current) => [
-          ...current,
-          {
-            role: 'assistant',
-            text: detail,
-            suggestions: [],
-            createdAt: new Date().toISOString(),
-          },
-        ])
+      setAssistantMessages((current) => current.map((entry) => entry.id === assistantMessageId ? { ...entry, text: detail, suggestions: [], pending: false } : entry))
+      toast.error(detail)
     } finally {
-      setAssistantWaitingForFirstChunk(false)
       setAssistantBusy(false)
-    }
-  }
-
-  async function sendAssistantFeedback(messageId: number, rating: 1 | -1) {
-    if (!data) return
-    setBusy(`feedback-${messageId}`)
-    setError('')
-    setMessage('')
-    try {
-      const response = await withCsrfRetry((csrfToken) =>
-        fetchJson<{ assistant_history?: Array<Record<string, any>>; copilot_training?: CopilotTrainingStatus }>(
-          '/api/assistant/feedback',
-          {
-            method: 'POST',
-            body: JSON.stringify({
-              message_id: messageId,
-              rating,
-            }),
-          },
-          csrfToken,
-        ),
-      )
-      if (response.assistant_history?.length) {
-        setAssistantMessages(mapAssistantHistory(response.assistant_history, data))
-      }
-      if (response.copilot_training) {
-        setData((current) => current ? { ...current, copilot_training: response.copilot_training } : current)
-      }
-      setMessage(rating > 0 ? 'Saved positive copilot feedback.' : 'Saved negative copilot feedback.')
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to save copilot feedback.')
-    } finally {
-      setBusy('')
-    }
-  }
-
-  async function runCopilotTrainingExport() {
-    if (!data) return
-    setBusy('copilot-training-export')
-    setError('')
-    setMessage('')
-    try {
-      const response = await withCsrfRetry((csrfToken) =>
-        fetchJson<{ copilot_training: CopilotTrainingStatus }>(
-          '/api/copilot/training/export',
-          {
-            method: 'POST',
-          },
-          csrfToken,
-        ),
-      )
-      setData((current) => current ? { ...current, copilot_training: response.copilot_training } : current)
-      setMessage('Exported a fresh copilot training bundle from live chats and feedback.')
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to export the copilot training bundle.')
-    } finally {
-      setBusy('')
     }
   }
 
   async function uploadDataset() {
     if (!data || !knowledgeFile) return
     setBusy('upload-dataset')
-    setError('')
-    setMessage('')
     try {
       const contentBase64 = await fileToBase64(knowledgeFile)
-      const response = await withCsrfRetry((csrfToken) =>
-        fetchJson<BootstrapPayload>(
-          '/api/v2/datasets/upload',
-          {
-            method: 'POST',
-            body: JSON.stringify({
-              filename: knowledgeFile.name,
-              content_type: knowledgeFile.type || 'application/octet-stream',
-              content_base64: contentBase64,
-              gig_url: gigUrl,
-            }),
-          },
-          csrfToken,
-        ),
-      )
+      const response = await withCsrfRetry((csrfToken) => fetchJson<BootstrapPayload>('/api/v2/datasets/upload', { method: 'POST', body: JSON.stringify({ filename: knowledgeFile.name, content_type: knowledgeFile.type || 'application/octet-stream', content_base64: contentBase64, gig_url: gigUrl }) }, csrfToken))
       applyBootstrap(response)
       setKnowledgeFile(null)
-      if (datasetInputRef.current) {
-        datasetInputRef.current.value = ''
-      }
-      setMessage(`Uploaded ${knowledgeFile.name} to the copilot knowledge base.`)
+      toast.success(`Uploaded ${knowledgeFile.name} to the knowledge base.`)
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Dataset upload failed.')
+      toast.error(reason instanceof Error ? reason.message : 'Dataset upload failed.')
     } finally {
       setBusy('')
     }
@@ -683,78 +333,65 @@ function App() {
   async function deleteDataset(documentId: string) {
     if (!data) return
     setBusy(`delete-dataset-${documentId}`)
-    setError('')
-    setMessage('')
     try {
-      const response = await withCsrfRetry((csrfToken) =>
-        fetchJson<BootstrapPayload>(
-          `/api/v2/datasets/${documentId}`,
-          {
-            method: 'DELETE',
-          },
-          csrfToken,
-        ),
-      )
+      const response = await withCsrfRetry((csrfToken) => fetchJson<BootstrapPayload>(`/api/v2/datasets/${documentId}`, { method: 'DELETE' }, csrfToken))
       applyBootstrap(response)
-      setMessage('Dataset removed from the copilot knowledge base.')
+      toast.success('Dataset removed from the knowledge base.')
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Dataset deletion failed.')
+      toast.error(reason instanceof Error ? reason.message : 'Dataset deletion failed.')
     } finally {
       setBusy('')
     }
   }
 
-  async function reviewSecurityAttempt(attemptId: string, action: 'save' | 'discard') {
+  async function askCopilotAboutDataset(filename: string) {
+    setActivePage('copilot')
+    await sendAssistantMessage(`What can I use from ${filename} for my Fiverr gig right now?`)
+  }
+
+  async function sendCopilotPositiveFeedback(message: AssistantMessage) {
+    await withCsrfRetry((token) => ingestTrainingText({
+      content: message.text,
+      source_type: 'user_feedback_positive',
+      source: 'copilot_chat',
+      message_id: message.id,
+    }, token))
+    toast.success('Positive feedback sent to the AI Brain.')
+  }
+
+  async function sendCopilotNegativeFeedback(message: AssistantMessage, reason: string) {
+    await withCsrfRetry((token) => ingestTrainingText({
+      content: message.text,
+      source_type: 'feedback_negative',
+      source: 'copilot_chat',
+      message_id: message.id,
+      context: reason,
+    }, token))
+    toast.info('Negative feedback saved for review.')
+  }
+
+  async function handleLogout() {
     if (!data) return
-    setBusy(`security-${action}-${attemptId}`)
-    setError('')
-    setMessage('')
     try {
-      await withCsrfRetry((csrfToken) =>
-        fetchJson<{ attempt: Record<string, unknown> }>(
-          `/api/security/login-attempts/${attemptId}/${action}`,
-          {
-            method: 'POST',
-          },
-          csrfToken,
-        ),
-      )
-      const refreshed = await loadBootstrap()
-      applyBootstrap(refreshed)
-      setMessage(action === 'save' ? 'Security capture saved.' : 'Security capture discarded.')
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Security review action failed.')
+      await withCsrfRetry((csrfToken) => fetchJson<Record<string, never>>('/api/auth/logout', { method: 'POST', body: JSON.stringify({}) }, csrfToken))
+    } catch {
+      // Ignore logout failures and still navigate to login.
     } finally {
-      setBusy('')
+      window.location.href = '/login'
     }
   }
 
   async function copyExtensionToken(token: string) {
-    if (!token) return
+    if (!token) {
+      toast.warning('No extension API token is configured yet.')
+      return
+    }
     try {
       await navigator.clipboard.writeText(token)
-      setMessage('Extension token copied to clipboard.')
-      setError('')
+      toast.success('Extension API token copied.')
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to copy the extension token.')
+      toast.error(reason instanceof Error ? reason.message : 'Unable to copy the extension token.')
     }
-  }
-
-  function dismissExtensionPrompt() {
-    window.localStorage.setItem(extensionPromptDismissKey, '1')
-    setShowExtensionPrompt(false)
-  }
-
-  function exportChat() {
-    const markdown = assistantMessages
-      .map((messageEntry) => `**${messageEntry.role === 'assistant' ? 'Copilot' : 'You'}:** ${messageEntry.text}`)
-      .join('\n\n---\n\n')
-    const blob = new Blob([markdown], { type: 'text/markdown' })
-    const anchor = document.createElement('a')
-    anchor.href = URL.createObjectURL(blob)
-    anchor.download = `copilot-chat-${Date.now()}.md`
-    anchor.click()
-    URL.revokeObjectURL(anchor.href)
   }
 
   function handleAssistantKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -765,1143 +402,90 @@ function App() {
   }
 
   if (!data) {
-    return <main className="shell loading">Preparing the blueprint dashboard...</main>
+    return (
+      <main className="shell loading">
+        <div className="loading-panel">
+          <strong>{fatalError ? 'Dashboard failed to load' : 'Preparing the blueprint dashboard...'}</strong>
+          <p>{fatalError || 'Loading your live workspace and connected market data.'}</p>
+          {fatalError ? <button type="button" onClick={() => void refresh(false)}>Try again</button> : null}
+        </div>
+      </main>
+    )
   }
 
-  const report = data.state.latest_report ?? {}
-  const comparison = data.state.gig_comparison ?? {}
-  const blueprint = comparison.implementation_blueprint ?? {}
-  const scraperRun = data.state.scraper_run ?? {}
-  const hostinger = data.hostinger ?? {}
+  const report = recordValue(data.state.latest_report)
+  const comparison = recordValue(data.state.gig_comparison)
+  const blueprint = recordValue(comparison.implementation_blueprint)
+  const scraperRun = recordValue(data.state.scraper_run)
+  const hostinger = recordValue(data.hostinger)
   const datasets = data.datasets ?? []
-  const slackSettings = (data.state.notifications?.slack ?? {}) as Record<string, any>
-  const myGig = (comparison.my_gig ?? {}) as Record<string, any>
-  const failedLoginAttempts = (data.security?.failed_login_attempts ?? []) as FailedLoginAttemptRecord[]
-  const titleOptions = (blueprint.title_options ?? []) as TitleOption[]
+  const slackSettings = recordValue(data.state.notifications?.slack)
+  const extensionSettings = recordValue(data.state.notifications?.extension)
+  const myGig = recordValue(comparison.my_gig)
+  const titleOptions = (comparison.title_options ?? blueprint.title_options ?? []) as TitleOption[]
   const descriptionOptions = (blueprint.description_options ?? []) as DescriptionOption[]
   const recommendedPackages = (blueprint.recommended_packages ?? []) as RecommendedPackage[]
   const personaFocus = (blueprint.persona_focus ?? []) as PersonaFocus[]
-  const pageOneTopTen = ((comparison.first_page_top_10 ?? []) as CompetitorRecord[]).slice(0, 10)
+  const topTen = ((comparison.first_page_top_10 ?? []) as CompetitorRecord[]).slice(0, 10)
   const oneByOne = (comparison.one_by_one_recommendations ?? []) as CompetitorRecommendation[]
-  const keywordScore = (comparison.keyword_score ?? {
-    enabled: false,
-    score: 0,
-    difficulty: 'unknown',
-    summary: 'Run a comparison to score this keyword.',
-  }) as KeywordScore
-  const scraperLogs = (data.scraper_logs ?? []) as ScraperLogRecord[]
-  const scraperSummary = (data.scraper_summary ?? {
-    total_runs: 0,
-    success_rate: 0,
-    failure_rate: 0,
-    avg_duration_ms: 0,
-    last_success_at: '',
-    last_error: '',
-  }) as ScraperSummary
-  const timeline = (data.timeline ?? []) as ComparisonTimelinePoint[]
-  const comparisonDiff = (data.comparison_diff ?? {
-    available: false,
-    summary: 'No comparison diff is available yet.',
-    changes: [],
-  }) as ComparisonDiffPayload
-  const topRankedGig = (comparison.top_ranked_gig ?? pageOneTopTen[0] ?? {}) as Record<string, any>
-  const topRankedReasons = (comparison.why_top_ranked_gig_is_first ?? topRankedGig.why_on_page_one ?? []) as string[]
-  const assistantQuickPrompts = buildAssistantQuickPrompts(comparison, blueprint, scraperRun)
-  const activeJob = data.job_runs.find((job: JobRun) => ['queued', 'running'].includes(job.status)) ?? data.job_runs[0]
-  const hasComparisonContext = Boolean(
-    comparison.status || comparison.primary_search_term || comparison.gig_url || pageOneTopTen.length || oneByOne.length,
-  )
-  const competitorSource = hasComparisonContext ? pageOneTopTen : data.competitors
-  const competitors = [...competitorSource].sort((a, b) => {
-    if (sortKey === 'rank_position') {
-      return Number(a.rank_position ?? 999) - Number(b.rank_position ?? 999)
-    }
-    const left = Number(a[sortKey] ?? 0)
-    const right = Number(b[sortKey] ?? 0)
-    return sortKey === 'starting_price' ? left - right : right - left
+  const topRankedGig = recordValue(comparison.top_ranked_gig ?? topTen[0])
+  const topRankedReasons = stringArray(comparison.why_top_ranked_gig_is_first).length ? stringArray(comparison.why_top_ranked_gig_is_first) : stringArray(topRankedGig.why_on_page_one)
+  const competitorSource = topTen.length ? topTen : data.competitors
+  const competitors = [...competitorSource].sort((left, right) => {
+    if (sortKey === 'rank_position') return Number(left.rank_position ?? 999) - Number(right.rank_position ?? 999)
+    const leftValue = Number(left[sortKey] ?? 0)
+    const rightValue = Number(right[sortKey] ?? 0)
+    return sortKey === 'starting_price' ? leftValue - rightValue : rightValue - leftValue
   })
   const queue: QueueRecord[] = (data.state.queue?.length ? data.state.queue : data.queue) as QueueRecord[]
-  const selectedQueue = queue[0]
-  const radar = [
-    { name: 'Discovery', value: clamp((data.state.metrics_history.at(-1)?.ctr ?? 0) * 12) },
-    { name: 'Conversion', value: clamp((data.state.metrics_history.at(-1)?.conversion_rate ?? 0) * 10) },
-    { name: 'Keywords', value: clamp((report.niche_pulse?.trending_queries?.length ?? 0) * 16) },
-    { name: 'Actions', value: clamp((blueprint.weekly_actions?.length ?? 0) * 18) },
-    { name: 'Trust', value: clamp(report.optimization_score ?? 0) },
-  ]
-  const timelineChart = timeline.map((item) => ({
-    ...item,
-    label: shortDate(item.created_at),
-  }))
-  const copilotTraining = (data.copilot_training ?? {
-    enabled: true,
-    status: 'idle',
-    train_examples: 0,
-    holdout_examples: 0,
-    preference_examples: 0,
-    feedback: {
-      total: 0,
-      positive: 0,
-      negative: 0,
-      positive_ratio: 0,
-    },
-    recent_topics: [],
-  }) as CopilotTrainingStatus
-  const copilotMeta = ((data as any)?.copilot ?? (data as any)?.copilot_learning ?? {}) as Record<string, any>
-  const configMeta = ((data as any)?.config ?? {}) as Record<string, any>
-  const latestAssistantMessage = [...assistantMessages].reverse().find((entry) => entry.role === 'assistant')
-  const latestAssistantTimestamp = latestAssistantMessage?.createdAt
-    ? new Date(latestAssistantMessage.createdAt).toLocaleString()
-    : '--'
-  const extensionInstall = data.extension_install ?? {
-    enabled: false,
-    download_url: '/downloads/fiverr-market-capture.zip',
-    guide_url: '/extension/install',
-    token_configured: false,
-    api_token: '',
-    api_base_url: 'https://animha.co.in',
-  }
-  const shouldShowExtensionPrompt = extensionInstall.enabled && !extensionInstalled && showExtensionPrompt
+  const comparisonHistory = recordArray(data.state.comparison_history)
+  const assistantQuickPrompts = buildAssistantQuickPrompts(comparison, blueprint, scraperRun)
+  const assistantStarterPrompts = assistantQuickPrompts.slice(0, 3)
+  const extensionToken = textValue(extensionSettings.api_token)
+  const extensionDownloadUrl = textValue(extensionSettings.download_url) || '/downloads/fiverr-market-capture.zip'
+  const extensionGuideUrl = textValue(extensionSettings.guide_url) || '/extension/install'
+  const extensionPromptVisible = !extensionPromptDismissed && !Boolean(extensionSettings.installed)
+  const pageTitle = PAGE_TITLES[activePage]
+  const pageContent = useMemo(() => {
+    const comparisonDiff = buildComparisonDiff(comparisonHistory)
+    const timeline = buildComparisonTimeline(comparisonHistory)
+    const radar = [
+      { name: 'Discovery', value: clamp((data.state.metrics_history[data.state.metrics_history.length - 1]?.ctr ?? 0) * 12) },
+      { name: 'Conversion', value: clamp((data.state.metrics_history[data.state.metrics_history.length - 1]?.conversion_rate ?? 0) * 10) },
+      { name: 'Keywords', value: clamp(stringArray(recordValue(report.niche_pulse).trending_queries).length * 16) },
+      { name: 'Actions', value: clamp(stringArray(blueprint.weekly_actions).length * 18) },
+      { name: 'Trust', value: clamp(numberValue(report.optimization_score) ?? 0) },
+    ]
+    switch (activePage) {
+      case 'dashboard':
+        return <DashboardPage optimizationScore={numberValue(report.optimization_score) ?? '--'} recommendedTitle={textValue(blueprint.recommended_title)} pageOneTracked={topTen.length} primarySearchTerm={textValue(comparison.primary_search_term)} scraperStatus={textValue(scraperRun.status)} competitorCount={numberValue(comparison.competitor_count) ?? competitors.length} lastRunMessage={textValue(scraperRun.last_status_message)} extensionPromptVisible={extensionPromptVisible} extensionDownloadUrl={extensionDownloadUrl} extensionGuideUrl={extensionGuideUrl} extensionTokenConfigured={Boolean(extensionToken)} extensionToken={extensionToken} extensionApiBaseUrl={window.location.origin} onCopyExtensionToken={copyExtensionToken} onDismissExtensionPrompt={() => setExtensionPromptDismissed(true)} comparisonStatus={textValue(comparison.status)} topRankedTitle={textValue(topRankedGig.title)} topRankedSeller={textValue(topRankedGig.seller_name)} topRankedRank={topRankedGig.rank_position ? `#${String(topRankedGig.rank_position)}` : '--'} topRankedPrice={numberValue(topRankedGig.starting_price)} topRankedReviews={String(topRankedGig.reviews_count ?? '--')} topRankedTerm={textValue(topRankedGig.matched_term) || textValue(comparison.primary_search_term)} topRankedReasons={topRankedReasons} whyCompetitorsWin={stringArray(comparison.why_competitors_win).length ? stringArray(comparison.why_competitors_win) : stringArray(recordValue(report.competitive_gap_analysis).why_competitors_win)} myGigTitle={textValue(myGig.title)} myGigPrice={numberValue(myGig.starting_price)} myGigReviews={String(myGig.reviews_count ?? '--')} marketAnchorPrice={numberValue(comparison.market_anchor_price)} detectedTerms={stringArray(comparison.detected_search_terms)} titlePatterns={stringArray(comparison.title_patterns)} whatToImplement={stringArray(comparison.what_to_implement).length ? stringArray(comparison.what_to_implement) : stringArray(blueprint.weekly_actions)} doThisFirst={stringArray(comparison.do_this_first).length ? stringArray(comparison.do_this_first) : stringArray(blueprint.do_this_first)} currentGigUrl={gigUrl} currentTerms={terms} topTrackedGigTitle={textValue(topTen[0]?.title)} datasets={datasets} />
+      case 'optimizer':
+        return <GigOptimizerPage liveMode={liveMode} onSetLiveMode={setLiveMode} gigUrl={gigUrl} onGigUrlChange={setGigUrl} terms={terms} onTermsChange={setTerms} manualInput={manualInput} onManualInputChange={setManualInput} busy={busy} onRunJob={postJob} maxResults={maxResults} onMaxResultsChange={setMaxResults} autoCompareEnabled={autoCompareEnabled} onToggleAutoCompare={() => setAutoCompareEnabled((current) => !current)} autoCompareMinutes={autoCompareMinutes} onAutoCompareMinutesChange={setAutoCompareMinutes} onSaveMarketplaceSettings={saveMarketplaceSettings} onRunNotificationTest={runNotificationTest} slackConfigured={Boolean(slackSettings.configured)} recommendedTitle={textValue(blueprint.recommended_title)} recommendedTags={stringArray(blueprint.recommended_tags)} titleOptions={titleOptions} descriptionBlueprint={stringArray(blueprint.description_blueprint)} descriptionFull={textValue(blueprint.description_full)} descriptionOptions={descriptionOptions} pricingStrategy={stringArray(blueprint.pricing_strategy)} recommendedPackages={recommendedPackages} trustBoosters={stringArray(blueprint.trust_boosters)} faqRecommendations={stringArray(blueprint.faq_recommendations)} personaFocus={personaFocus} missingTags={stringArray(recordValue(comparison.tag_gap).missing_tags)} powerTags={stringArray(recordValue(comparison.tag_gap).power_tags)} tagCoverageScore={String(numberValue(recordValue(comparison.tag_gap).coverage_score) ?? '--')} onQueueRecommendation={queueRecommendation} onOpenAIBrain={() => setActivePage('brain')} />
+      case 'competitors':
+        return <CompetitorPage pageOneTopTen={topTen} oneByOne={oneByOne} comparisonMessage={textValue(comparison.message) || textValue(comparison.status_message) || textValue(scraperRun.last_status_message)} competitors={competitors} sortKey={sortKey} onSortKeyChange={setSortKey} timeline={timeline} timelineChart={timeline} comparisonDiff={comparisonDiff} radar={radar} competitorCount={numberValue(comparison.competitor_count) ?? competitors.length} />
+      case 'copilot':
+        return <CopilotPage messages={assistantMessages} busy={assistantBusy} input={assistantInput} onInputChange={setAssistantInput} onSendMessage={sendAssistantMessage} onPositiveFeedback={sendCopilotPositiveFeedback} onNegativeFeedback={sendCopilotNegativeFeedback} onKeyDown={handleAssistantKeyDown} assistantStarterPrompts={assistantStarterPrompts} assistantQuickPrompts={assistantQuickPrompts} />
+      case 'brain':
+        return <AIBrainPage csrfToken={csrfToken} refreshCsrf={refreshCsrf} />
+      case 'metrics':
+        return <MetricsPage metricsHistory={data.state.metrics_history} keywordScore={buildKeywordScore(comparison, report)} primarySearchTerm={textValue(comparison.primary_search_term)} marketAnchorPrice={currencyValue(numberValue(comparison.market_anchor_price))} scraperSummary={buildScraperSummary(comparison, scraperRun)} scraperLogs={buildScraperLogs(comparison, scraperRun)} trendingQueries={stringArray(recordValue(report.niche_pulse).trending_queries)} topSearchTitles={stringArray(comparison.top_search_titles)} connectorHealth={buildConnectorHealth(recordValue(data.state.setup_health).connectors, data.state.connector_status)} />
+      case 'settings':
+        return <SettingsPage knowledgeFile={knowledgeFile} onKnowledgeFileChange={setKnowledgeFile} onUploadDataset={uploadDataset} datasets={datasets} busy={busy} onDeleteDataset={deleteDataset} onAskCopilotAboutDataset={askCopilotAboutDataset} memoryDocuments={recordArray(data.memory?.knowledge_documents)} queue={queue} selectedQueue={queue[0]} onReviewQueue={reviewQueue} activeJob={activeJob(data.job_runs)} jobRuns={data.job_runs} hostinger={hostinger} onRefreshHostinger={refreshHostinger} />
+      default:
+        return null
+    }
+  }, [activePage, assistantBusy, assistantInput, assistantMessages, assistantQuickPrompts, assistantStarterPrompts, autoCompareEnabled, autoCompareMinutes, blueprint, busy, comparison, comparisonHistory, competitors, csrfToken, data, datasets, extensionDownloadUrl, extensionGuideUrl, extensionPromptVisible, extensionToken, gigUrl, hostinger, knowledgeFile, liveMode, manualInput, maxResults, oneByOne, personaFocus, queue, refreshCsrf, report, scraperRun, sendCopilotNegativeFeedback, sendCopilotPositiveFeedback, slackSettings, sortKey, terms, titleOptions, topRankedGig, topRankedReasons, topTen])
 
   return (
-    <main className="shell">
-      <section className="hero">
-        <div>
-          <div className="hero-topbar">
-            <p className="eyebrow">GigOptimizer Pro Blueprint</p>
-            <a className="hero-link" href="/terms-of-service" target="_blank" rel="noopener noreferrer">Terms of Service</a>
-          </div>
-          <h1>Live Fiverr visibility, page-one competitor tracking, and exact gig changes to publish next.</h1>
-          <p className="lede">
-            This dashboard watches Fiverr page one, compares your gig against the current top 10 public results, and turns
-            that into queueable title, description, keyword, pricing, and trust recommendations.
-          </p>
-        </div>
-        <div className="hero-grid">
-          <Metric label="Optimization score" value={String(report.optimization_score ?? '--')} />
-          <Metric label="Recommended title" value={blueprint.recommended_title ?? 'Run a market compare'} />
-          <Metric label="Page-one gigs tracked" value={String(pageOneTopTen.length || comparison.competitor_count || 0)} />
-          <Metric label="Primary search term" value={String(comparison.primary_search_term ?? '--')} />
-        </div>
-      </section>
-
-      <div className="status-bar">
-        <span className={`status-bar-item status--${scraperRun.status === 'running' ? 'warning' : scraperRun.status === 'ok' || scraperRun.status === 'completed' ? 'ok' : 'queued'}`}>
-          Scraper: {String(scraperRun.status ?? 'idle')}
-        </span>
-        <span className="status-bar-item">
-          {comparison.competitor_count ?? 0} competitors · {pageOneTopTen.length} page-one
-        </span>
-        <span className="status-bar-item">
-          Last run: {scraperRun.last_status_message ? String(scraperRun.last_status_message).slice(0, 40) : 'never'}
-        </span>
-        <span className={`status-bar-item status--${data ? 'ok' : 'queued'}`}>
-          Data: {data ? 'loaded' : 'loading'}
-        </span>
-      </div>
-
-      {(message || error) && <section className={`flash ${error ? 'flash--error' : ''}`}>{error || message}</section>}
-
-      {shouldShowExtensionPrompt ? (
-        <section className="card extension-prompt">
-          <div className="card-head">
-            <h2>Install the Fiverr capture extension</h2>
-            <span className="status status--queued">recommended</span>
-          </div>
-          <p className="inline-note">
-            This site can’t silently install a Chrome extension for you, but it can prompt you to download it and open the
-            install guide automatically. Once the extension is loaded, this banner disappears on its own.
-          </p>
-          <div className="meta-grid">
-            <MetaItem label="API base URL" value={extensionInstall.api_base_url || 'https://animha.co.in'} />
-            <MetaItem label="Token" value={extensionInstall.token_configured ? 'Ready to copy' : 'Not configured'} />
-          </div>
-          <div className="button-row">
-            <a className="button-link" href={extensionInstall.download_url} target="_blank" rel="noopener noreferrer">Download extension ZIP</a>
-            <a className="button-link button-link--secondary" href={extensionInstall.guide_url} target="_blank" rel="noopener noreferrer">Open install guide</a>
-            <button className="secondary" onClick={() => void copyExtensionToken(extensionInstall.api_token || '')} disabled={!extensionInstall.api_token}>Copy API token</button>
-            <button className="secondary" onClick={dismissExtensionPrompt}>Dismiss</button>
-          </div>
-        </section>
-      ) : null}
-
-      <section className="commands card">
-        <div className="card-head">
-          <h2>Run jobs</h2>
-          <label><input checked={liveMode} onChange={(event) => setLiveMode(event.target.checked)} type="checkbox" /> live connectors</label>
-        </div>
-        <div className="form-grid">
-          <input value={gigUrl} onChange={(event) => setGigUrl(event.target.value)} placeholder="My Fiverr gig URL" />
-          <input value={terms} onChange={(event) => setTerms(event.target.value)} placeholder="wordpress speed, pagespeed insights, core web vitals" />
-        </div>
-        <textarea rows={4} value={manualInput} onChange={(event) => setManualInput(event.target.value)} placeholder="Title | price | rating | reviews | delivery | url" />
-        <div className="button-row">
-          <button onClick={() => postJob('pipeline', { use_live_connectors: liveMode })} disabled={busy === 'pipeline'}>{busy === 'pipeline' ? 'Queueing...' : 'Run pipeline'}</button>
-          <button onClick={() => postJob('marketplace_compare', { gig_url: gigUrl, search_terms: splitTerms(terms) })} disabled={busy === 'marketplace_compare'}>{busy === 'marketplace_compare' ? 'Queueing...' : 'Compare gig vs top 10'}</button>
-          <button onClick={() => postJob('marketplace_scrape', { gig_url: gigUrl, search_terms: splitTerms(terms) })} disabled={busy === 'marketplace_scrape'}>{busy === 'marketplace_scrape' ? 'Queueing...' : 'Scan market'}</button>
-          <button onClick={() => postJob('manual_compare', { gig_url: gigUrl, search_terms: splitTerms(terms), competitor_input: manualInput })} disabled={busy === 'manual_compare' || !manualInput.trim()}>{busy === 'manual_compare' ? 'Queueing...' : 'Analyze manual input'}</button>
-          <button onClick={() => postJob('weekly_report', { use_live_connectors: liveMode })} disabled={busy === 'weekly_report'}>{busy === 'weekly_report' ? 'Queueing...' : 'Run weekly report'}</button>
-          <button className="secondary" onClick={() => void refresh()} disabled={busy === 'refresh'}>Refresh dashboard</button>
-          <button className="secondary" onClick={() => setShowTrainingDashboard(v => !v)}>{showTrainingDashboard ? 'Back to Dashboard' : 'Training Dashboard'}</button>
-        </div>
-      </section>
-
-      {showTrainingDashboard ? (
-        <CopilotTrainingDashboard />
-      ) : (<>
-            <section className="content-grid">
-        <article className="card">
-          <div className="card-head"><h2>Marketplace settings</h2><span>{slackSettings.configured ? 'Slack ready' : 'Slack optional'}</span></div>
-          <div className="form-grid">
-            <input value={gigUrl} onChange={(event) => setGigUrl(event.target.value)} placeholder="Default Fiverr gig URL" />
-            <input value={terms} onChange={(event) => setTerms(event.target.value)} placeholder="Search terms used for page-one tracking" />
-            <input type="number" min={10} max={25} value={maxResults} onChange={(event) => setMaxResults(Number(event.target.value || 10))} placeholder="Max competitor results" />
-            <input type="number" min={5} max={240} value={autoCompareMinutes} onChange={(event) => setAutoCompareMinutes(Number(event.target.value || 5))} placeholder="Auto compare interval (minutes)" />
-          </div>
-          <div className="button-row button-row--three">
-            <button className="secondary" onClick={() => setAutoCompareEnabled((current) => !current)}>
-              {autoCompareEnabled ? 'Auto compare: on' : 'Auto compare: off'}
-            </button>
-            <button onClick={() => void saveMarketplaceSettings()} disabled={busy === 'save-settings'}>{busy === 'save-settings' ? 'Saving...' : 'Save settings'}</button>
-            <button className="secondary" onClick={() => void runNotificationTest('slack')} disabled={busy === 'test-slack'}>{busy === 'test-slack' ? 'Testing...' : 'Test Slack'}</button>
-          </div>
-          <p className="inline-note">The page-one leaderboard uses the first search term as the primary Fiverr query, then compares those top 10 gigs against your gig one by one.</p>
-        </article>
-
-        <article className="card">
-          <div className="card-head"><h2>Page-one leader</h2><span className={`status status--${comparison.status ?? 'pending'}`}>{comparison.status ?? 'idle'}</span></div>
-          <div className="meta-grid">
-            <MetaItem label="Leader rank" value={`#${String(topRankedGig.rank_position ?? 1)}`} />
-            <MetaItem label="Leader price" value={currency(topRankedGig.starting_price)} />
-            <MetaItem label="Leader reviews" value={String(topRankedGig.reviews_count ?? '--')} />
-            <MetaItem label="Leader term" value={String(topRankedGig.matched_term ?? comparison.primary_search_term ?? '--')} />
-          </div>
-          <div className="option-card">
-            <p className="eyebrow">Current top gig</p>
-            <strong>{String(topRankedGig.title ?? 'Run a market compare')}</strong>
-            <p>{String(topRankedGig.seller_name ?? 'Unknown seller')}</p>
-            <ul className="bullet-list compact">
-              {topRankedReasons.map((item: string) => <li key={item}>{item}</li>)}
-            </ul>
-          </div>
-          <h3>Why competitors win</h3>
-          <ul className="bullet-list">
-            {((comparison.why_competitors_win ?? report.competitive_gap_analysis?.why_competitors_win ?? []) as string[]).map((item: string) => <li key={item}>{item}</li>)}
-          </ul>
-        </article>
-      </section>
-
-      <section className="content-grid">
-        <article className="card">
-          <div className="card-head"><h2>Knowledge base</h2><span>{datasets.length} file(s)</span></div>
-          <p className="inline-note">
-            Upload CSV, JSON, Markdown, HTML, TXT, or DOCX files. The copilot will retrieve from these files when you ask
-            questions about your gig, competitors, reviews, package strategy, or niche history.
-          </p>
-          <div className="form-grid">
-            <input
-              ref={datasetInputRef}
-              type="file"
-              accept=".txt,.md,.markdown,.json,.csv,.html,.htm,.docx"
-              onChange={(event) => setKnowledgeFile(event.target.files?.[0] ?? null)}
-            />
-            <button onClick={() => void uploadDataset()} disabled={busy === 'upload-dataset' || !knowledgeFile}>
-              {busy === 'upload-dataset' ? 'Uploading...' : 'Upload dataset'}
-            </button>
-          </div>
-          <div className="table">
-            {datasets.length ? datasets.map((item: DatasetRecord) => (
-              <div className="row row--stacked" key={item.id}>
-                <div className="row-topline">
-                  <strong>{item.filename}</strong>
-                  <span className={`status status--${item.status === 'ready' ? 'ok' : 'queued'}`}>{item.status}</span>
-                </div>
-                <p>{item.preview || 'No preview extracted yet.'}</p>
-                <div className="row-metrics">
-                  <span>{Math.max(1, Math.round((item.size_bytes || 0) / 1024))} KB</span>
-                  <span>{item.metadata?.chunk_count ?? 0} chunks</span>
-                  <span>{item.created_at ? shortDate(item.created_at) : '--'}</span>
-                </div>
-                <div className="button-row button-row--two">
-                  <button className="secondary" onClick={() => void sendAssistantMessage(`What can I use from ${item.filename} for my Fiverr gig right now?`)}>
-                    Ask copilot
-                  </button>
-                  <button
-                    className="secondary"
-                    onClick={() => void deleteDataset(item.id)}
-                    disabled={busy === `delete-dataset-${item.id}`}
-                  >
-                    {busy === `delete-dataset-${item.id}` ? 'Removing...' : 'Delete'}
-                  </button>
-                </div>
-              </div>
-            )) : <p>No datasets uploaded yet.</p>}
-          </div>
-        </article>
-
-        <article className="card">
-          <div className="card-head"><h2>Copilot memory</h2><span>{(data.memory?.knowledge_documents ?? []).length} linked docs</span></div>
-          <ul className="bullet-list">
-            {((data.memory?.knowledge_documents ?? []) as Array<Record<string, any>>).map((item) => (
-              <li key={String(item.id)}>{String(item.filename ?? 'dataset')} - {String(item.preview ?? '').slice(0, 140)}</li>
-            ))}
-          </ul>
-          {!((data.memory?.knowledge_documents ?? []) as Array<Record<string, any>>).length ? (
-            <p className="inline-note">Once you upload data, the copilot will pull relevant snippets into each answer.</p>
-          ) : null}
-        </article>
-      </section>
-
-      <section className="content-grid">
-        <article className="card">
-          <div className="card-head"><h2>Copilot training</h2><span className={`status status--${String(copilotTraining.status ?? 'pending') === 'completed' ? 'ok' : 'queued'}`}>{String(copilotTraining.status ?? 'idle')}</span></div>
-          <div className="meta-grid">
-            <MetaItem label="Train examples" value={String(copilotTraining.train_examples ?? 0)} />
-            <MetaItem label="Holdout examples" value={String(copilotTraining.holdout_examples ?? 0)} />
-            <MetaItem label="Preference pairs" value={String(copilotTraining.preference_examples ?? 0)} />
-            <MetaItem label="Positive feedback" value={String(copilotTraining.feedback?.positive ?? 0)} />
-          </div>
-          <p className="inline-note">
-            This training bundle is built from live copilot chats, upload context, and your thumbs up/down signals. The export is PII-scrubbed and ready for later LoRA or DPO work.
-          </p>
-          <div className="pill-row">
-            {((copilotTraining.recent_topics ?? []) as string[]).slice(0, 6).map((topic) => (
-              <span className="pill" key={topic}>{topic}</span>
-            ))}
-          </div>
-          <div className="button-row button-row--two">
-            <button onClick={() => void runCopilotTrainingExport()} disabled={busy === 'copilot-training-export'}>
-              {busy === 'copilot-training-export' ? 'Exporting...' : 'Export training bundle'}
-            </button>
-            <button className="secondary" onClick={() => void sendAssistantMessage('What has the copilot learned from recent chats and uploads?')} disabled={assistantBusy}>
-              Ask what it learned
-            </button>
-          </div>
-        </article>
-
-        <article className="card">
-          <div className="card-head"><h2>n8n Automation</h2><span className="status status--queued">monitoring</span></div>
-          <div className="meta-grid">
-            <MetaItem label="AI Provider" value={String(copilotMeta.provider ?? configMeta.ai_provider ?? 'n8n')} />
-            <MetaItem label="Webhook URL" value={String(copilotMeta.model ?? '--')} />
-            <MetaItem label="Last copilot response" value={latestAssistantTimestamp} />
-          </div>
-          <div className="pill-row">
-            {['Daily gig health', 'Competitor alert', 'Knowledge refresh', 'Report generator', 'Stripe sync'].map((workflow) => (
-              <span className="pill" key={workflow}>{workflow}</span>
-            ))}
-          </div>
-        </article>
-      </section>
-
-      <section className="charts">
-        <article className="card">
-          <div className="card-head"><h2>Live metrics</h2><span>{data.state.metrics_history.length} points</span></div>
-          <div className="chart-shell">
-            <ResponsiveContainer width="100%" height={260}>
-              <LineChart data={data.state.metrics_history}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(102,124,153,0.2)" />
-                <XAxis dataKey="timestamp" tickFormatter={shortDate} stroke="#7b91ad" />
-                <YAxis stroke="#7b91ad" />
-                <Tooltip labelFormatter={(label) => shortDate(String(label ?? ''))} />
-                <Line dataKey="impressions" stroke="#49b3ff" strokeWidth={2.5} dot={false} />
-                <Line dataKey="ctr" stroke="#ff9966" strokeWidth={2.5} dot={false} />
-                <Line dataKey="conversion_rate" stroke="#5ed1a3" strokeWidth={2.5} dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </article>
-        <article className="card">
-          <div className="card-head"><h2>Market score radar</h2><span>{comparison.competitor_count ?? 0} competitors</span></div>
-          <div className="chart-shell">
-            <ResponsiveContainer width="100%" height={260}>
-              <RadarChart data={radar}>
-                <PolarGrid stroke="rgba(102,124,153,0.22)" />
-                <PolarAngleAxis dataKey="name" stroke="#7b91ad" />
-                <Radar dataKey="value" stroke="#49b3ff" fill="#49b3ff" fillOpacity={0.3} />
-              </RadarChart>
-            </ResponsiveContainer>
-          </div>
-        </article>
-      </section>
-
-      <section className="content-grid">
-        <article className="card">
-          <div className="card-head"><h2>Keyword quality</h2><span className={`status status--${keywordDifficultyTone(keywordScore.difficulty)}`}>{keywordScore.difficulty || 'unknown'}</span></div>
-          <div className="meta-grid">
-            <MetaItem label="Keyword" value={keywordScore.keyword || String(comparison.primary_search_term ?? '--')} />
-            <MetaItem label="Score" value={String(keywordScore.score ?? '--')} />
-            <MetaItem label="Competitors found" value={String(comparison.competitor_count ?? 0)} />
-            <MetaItem label="Market anchor" value={currency(comparison.market_anchor_price)} />
-          </div>
-          <p className="inline-note">{keywordScore.summary || 'Run a compare to score the current keyword.'}</p>
-          <div className="pill-row">
-            {Object.entries(keywordScore.components ?? {}).map(([label, value]) => (
-              <span className="pill" key={label}>{human(label)}: {String(value)}</span>
-            ))}
-          </div>
-        </article>
-
-        <article className="card">
-          <div className="card-head"><h2>Scraper visibility</h2><span>{scraperSummary.total_runs ?? 0} tracked runs</span></div>
-          <div className="meta-grid">
-            <MetaItem label="Success rate" value={percent(scraperSummary.success_rate)} />
-            <MetaItem label="Failure rate" value={percent(scraperSummary.failure_rate)} />
-            <MetaItem label="Avg duration" value={milliseconds(scraperSummary.avg_duration_ms)} />
-            <MetaItem label="Last success" value={scraperSummary.last_success_at ? shortDate(scraperSummary.last_success_at) : '--'} />
-          </div>
-          {scraperSummary.last_error ? <p className="inline-note">{scraperSummary.last_error}</p> : null}
-          <div className="table">
-            {scraperLogs.length ? scraperLogs.slice(0, 6).map((item) => (
-              <div className="row row--stacked" key={`${item.id}-${item.updated_at ?? item.created_at ?? ''}`}>
-                <div className="row-topline">
-                  <strong>{item.keyword || 'marketplace scrape'}</strong>
-                  <span className={`status status--${item.status || 'queued'}`}>{item.status || 'unknown'}</span>
-                </div>
-                <p>{String(item.meta_json?.last_message ?? item.error_msg ?? 'No status message captured yet.')}</p>
-                <div className="row-metrics">
-                  <span>{item.gigs_found ?? 0} gigs</span>
-                  <span>{milliseconds(item.duration_ms)}</span>
-                  <span>{item.updated_at ? shortDate(item.updated_at) : '--'}</span>
-                </div>
-              </div>
-            )) : <p className="inline-note">No scraper log rows yet. Run a live market compare to start building visibility history.</p>}
-          </div>
-        </article>
-      </section>
-
-      <section className="content-grid">
-        <article className="card">
-          <div className="card-head"><h2>My gig vs market</h2><span>{comparison.primary_search_term ?? '--'}</span></div>
-          <div className="meta-grid">
-            <MetaItem label="My gig title" value={String(myGig.title ?? '--')} />
-            <MetaItem label="My visible price" value={currency(myGig.starting_price)} />
-            <MetaItem label="My public reviews" value={String(myGig.reviews_count ?? '--')} />
-            <MetaItem label="Market anchor price" value={currency(comparison.market_anchor_price)} />
-            <MetaItem label="Detected search terms" value={(comparison.detected_search_terms ?? []).join(', ') || '--'} />
-            <MetaItem label="Top title patterns" value={(comparison.title_patterns ?? []).join(', ') || '--'} />
-          </div>
-          <h3>What to implement next</h3>
-          <ul className="bullet-list">
-            {((comparison.what_to_implement ?? blueprint.weekly_actions ?? []) as string[]).map((item: string) => <li key={item}>{item}</li>)}
-          </ul>
-          <h3>Do this first</h3>
-          <ul className="bullet-list">
-            {((comparison.do_this_first ?? blueprint.do_this_first ?? []) as string[]).map((item: string) => <li key={item}>{item}</li>)}
-          </ul>
-        </article>
-
-        <article className="card">
-          <div className="card-head"><h2>Live Fiverr feed</h2><span className={`status status--${scraperRun.status ?? 'pending'}`}>{scraperRun.status ?? 'idle'}</span></div>
-          <div className="meta-grid">
-            <MetaItem label="Search terms" value={(scraperRun.search_terms ?? []).join(', ') || '--'} />
-            <MetaItem label="Last status" value={scraperRun.last_status_message ?? '--'} />
-            <MetaItem label="Total results" value={String(scraperRun.total_results ?? 0)} />
-            <MetaItem label="Last URL" value={scraperRun.last_url ?? '--'} />
-          </div>
-          <div className="split-grid">
-            <div>
-              <h3>Recent scrape events</h3>
-              <div className="feed-list">
-                {((scraperRun.recent_events ?? []) as Array<Record<string, any>>).slice(-6).reverse().map((event: Record<string, any>, index: number) => (
-                  <div className="feed-item" key={`${event.timestamp ?? index}-${event.stage ?? ''}`}>
-                    <span className={`status status--${event.level ?? 'ok'}`}>{event.stage ?? 'update'}</span>
-                    <strong>{event.message ?? 'Marketplace update'}</strong>
-                    <p>{event.term || event.url || '--'}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div>
-              <h3>Recent gigs found</h3>
-              <div className="table">
-                {((scraperRun.recent_gigs ?? []) as Array<Record<string, any>>).slice(0, 6).map((item: Record<string, any>) => (
-                  <div className="row" key={`${item.url}-${item.title}`}>
-                    <div>
-                      <strong>{item.rank_position ? `#${item.rank_position} ` : ''}{item.title}</strong>
-                      <p>{item.seller_name || 'Unknown seller'}</p>
-                    </div>
-                    <div className="row-metrics">
-                      <span>{currency(item.starting_price)}</span>
-                      <span>{item.rating ?? '--'} ★</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </article>
-      </section>
-
-      <section className="content-grid">
-        <article className="card">
-          <div className="card-head"><h2>Comparison timeline</h2><span>{timeline.length} saved runs</span></div>
-          <div className="chart-shell">
-            {timelineChart.length ? (
-              <ResponsiveContainer width="100%" height={260}>
-                <LineChart data={timelineChart}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(102,124,153,0.2)" />
-                  <XAxis dataKey="label" stroke="#7b91ad" />
-                  <YAxis stroke="#7b91ad" />
-                  <Tooltip labelFormatter={(label) => String(label ?? '--')} />
-                  <Line dataKey="optimization_score" name="Optimization" stroke="#49b3ff" strokeWidth={2.5} dot={false} />
-                  <Line dataKey="keyword_score" name="Keyword score" stroke="#ff9966" strokeWidth={2.5} dot={false} />
-                  <Line dataKey="competitor_count" name="Competitors" stroke="#5ed1a3" strokeWidth={2.5} dot={false} />
-                </LineChart>
-              </ResponsiveContainer>
-            ) : (
-              <p className="inline-note">Comparison runs will appear here once you compare the same gig more than once.</p>
-            )}
-          </div>
-          <div className="table">
-            {timeline.slice(-5).reverse().map((item) => (
-              <div className="row" key={String(item.id)}>
-                <div>
-                  <strong>{item.keyword || 'market compare'}</strong>
-                  <p>{item.top_action || item.top_ranked_title || 'No action summary yet.'}</p>
-                </div>
-                <div className="row-metrics">
-                  <span>{item.optimization_score ?? '--'} score</span>
-                  <span>{item.keyword_difficulty ?? '--'}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </article>
-
-        <article className="card">
-          <div className="card-head"><h2>Latest comparison diff</h2><span>{comparisonDiff.available ? 'ready' : 'pending'}</span></div>
-          <p className="inline-note">{comparisonDiff.summary}</p>
-          <div className="meta-grid">
-            <MetaItem label="Earlier run" value={comparisonDiff.left?.created_at ? shortDate(String(comparisonDiff.left.created_at)) : '--'} />
-            <MetaItem label="Later run" value={comparisonDiff.right?.created_at ? shortDate(String(comparisonDiff.right.created_at)) : '--'} />
-          </div>
-          <div className="table">
-            {comparisonDiff.available && comparisonDiff.changes.length ? comparisonDiff.changes.map((change) => (
-              <div className="row row--stacked" key={`${change.label}-${String(change.before)}-${String(change.after)}`}>
-                <div className="row-topline">
-                  <strong>{change.label}</strong>
-                </div>
-                <div className="diff diff--stacked">
-                  <pre>{displayDiffValue(change.before)}</pre>
-                  <pre>{displayDiffValue(change.after)}</pre>
-                </div>
-              </div>
-            )) : <p className="inline-note">Run another comparison to see how the market recommendations changed over time.</p>}
-          </div>
-        </article>
-      </section>
-
-      <section className="content-grid">
-        <article className="card">
-          <div className="card-head"><h2>Top 10 gigs on Fiverr page one</h2><span>{pageOneTopTen.length}</span></div>
-          <div className="table">
-            {pageOneTopTen.length ? pageOneTopTen.map((item) => (
-              <div className="row row--stacked" key={`${item.url}-${item.rank_position ?? item.title}`}>
-                <div className="row-topline">
-                  <span className="rank-badge">#{item.rank_position ?? '?'}</span>
-                  <strong>{item.title}</strong>
-                  <span className={`status status--${item.is_first_page ? 'ok' : 'queued'}`}>
-                    {item.is_first_page ? 'page 1' : 'tracked'}
-                  </span>
-                </div>
-                <p className="row-seller">{item.seller_name || 'Unknown seller'} {(item.badges ?? []).join(' · ')}</p>
-                <p>{(item.why_on_page_one ?? item.win_reasons ?? []).join(' ') || 'No ranking reasons captured yet.'}</p>
-                <div className="row-metrics">
-                  <span>{currency(item.starting_price)}</span>
-                  <span>{item.rating ?? '--'} ★ ({item.reviews_count ?? 0})</span>
-                  <span>{item.delivery_days ? `${item.delivery_days}d delivery` : ''}</span>
-                </div>
-              </div>
-            )) : <p className="inline-note">{comparison.message || 'No live Fiverr page-one gigs matched this keyword yet. Try a more specific phrase.'}</p>}
-          </div>
-        </article>
-
-        <article className="card">
-          <div className="card-head"><h2>How to beat each top-10 gig</h2><span>{oneByOne.length}</span></div>
-          <div className="feed-list">
-            {oneByOne.length ? oneByOne.map((item) => (
-              <div className="feed-item" key={`${item.rank_position}-${item.competitor_title}`}>
-                <div className="row-topline">
-                  <strong>#{item.rank_position ?? '?'} {item.competitor_title}</strong>
-                  <span className={`status status--${item.priority === 'high' ? 'warning' : item.priority === 'medium' ? 'queued' : 'ok'}`}>{item.priority ?? 'next'}</span>
-                </div>
-                <p>{(item.why_it_ranks ?? []).join(' ') || 'No rank reason was generated.'}</p>
-                <p><strong>Do this:</strong> {item.primary_recommendation ?? 'No recommendation generated.'}</p>
-                <ul className="bullet-list compact">
-                  {(item.what_to_change ?? []).map((change) => <li key={`${item.rank_position}-${change}`}>{change}</li>)}
-                </ul>
-                <div className="row-metrics">
-                  <span>{currency(item.starting_price)}</span>
-                  <span>{item.reviews_count ?? '--'} reviews</span>
-                  <span>{item.expected_gain ?? '--'}% est. gain</span>
-                </div>
-              </div>
-            )) : <p className="inline-note">{comparison.message || 'Run a compare to generate one-by-one recommendations against page-one gigs.'}</p>}
-          </div>
-        </article>
-      </section>
-
-      <section className="content-grid">
-        <article className="card">
-          <div className="card-head"><h2>Publish-ready title and tag options</h2><a href="/dashboard-legacy">legacy view</a></div>
-          <Block title="Recommended title" body={blueprint.recommended_title ?? 'No title yet.'} action={() => queueRecommendation('title_update', blueprint.recommended_title)} busy={busy === 'title_update'} />
-          <Block title="Recommended tags" body={(blueprint.recommended_tags ?? []).join(', ') || 'No tags yet.'} action={() => queueRecommendation('keyword_tag_update', blueprint.recommended_tags ?? [])} busy={busy === 'keyword_tag_update'} />
-          <div className="option-list">
-            {titleOptions.map((option: TitleOption) => (
-              <div className="option-card" key={option.label}>
-                <p className="eyebrow">{option.label}</p>
-                <strong>{option.title}</strong>
-                <p>{option.rationale}</p>
-                <button className="secondary" onClick={() => queueRecommendation('title_update', option.title)} disabled={busy === 'title_update'}>Queue this title</button>
-              </div>
-            ))}
-          </div>
-        </article>
-
-        <article className="card">
-          <div className="card-head"><h2>Description modes</h2><span>{descriptionOptions.length}</span></div>
-          <Block title="Description blueprint" body={(blueprint.description_blueprint ?? []).join(' | ') || 'No description guidance yet.'} action={() => queueRecommendation('description_update', blueprint.description_full)} busy={busy === 'description_update'} />
-          <div className="option-list">
-            {descriptionOptions.map((option: DescriptionOption) => (
-              <div className="option-card" key={option.label}>
-                <p className="eyebrow">{option.label}</p>
-                <strong>{option.paired_title || option.label}</strong>
-                <p>{option.summary}</p>
-                <pre>{option.text}</pre>
-                <button className="secondary" onClick={() => queueRecommendation('description_update', option.text)} disabled={busy === 'description_update'}>Queue this description</button>
-              </div>
-            ))}
-          </div>
-        </article>
-      </section>
-
-      <section className="content-grid">
-        <article className="card">
-          <div className="card-head"><h2>Pricing, packages, and trust</h2><span>{currency(comparison.market_anchor_price)}</span></div>
-          <h3>Pricing strategy</h3>
-          <ul className="bullet-list">
-            {((blueprint.pricing_strategy ?? []) as string[]).map((item: string) => <li key={item}>{item}</li>)}
-          </ul>
-          <h3>Recommended packages</h3>
-          <div className="package-grid">
-            {recommendedPackages.map((pkg: RecommendedPackage) => (
-              <div className="package-card" key={pkg.name}>
-                <strong>{pkg.name}</strong>
-                <p>{currency(pkg.price)}</p>
-                <ul className="bullet-list compact">
-                  {(pkg.highlights ?? []).map((item: string) => <li key={item}>{item}</li>)}
-                </ul>
-              </div>
-            ))}
-          </div>
-          <h3>Trust boosters</h3>
-          <ul className="bullet-list">
-            {((blueprint.trust_boosters ?? []) as string[]).map((item: string) => <li key={item}>{item}</li>)}
-          </ul>
-        </article>
-
-        <article className="card">
-          <div className="card-head"><h2>FAQ and persona focus</h2><span>{personaFocus.length}</span></div>
-          <h3>FAQ recommendations</h3>
-          <ul className="bullet-list">
-            {((blueprint.faq_recommendations ?? []) as string[]).map((item: string) => <li key={item}>{item}</li>)}
-          </ul>
-          <h3>Persona focus</h3>
-          <div className="option-list">
-            {personaFocus.map((item: PersonaFocus) => (
-              <div className="option-card" key={item.persona}>
-                <strong>{item.persona}</strong>
-                <p>Score: {item.score}</p>
-                <p>{item.pain_point}</p>
-                <p>{item.emphasis.join(', ')}</p>
-              </div>
-            ))}
-          </div>
-        </article>
-      </section>
-
-      <section className="content-grid">
-        <article className="card">
-          <div className="card-head"><h2>HITL queue</h2><span>{queue.length}</span></div>
-          {selectedQueue ? (
-            <>
-              <div className="progress"><div style={{ width: `${selectedQueue.confidence_score}%` }} /></div>
-              <div className="diff"><pre>{pretty(selectedQueue.current_value)}</pre><pre>{pretty(selectedQueue.proposed_value)}</pre></div>
-              <div className="pill-row">{(selectedQueue.validator_issues ?? []).map((issue: { code: string; message: string }) => <span className="pill" key={issue.code}>{issue.code}: {issue.message}</span>)}</div>
-              <div className="button-row button-row--two">
-                <button onClick={() => reviewQueue(selectedQueue.id, 'approve')} disabled={busy === `approve-${selectedQueue.id}`}>Approve</button>
-                <button className="secondary" onClick={() => reviewQueue(selectedQueue.id, 'reject')} disabled={busy === `reject-${selectedQueue.id}`}>Reject</button>
-              </div>
-            </>
-          ) : <p>No queue items yet.</p>}
-        </article>
-
-        <article className="card">
-          <div className="card-head"><h2>Job progress</h2><a href="/rq">queue overview</a></div>
-          {activeJob ? <div className="job"><div className="progress"><div style={{ width: `${Math.max(5, Math.round((activeJob.progress || 0) * 100))}%` }} /></div><strong>{human(activeJob.run_type)}</strong><p>{activeJob.current_stage || activeJob.output_summary || 'Queued'}</p></div> : <p>No jobs yet.</p>}
-          <div className="table">{data.job_runs.map((job: JobRun) => <div className="row" key={job.run_id}><div><strong>{human(job.run_type)}</strong><p>{job.output_summary || job.current_stage || 'Queued'}</p></div><span className={`status status--${job.status}`}>{job.status}</span></div>)}</div>
-        </article>
-      </section>
-
-      <section className="content-grid">
-        <article className="card">
-          <div className="card-head">
-            <h2>Competitors</h2>
-            <select value={sortKey} onChange={(event) => setSortKey(event.target.value as typeof sortKey)}>
-              <option value="rank_position">page rank</option>
-              <option value="conversion_proxy_score">conversion</option>
-              <option value="reviews_count">reviews</option>
-              <option value="starting_price">price</option>
-            </select>
-          </div>
-          <div className="table">
-            {competitors.length ? competitors.map((item) => (
-              <div className="row row--stacked" key={`${item.url}-${item.title}`}>
-                <div className="row-topline">
-                  <strong>{item.rank_position ? `#${item.rank_position} ` : ''}{item.title}</strong>
-                  <span className={`status status--${item.is_first_page ? 'active' : 'queued'}`}>{item.is_first_page ? 'page one' : 'tracked'}</span>
-                </div>
-                <p>{item.seller_name || 'Unknown seller'}</p>
-                <p>{item.matched_term || '--'}</p>
-                <div className="row-metrics">
-                  <span>{currency(item.starting_price)}</span>
-                  <span>{item.reviews_count ?? '--'} reviews</span>
-                  <span>{item.conversion_proxy_score ?? '--'} score</span>
-                </div>
-              </div>
-            )) : <p className="inline-note">{comparison.message || 'No competitor gigs are being shown for the active search yet.'}</p>}
-          </div>
-        </article>
-
-        <article className="card">
-          <div className="card-head"><h2>Hostinger ops</h2><button className="secondary" onClick={refreshHostinger} disabled={busy === 'hostinger-refresh'}>{busy === 'hostinger-refresh' ? 'Refreshing...' : 'Refresh ops'}</button></div>
-          <div className="meta-grid">
-            <MetaItem label="Status" value={String(hostinger.status ?? 'disabled')} />
-            <MetaItem label="Configured" value={hostinger.configured ? 'Yes' : 'No'} />
-            <MetaItem label="Project" value={String(hostinger.project_name ?? '--')} />
-            <MetaItem label="Domain" value={String(hostinger.domain ?? '--')} />
-            <MetaItem label="Selected VM" value={String(hostinger.selected_vm?.id ?? hostinger.selected_vm?.name ?? hostinger.virtual_machine_id ?? '--')} />
-            <MetaItem label="Last checked" value={String(hostinger.last_checked_at ?? '--')} />
-          </div>
-          {hostinger.error_message ? <p className="inline-note">{hostinger.error_message}</p> : null}
-          <h3>Metrics snapshot</h3>
-          <pre>{pretty(JSON.stringify(hostinger.metrics ?? {}, null, 2))}</pre>
-          <h3>Recent project logs</h3>
-          <div className="feed-list">
-            {((hostinger.project_logs ?? []) as Array<Record<string, any>>).slice(0, 5).map((item: Record<string, any>, index: number) => (
-              <div className="feed-item" key={`${item.id ?? index}`}>
-                <strong>{String(item.message ?? item.action ?? item.type ?? 'Project event')}</strong>
-                <p>{String(item.createdAt ?? item.timestamp ?? item.date ?? '--')}</p>
-              </div>
-            ))}
-          </div>
-        </article>
-      </section>
-
-      <section className="content-grid">
-        <article className="card">
-          <div className="card-head"><h2>Keyword pulse</h2><span>{(report.niche_pulse?.trending_queries ?? []).length}</span></div>
-          <div className="pill-row">{(report.niche_pulse?.trending_queries ?? []).map((item: string) => <span className="pill" key={item}>{item}</span>)}</div>
-          <h3>Top live search titles</h3>
-          <ul className="bullet-list">{((comparison.top_search_titles ?? []) as string[]).map((item: string) => <li key={item}>{item}</li>)}</ul>
-        </article>
-        <article className="card">
-          <div className="card-head"><h2>System health</h2><span className={`status status--${data.health.status}`}>{data.health.status}</span></div>
-          <div className="table">{(data.state.setup_health?.connectors ?? []).map((item: Record<string, string>) => <div className="row" key={item.connector}><div><strong>{item.connector}</strong><p>{item.detail}</p></div><span className={`status status--${item.status}`}>{item.status}</span></div>)}</div>
-        </article>
-      </section>
-
-      <section className="content-grid">
-        <article className="card">
-          <div className="card-head">
-            <h2>Login security</h2>
-            <span>{failedLoginAttempts.length} recent failed attempt(s)</span>
-          </div>
-          {failedLoginAttempts.length ? (
-            <div className="security-grid">
-              {failedLoginAttempts.map((attempt) => (
-                <div className="security-card" key={attempt.id}>
-                  {attempt.photo_url ? (
-                    <img
-                      className="security-thumb"
-                      src={attempt.photo_url}
-                      alt={`Failed login attempt for ${attempt.username || 'unknown user'}`}
-                      loading="lazy"
-                    />
-                  ) : (
-                    <div className="security-thumb security-thumb--empty">No photo</div>
-                  )}
-                  <div className="security-card__content">
-                    <strong>{attempt.username || 'Unknown username'}</strong>
-                    <p>{attempt.remote_addr || 'Unknown IP'}</p>
-                    <p>{attempt.failure_count} failed tries</p>
-                    <p>Capture: {human(attempt.capture_status || 'not_requested')}</p>
-                    <p>{attempt.user_agent || 'No device summary captured.'}</p>
-                    {attempt.capture_error ? <p>{attempt.capture_error}</p> : null}
-                    <p>{attempt.created_at ? new Date(attempt.created_at).toLocaleString() : '--'}</p>
-                    {attempt.capture_status === 'pending_review' && attempt.photo_available ? (
-                      <div className="button-row button-row--two security-actions">
-                        <button
-                          className="secondary"
-                          onClick={() => void reviewSecurityAttempt(attempt.id, 'save')}
-                          disabled={busy === `security-save-${attempt.id}`}
-                        >
-                          {busy === `security-save-${attempt.id}` ? 'Saving...' : 'Save'}
-                        </button>
-                        <button
-                          className="secondary"
-                          onClick={() => void reviewSecurityAttempt(attempt.id, 'discard')}
-                          disabled={busy === `security-discard-${attempt.id}`}
-                        >
-                          {busy === `security-discard-${attempt.id}` ? 'Discarding...' : 'Discard'}
-                        </button>
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : <p>No failed login attempts recorded yet.</p>}
-        </article>
-        <article className="card">
-          <div className="card-head">
-            <h2>Active marketplace target</h2>
-            <span>{splitTerms(terms).length} search term(s)</span>
-          </div>
-          <div className="meta-grid">
-            <MetaItem label="Current gig URL" value={gigUrl || '--'} />
-            <MetaItem label="Current search terms" value={terms || '--'} />
-            <MetaItem label="Detected primary term" value={String(comparison.primary_search_term ?? '--')} />
-            <MetaItem label="Top tracked gig" value={String(topRankedGig.title ?? '--')} />
-          </div>
-          <p className="inline-note">
-            The compare and scrape buttons use the exact gig URL and keywords currently shown in the inputs above.
-          </p>
-        </article>
-      </section>
-
-      {!assistantOpen ? (
-        <button className="assistant-toggle" onClick={() => setAssistantOpen(true)}>
-          <span className="assistant-toggle-icon">✦</span>
-          Gig Copilot
-        </button>
-      ) : null}
-
-      {assistantOpen ? (
-        <aside className="assistant-shell">
-
-          {/* Header */}
-          <div className="assistant-head">
-            <div className="assistant-head-info">
-              <div className="assistant-avatar">✦</div>
-              <div className="assistant-head-text">
-                <strong>Gig Copilot</strong>
-                <p className="assistant-subtitle">Online · live gig data</p>
-              </div>
-            </div>
-            <div className="assistant-head-actions">
-              <button
-                className="assistant-close-btn"
-                onClick={exportChat}
-                title="Export chat"
-              >
-                ⬇
-              </button>
-              <button
-                className="assistant-close-btn"
-                onClick={() => setAssistantOpen(false)}
-                title="Close"
-              >
-                ✕
-              </button>
-            </div>
-          </div>
-
-          {/* Quick prompts */}
-          <div className="assistant-quick-prompts">
-            {assistantQuickPrompts.map((suggestion) => (
-              <button
-                className="quick-prompt-chip"
-                key={suggestion}
-                onClick={() => void sendAssistantMessage(suggestion)}
-                disabled={assistantBusy}
-              >
-                {suggestion}
-              </button>
-            ))}
-          </div>
-
-          {/* Message log */}
-          <div className="assistant-log" ref={assistantLogRef}>
-            {assistantMessages.length === 0 && !assistantBusy ? (
-              <div className="chat-welcome">
-                <div className="chat-welcome-avatar">✦</div>
-                <h3>Gig Copilot</h3>
-                <p>Your AI for Fiverr ranking, SEO audits, and content that converts.</p>
-                <div className="chat-welcome-chips">
-                  {['Rewrite my gig title', 'Who are my top competitors?', 'Audit my website SEO', 'Write a LinkedIn post'].map((question) => (
-                    <button key={question} className="welcome-chip" onClick={() => void sendAssistantMessage(question)} disabled={assistantBusy}>
-                      {question}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-            {assistantMessages.map((entry, index) => (
-              <div
-                className={`assistant-bubble assistant-bubble--${entry.role}`}
-                key={`${entry.role}-${index}`}
-              >
-                <span className="bubble-meta">
-                  {entry.role === 'assistant' ? 'Copilot' : 'You'}
-                </span>
-                <div className="bubble-body">
-                  <ReactMarkdown>{entry.text}</ReactMarkdown>
-                </div>
-                {entry.role === 'assistant' && entry.id ? (
-                  <div className="assistant-feedback-row">
-                    <button
-                      className={`feedback-button ${entry.feedbackRating === 1 ? 'feedback-button--active' : ''}`}
-                      onClick={() => void sendAssistantFeedback(entry.id as number, 1)}
-                      disabled={busy === `feedback-${entry.id}` || assistantBusy}
-                    >
-                      Helpful
-                    </button>
-                    <button
-                      className={`feedback-button ${entry.feedbackRating === -1 ? 'feedback-button--active' : ''}`}
-                      onClick={() => void sendAssistantFeedback(entry.id as number, -1)}
-                      disabled={busy === `feedback-${entry.id}` || assistantBusy}
-                    >
-                      Needs work
-                    </button>
-                  </div>
-                ) : null}
-                {entry.suggestions?.length ? (
-                  <div className="assistant-suggestion-row">
-                    {entry.suggestions.map((suggestion) => (
-                      <button
-                        className="suggestion-chip"
-                        key={suggestion}
-                        onClick={() => void sendAssistantMessage(suggestion)}
-                        disabled={assistantBusy}
-                      >
-                        {suggestion}
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            ))}
-            {assistantWaitingForFirstChunk ? (
-              <div className="assistant-bubble assistant-bubble--assistant assistant-bubble--pending">
-                <span className="bubble-meta">Copilot</span>
-                <div className="bubble-body">
-                  <div className="typing-dots">
-                    <span /><span /><span />
-                  </div>
-                </div>
-              </div>
-            ) : null}
-          </div>
-
-          {/* Compose */}
-          <div className="assistant-compose">
-            <div className="compose-inner">
-              <textarea
-                className="compose-textarea"
-                ref={assistantInputRef}
-                rows={1}
-                value={assistantInput}
-                onChange={(event) => setAssistantInput(event.target.value)}
-                onInput={(event) => {
-                  const element = event.currentTarget
-                  element.style.height = 'auto'
-                  element.style.height = `${Math.min(element.scrollHeight, 160)}px`
-                }}
-                onKeyDown={handleAssistantKeyDown}
-                placeholder="Ask about your gig, SEO, competitors..."
-              />
-              <button
-                className="compose-send-btn"
-                onClick={() => void sendAssistantMessage()}
-                disabled={assistantBusy || !assistantInput.trim()}
-                title="Send"
-              >
-                →
-              </button>
-            </div>
-            <p className="compose-hint">Enter to send · Shift+Enter for new line</p>
-          </div>
-        </aside>
-      ) : null}
-      </>
-      )}
-    </main>
+    <Layout
+      activePage={activePage}
+      pageTitle={pageTitle}
+      wsLive={wsLive}
+      username={data.state.auth.username}
+      onNavigate={setActivePage}
+      onLogout={() => { void handleLogout() }}
+    >
+      {pageContent}
+    </Layout>
   )
 }
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return <div className="metric"><span>{label}</span><strong>{value}</strong></div>
-}
-
-function MetaItem({ label, value }: { label: string; value: string }) {
-  return <div className="meta-item"><span>{label}</span><strong>{value}</strong></div>
-}
-
-function Block({ title, body, action, busy }: { title: string; body: string; action: () => void; busy: boolean }) {
-  return <div className="block"><div><p className="eyebrow">{title}</p><strong>{body}</strong></div><button className="secondary" onClick={action} disabled={busy || isPlaceholderText(body)}>Queue</button></div>
-}
-
-function splitTerms(value: string) {
-  return value
-    .split(/[\n,;]+/)
-    .map((item) => item.trim())
-    .filter(Boolean)
-}
-
-function preserveMarketplaceDraft(currentValue: string, previousSyncedValue: string) {
-  const current = currentValue.trim()
-  const previous = previousSyncedValue.trim()
-  return Boolean(current) && current !== previous
-}
-
-function clamp(value: number) {
-  return Math.max(12, Math.min(100, Math.round(value)))
-}
-
-function shortDate(value?: string) {
-  if (!value) return '--'
-  const parsed = new Date(value)
-  return Number.isNaN(parsed.getTime()) ? value : `${parsed.getMonth() + 1}/${parsed.getDate()}`
-}
-
-function pretty(value: string) {
-  try {
-    return JSON.stringify(JSON.parse(value), null, 2)
-  } catch {
-    return value
-  }
-}
-
-function human(value: string) {
-  return value.replaceAll('_', ' ').replace(/\b\w/g, (match) => match.toUpperCase())
-}
-
-function currency(value?: number | null) {
-  if (value === null || value === undefined || Number.isNaN(value)) return '--'
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value)
-}
-
-function percent(value?: number | null) {
-  if (value === null || value === undefined || Number.isNaN(value)) return '--'
-  return `${Math.round(Number(value) * 100)}%`
-}
-
-function milliseconds(value?: number | null) {
-  if (value === null || value === undefined || Number.isNaN(value) || Number(value) <= 0) return '--'
-  const numeric = Number(value)
-  if (numeric >= 1000) {
-    return `${(numeric / 1000).toFixed(1)}s`
-  }
-  return `${Math.round(numeric)}ms`
-}
-
-function keywordDifficultyTone(value?: string) {
-  const normalized = String(value ?? '').toLowerCase()
-  if (normalized === 'low') return 'ok'
-  if (normalized === 'medium') return 'queued'
-  if (normalized === 'high') return 'warning'
-  return 'pending'
-}
-
-function displayDiffValue(value: unknown) {
-  if (value === null || value === undefined || value === '') {
-    return '--'
-  }
-  if (typeof value === 'string') {
-    return value
-  }
-  return JSON.stringify(value, null, 2)
-}
-
-function isPlaceholderText(value: string) {
-  const normalized = value.trim().toLowerCase()
-  return !normalized || normalized === '--' || normalized.startsWith('no ')
-}
-
-function buildAssistantMessages(payload: BootstrapPayload) {
-  const history = mapAssistantHistory(payload.assistant_history ?? payload.memory?.assistant_history ?? [], payload)
-  if (history.length) return history
-  return []
-}
-
-function getAssistantSessionId(storageKey: string) {
-  try {
-    const stored = sessionStorage.getItem(storageKey)
-    if (stored && stored.length > 4) return stored
-  } catch { /* sessionStorage blocked */ }
-  const id = `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
-  try { sessionStorage.setItem(storageKey, id) } catch { /* ignore */ }
-  return id
-}
-
-function mapAssistantHistory(items: Array<Record<string, any>>, payload: BootstrapPayload | null) {
-  const quickPrompts = payload
-    ? buildAssistantQuickPrompts(payload.state.gig_comparison ?? {}, (payload.state.gig_comparison ?? {}).implementation_blueprint ?? {}, payload.state.scraper_run ?? {})
-    : []
-  const mapped = [...items]
-    .sort((left, right) => {
-      const leftTime = Date.parse(String(left.created_at ?? ''))
-      const rightTime = Date.parse(String(right.created_at ?? ''))
-      if (!Number.isNaN(leftTime) && !Number.isNaN(rightTime) && leftTime !== rightTime) {
-        return leftTime - rightTime
-      }
-      return Number(left.id ?? 0) - Number(right.id ?? 0)
-    })
-    .map((item) => ({
-      id: typeof item.id === 'number' ? item.id : Number(item.id ?? 0) || undefined,
-      role: (item.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
-      text: String(item.content ?? '').trim(),
-      suggestions: item.role === 'assistant' ? ((item.metadata?.suggestions as string[] | undefined) ?? []) : undefined,
-      feedbackRating: item.role === 'assistant' ? (Number(item.metadata?.feedback?.rating ?? 0) || undefined) : undefined,
-      createdAt: String(item.created_at ?? '').trim() || undefined,
-    }))
-    .filter((item) => item.text)
-  if (!mapped.length) return []
-  const last = mapped[mapped.length - 1]
-  if (last.role === 'assistant' && !last.suggestions?.length) {
-    last.suggestions = quickPrompts
-  }
-  return mapped
-}
-
-function buildAssistantQuickPrompts(comparison: Record<string, any>, blueprint: Record<string, any>, scraperRun: Record<string, any>) {
-  const primaryTerm = String(comparison.primary_search_term ?? '').trim()
-  const topGig = comparison.top_ranked_gig ?? {}
-  const topAction = blueprint.top_action ?? {}
-  const prompts = [
-    primaryTerm ? `Why is #1 ranking for ${primaryTerm}?` : '',
-    topGig.title ? `How do I beat #1 ${String(topGig.seller_name ?? 'competitor')}?` : '',
-    blueprint.recommended_title ? 'Rewrite my title using the current market demand.' : 'What title should I use now?',
-    topAction.action_text ? 'What should I do first and why?' : '',
-    scraperRun.last_status_message ? 'What is the live Fiverr feed showing right now?' : '',
-    'How should I price my packages now?',
-  ]
-  return Array.from(new Set(prompts.filter(Boolean))).slice(0, 5)
-}
-
-function fileToBase64(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const result = String(reader.result ?? '')
-      const commaIndex = result.indexOf(',')
-      resolve(commaIndex >= 0 ? result.slice(commaIndex + 1) : result)
-    }
-    reader.onerror = () => reject(reader.error ?? new Error('Unable to read file.'))
-    reader.readAsDataURL(file)
-  })
-}
-
-export default App

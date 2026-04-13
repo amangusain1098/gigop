@@ -3,12 +3,14 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import './components/ui/index.css'
 import App from './App.tsx'
-import { ErrorBoundary } from './ErrorBoundary.tsx'
+import ToastContainer from './components/ui/ToastContainer'
+import { ToastProvider } from './components/ui/useToast'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <ErrorBoundary>
+    <ToastProvider>
       <App />
-    </ErrorBoundary>
+      <ToastContainer />
+    </ToastProvider>
   </StrictMode>,
 )

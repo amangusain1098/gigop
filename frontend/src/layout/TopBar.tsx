@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 
+import { fetchAssistantSessionsCount } from '../api'
 import Button from '../components/ui/Button'
 import './layout.css'
 
@@ -22,22 +23,10 @@ export default function TopBar({ pageTitle, wsLive, onToggleMobileNav }: TopBarP
 
     async function loadSessionCounts() {
       try {
-        const response = await fetch('/api/assistant/sessions/count', {
-          credentials: 'same-origin',
-        })
-
-        if (!response.ok) {
-          throw new Error(`Unable to load sessions (${response.status})`)
-        }
-
-        const payload = await response.json() as SessionCountPayload
-        if (active) {
-          setSessions(payload)
-        }
+        const payload = await fetchAssistantSessionsCount()
+        if (active) setSessions(payload)
       } catch {
-        if (active) {
-          setSessions(null)
-        }
+        if (active) setSessions(null)
       }
     }
 
@@ -57,7 +46,7 @@ export default function TopBar({ pageTitle, wsLive, onToggleMobileNav }: TopBarP
       <div className="topbar__left">
         {onToggleMobileNav ? (
           <Button className="topbar__menu" variant="ghost" size="sm" onClick={onToggleMobileNav}>
-            ☰
+            Menu
           </Button>
         ) : null}
         <div>
@@ -72,7 +61,7 @@ export default function TopBar({ pageTitle, wsLive, onToggleMobileNav }: TopBarP
           {wsLive ? 'Live' : 'Offline'}
         </span>
         <span className={`topbar-chip ${sessions ? 'topbar-chip--ok' : 'topbar-chip--idle'}`}>
-          💬 {sessions ? `${sessions.active_sessions} active` : '-- active'}
+          Sessions: {sessions ? `${sessions.active_sessions} active` : '-- active'}
         </span>
       </div>
     </header>

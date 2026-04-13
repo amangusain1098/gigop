@@ -41,14 +41,12 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       window.clearTimeout(timer)
       timersRef.current.delete(id)
     }
-
     setToasts((current) => current.filter((toast) => toast.id !== id))
   }, [])
 
   const pushToast = useCallback((tone: ToastTone, message: string) => {
     const id = makeToastId()
     const createdAt = Date.now()
-
     setToasts((current) => [...current, { id, tone, message, createdAt }].slice(-3))
 
     const timeout = window.setTimeout(() => {
@@ -62,7 +60,6 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     for (const timer of timersRef.current.values()) {
       window.clearTimeout(timer)
     }
-
     timersRef.current.clear()
     setToasts([])
   }, [])
