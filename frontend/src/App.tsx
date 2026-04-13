@@ -1,4 +1,4 @@
-import { startTransition, useMemo, useEffect, useState, type KeyboardEvent } from 'react'
+import { startTransition, useEffect, useState, type KeyboardEvent } from 'react'
 
 import { createDashboardSocket, fetchJson, ingestTrainingText, loadBootstrap, streamAssistantReply } from './api'
 import { useToast } from './components/ui'
@@ -446,7 +446,7 @@ export default function App() {
   const extensionGuideUrl = textValue(extensionSettings.guide_url) || '/extension/install'
   const extensionPromptVisible = !extensionPromptDismissed && !Boolean(extensionSettings.installed)
   const pageTitle = PAGE_TITLES[activePage]
-  const pageContent = useMemo(() => {
+  const pageContent = (() => {
     const comparisonDiff = buildComparisonDiff(comparisonHistory)
     const timeline = buildComparisonTimeline(comparisonHistory)
     const radar = [
@@ -474,7 +474,7 @@ export default function App() {
       default:
         return null
     }
-  }, [activePage, assistantBusy, assistantInput, assistantMessages, assistantQuickPrompts, assistantStarterPrompts, autoCompareEnabled, autoCompareMinutes, blueprint, busy, comparison, comparisonHistory, competitors, csrfToken, data, datasets, extensionDownloadUrl, extensionGuideUrl, extensionPromptVisible, extensionToken, gigUrl, hostinger, knowledgeFile, liveMode, manualInput, maxResults, oneByOne, personaFocus, queue, refreshCsrf, report, scraperRun, sendCopilotNegativeFeedback, sendCopilotPositiveFeedback, slackSettings, sortKey, terms, titleOptions, topRankedGig, topRankedReasons, topTen])
+  })()
 
   return (
     <Layout
