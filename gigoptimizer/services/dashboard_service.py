@@ -88,9 +88,19 @@ class DashboardService:
         self._initialize_files()
         self._bootstrap_repository()
 
-    def get_state(self) -> dict[str, Any]:
+    def get_state(self, *, safe: bool = False) -> dict[str, Any]:
+        """Return the current dashboard state.
+
+        Parameters
+        ----------
+        safe:
+            When *True*, skip triggering a full pipeline run if no report is
+            cached yet.  The caller gets an empty ``latest_report`` rather than
+            waiting 20-25 seconds.  Use this in latency-sensitive paths such as
+            the bootstrap endpoint.
+        """
         state = self._load_dashboard_state()
-        if state.latest_report is None:
+        if state.latest_report is None and not safe:
             self.run_pipeline(use_live_connectors=False)
             state = self._load_dashboard_state()
         return {

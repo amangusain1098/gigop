@@ -469,8 +469,9 @@ def create_app() -> FastAPI:
         request: Request | None = None,
         authenticated: bool | None = None,
         session=None,
+        safe: bool = False,
     ) -> dict:
-        state = dashboard_service.get_state()
+        state = dashboard_service.get_state(safe=safe)
         resolved_session = session if session is not None else (
             auth_service.get_request_session(request) if request is not None else None
         )
@@ -483,24 +484,29 @@ def create_app() -> FastAPI:
         state["security_warnings"] = validation_warnings
         return state
 
+    def _resolve_gig_context(state: dict) -> tuple[str, str, str]:
+        """Return (active_gig_url, gig_id, primary_search_term) from a state dict."""
+        comparison = state.get("gig_comparison") or {}
+        marketplace_settings = settings_service.get_settings().marketplace
+        active_gig_url = str(marketplace_settings.my_gig_url or comparison.get("gig_url") or "").strip()
+        gig_id = dashboard_service._gig_identifier(active_gig_url or None)  # noqa: SLF001
+        primary_search_term = str(comparison.get("primary_search_term", "")).strip()
+        return active_gig_url, gig_id, primary_search_term
+
     def build_blueprint_state(
         *,
         request: Request | None = None,
         authenticated: bool | None = None,
         session=None,
     ) -> dict:
-        state = build_state(request=request, authenticated=authenticated, session=session)
-        comparison = state.get("gig_comparison") or {}
-        marketplace_settings = settings_service.get_settings().marketplace
-        active_gig_url = str(marketplace_settings.my_gig_url or comparison.get("gig_url") or "").strip()
-        gig_id = dashboard_service._gig_identifier(active_gig_url or None)  # noqa: SLF001
-        primary_search_term = str(comparison.get("primary_search_term", "")).strip()
-        # Tag gap analysis — runs against stored snapshot (has .tags + .competitors with tags)
-        try:
-            _snapshot = dashboard_service._load_snapshot()  # noqa: SLF001
-            tag_gap = TagGapAnalyzer().analyze(_snapshot).to_dict()
-        except Exception:
-            tag_gap = {}
+        """Fast-path bootstrap — returns in <1 s on a warm system.
+
+        Slow fields (health, hostinger, tag_gap, timeline, comparison_diff,
+        scraper_summary) are moved to ``/api/v2/bootstrap/extended`` so the
+        frontend can render immediately and fetch the rest lazily.
+        """
+        state = build_state(request=request, authenticated=authenticated, session=session, safe=True)
+        _gig_url, gig_id, _term = _resolve_gig_context(state)
         return {
             "state": state,
             "job_runs": job_service.list_runs(limit=25),
@@ -511,15 +517,36 @@ def create_app() -> FastAPI:
             "datasets": knowledge_service.list_documents(gig_id=gig_id, limit=20),
             "copilot_learning": copilot_learning_service.status(),
             "copilot_training": copilot_training_service.status(gig_id=gig_id),
-            "hostinger": hostinger_service.get_public_status(),
             "security": build_login_security_payload(),
             "workers": job_service.worker_snapshot(),
-            "health": build_health_payload(),
             "scraper_logs": repository.list_scraper_logs(limit=10),
+            "extension_install": build_extension_install_payload(),
+        }
+
+    def build_blueprint_state_extended(
+        *,
+        request: Request | None = None,
+        authenticated: bool | None = None,
+        session=None,
+    ) -> dict:
+        """Slow-path bootstrap — fetches DB-heavy and HTTP-bound fields.
+
+        The frontend calls this after the initial render so the dashboard is
+        not blocked on health-checks, Hostinger API calls, or tag gap analysis.
+        """
+        state = build_state(request=request, authenticated=authenticated, session=session, safe=True)
+        _gig_url, gig_id, primary_search_term = _resolve_gig_context(state)
+        try:
+            _snapshot = dashboard_service._load_snapshot()  # noqa: SLF001
+            tag_gap = TagGapAnalyzer().analyze(_snapshot).to_dict()
+        except Exception:
+            tag_gap = {}
+        return {
+            "health": build_health_payload(),
+            "hostinger": hostinger_service.get_public_status(),
             "scraper_summary": repository.scraper_log_summary(limit=50),
             "timeline": dashboard_service.comparison_timeline(gig_id=gig_id, keyword=primary_search_term, limit=16),
             "comparison_diff": dashboard_service.comparison_diff(gig_id=gig_id),
-            "extension_install": build_extension_install_payload(),
             "tag_gap": tag_gap,
         }
 
@@ -1308,7 +1335,17 @@ def create_app() -> FastAPI:
 
     @app.get("/api/v2/bootstrap")
     async def blueprint_bootstrap(request: Request, _: None = Depends(require_auth)) -> dict:
+        """Fast bootstrap — returns essential state immediately (< 1 s)."""
         return build_blueprint_state(request=request)
+
+    @app.get("/api/v2/bootstrap/extended")
+    async def blueprint_bootstrap_extended(request: Request, _: None = Depends(require_auth)) -> dict:
+        """Slow bootstrap — health, hostinger, tag gap, timeline, comparison diff.
+        
+        Call this after the initial render to avoid blocking the dashboard load.
+        Typically takes 2-8 s depending on DB size and Hostinger API latency.
+        """
+        return build_blueprint_state_extended(request=request)
 
     @app.get("/api/v2/jobs")
     async def list_jobs(_: None = Depends(require_auth)) -> dict:
@@ -2490,7 +2527,7 @@ def create_app() -> FastAPI:
             try:
                 notification_service.notify(
                     event="price_alert",
-                    title=f"⚠️ GigOptimizer — {len(alerts)} price alert(s) on gig {gig_id}",
+                    title=f"\u26a0\ufe0f GigOptimizer \u2014 {len(alerts)} price alert(s) on gig {gig_id}",
                     lines=[a.message for a in alerts],
                 )
             except Exception:

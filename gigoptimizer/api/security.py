@@ -32,6 +32,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         )
 
     async def dispatch(self, request: Request, call_next):
+        # WebSocket upgrade requests cannot pass through BaseHTTPMiddleware's call_next
+        # chain — they would be rejected with 403. Pass them straight through untouched.
+        if request.headers.get("upgrade", "").lower() == "websocket":
+            return await call_next(request)
         response = await call_next(request)
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
