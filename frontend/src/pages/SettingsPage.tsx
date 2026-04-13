@@ -1,5 +1,5 @@
 import type { DatasetRecord, JobRun, QueueRecord } from '../types'
-import { MetaItem, pretty } from './helpers'
+import { EmptyState, MetaItem, pretty } from './helpers'
 
 interface HostingerData {
   status?: string
@@ -101,7 +101,7 @@ export default function SettingsPage({
                   </button>
                 </div>
               </div>
-            )) : <p>No datasets uploaded yet.</p>}
+            )) : <EmptyState icon="KB" title="No datasets uploaded yet" hint="Upload your first CSV, JSON, DOCX, or note to ground the copilot." />}
           </div>
         </article>
 
@@ -131,12 +131,12 @@ export default function SettingsPage({
                 <button className="secondary" onClick={() => void onReviewQueue(selectedQueue.id, 'reject')} disabled={busy === `reject-${selectedQueue.id}`}>Reject</button>
               </div>
             </>
-          ) : <p>No queue items yet.</p>}
+          ) : <EmptyState icon="QR" title="No queue items yet" hint="Recommendations waiting for review will appear here." />}
         </article>
 
         <article className="card">
           <div className="card-head"><h2>Job progress</h2><a href="/rq">queue overview</a></div>
-          {activeJob ? <div className="job"><div className="progress"><div style={{ width: `${Math.max(5, Math.round((activeJob.progress || 0) * 100))}%` }} /></div><strong>{human(activeJob.run_type)}</strong><p>{activeJob.current_stage || activeJob.output_summary || 'Queued'}</p></div> : <p>No jobs yet.</p>}
+          {activeJob ? <div className="job"><div className="progress"><div style={{ width: `${Math.max(5, Math.round((activeJob.progress || 0) * 100))}%` }} /></div><strong>{human(activeJob.run_type)}</strong><p>{activeJob.current_stage || activeJob.output_summary || 'Queued'}</p></div> : <EmptyState icon="JB" title="No jobs yet" hint="Queued pipeline and compare runs will show their progress here." />}
           <div className="table">{jobRuns.map((job) => <div className="row" key={job.run_id}><div><strong>{human(job.run_type)}</strong><p>{job.output_summary || job.current_stage || 'Queued'}</p></div><span className={`status status--${job.status}`}>{job.status}</span></div>)}</div>
         </article>
       </section>
@@ -157,12 +157,12 @@ export default function SettingsPage({
           <pre>{pretty(JSON.stringify(hostinger.metrics ?? {}, null, 2))}</pre>
           <h3>Recent project logs</h3>
           <div className="feed-list">
-            {(hostinger.project_logs ?? []).slice(0, 5).map((item, index) => (
+            {(hostinger.project_logs ?? []).length ? (hostinger.project_logs ?? []).slice(0, 5).map((item, index) => (
               <div className="feed-item" key={`${String(item.id ?? index)}`}>
                 <strong>{String(item.message ?? item.action ?? item.type ?? 'Project event')}</strong>
                 <p>{String(item.createdAt ?? item.timestamp ?? item.date ?? '--')}</p>
               </div>
-            ))}
+            )) : <EmptyState icon="OP" title="No Hostinger logs yet" hint="Refresh ops once the infrastructure provider returns project events." />}
           </div>
         </article>
       </section>

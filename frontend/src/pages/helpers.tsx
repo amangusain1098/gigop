@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { EmptyState as SharedEmptyState } from '../components/ui'
 
 export type TitleOption = { label: string; title: string; rationale: string }
 export type DescriptionOption = { label: string; summary: string; text: string; paired_title?: string; notes?: string[] }
@@ -128,12 +129,5 @@ export function EmptyState({
   hint?: string
   action?: ReactNode
 }) {
-  return (
-    <div className="empty-state">
-      <div className="empty-state__icon" aria-hidden="true">{icon}</div>
-      <strong className="empty-state__title">{title}</strong>
-      {hint ? <p className="empty-state__hint">{hint}</p> : null}
-      {action ? <div className="empty-state__action">{action}</div> : null}
-    </div>
-  )
+  return <SharedEmptyState icon={icon} title={title} hint={hint} action={action} />
 }

@@ -10,7 +10,7 @@ import {
   type TrainingDashboardPayload,
   type TrainingPredictionPayload,
 } from '../api'
-import { useToast } from '../components/ui'
+import { Skeleton, useToast } from '../components/ui'
 import { EmptyState, shortDate } from './helpers'
 
 interface AIBrainPageProps {
@@ -149,7 +149,7 @@ export default function AIBrainPage({ csrfToken, refreshCsrf }: AIBrainPageProps
           <article className="card" key={String(label)}>
             <div className="card-head"><h2>{label}</h2></div>
             <div className="metric metric--brain">
-              <strong>{String(value)}</strong>
+              {loading ? <Skeleton width="72px" height="32px" rounded /> : <strong>{String(value)}</strong>}
             </div>
           </article>
         ))}
@@ -158,7 +158,7 @@ export default function AIBrainPage({ csrfToken, refreshCsrf }: AIBrainPageProps
       <section className="content-grid">
         <article className="card">
           <div className="card-head"><h2>Top learned words</h2><span>{topWords.length}</span></div>
-          {loading ? <div className="table">{Array.from({ length: 6 }).map((_, index) => <div className="skeleton-row" key={index} />)}</div> : topWords.length ? (
+          {loading ? <div className="table">{Array.from({ length: 6 }).map((_, index) => <Skeleton key={index} height="64px" className="skeleton-row" />)}</div> : topWords.length ? (
             <div className="table">
               {topWords.map((item) => (
                 <div className="row row--stacked" key={item.word}>
