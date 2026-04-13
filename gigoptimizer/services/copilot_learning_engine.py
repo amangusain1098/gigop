@@ -30,7 +30,7 @@ class CopilotLearningEngine:
     """Manages the vocabulary model, learning log, and cron schedule."""
 
     VERSION = "1.0.0"
-    INTERVALS = {"1h": 3600, "6h": 21600, "12h": 43200, "24h": 86400, "48h": 172800}
+    INTERVALS = {"1h": 3600, "3h": 10800, "6h": 21600, "12h": 43200, "24h": 86400, "48h": 172800}
     DEFAULT_INTERVAL = "6h"
 
     def __init__(self, data_dir: Path) -> None:
@@ -202,6 +202,11 @@ class CopilotLearningEngine:
         ).isoformat()
         schedule["run_count"] = schedule.get("run_count", 0) + 1
         self._save_schedule(schedule)
+        # Mirror cycle count into stats so dashboard totals.cycles_run stays accurate
+        _stats = self._load_stats()
+        _stats["cycles_run"] = _stats.get("cycles_run", 0) + 1
+        _stats["last_updated"] = _utc_now()
+        self._stats_file.write_text(__import__("json").dumps(_stats, indent=2), encoding="utf-8")
         results["finished_at"] = _utc_now()
         results["schedule"] = schedule
         self._append_log({
