@@ -59,6 +59,7 @@ export interface AssistantStreamHandlers {
   onChunk?: (chunk: string) => void
   onDone?: (payload: Record<string, any>) => void
   onError?: (message: string) => void
+  onSuggestions?: (suggestions: string[]) => void
 }
 
 export async function streamAssistantReply(
@@ -130,12 +131,24 @@ export async function streamAssistantReply(
 
     if (eventName === 'meta') {
       handlers.onMeta?.(payload)
+    } else if (eventName === 'suggestions') {
+      const suggestions = Array.isArray(payload.suggestions)
+        ? payload.suggestions.filter((item: unknown): item is string => typeof item === 'string')
+        : []
+      handlers.onSuggestions?.(suggestions)
     } else if (eventName === 'delta') {
       handlers.onChunk?.(String(payload.text ?? ''))
     } else if (eventName === 'done') {
       handlers.onDone?.(payload)
     } else if (eventName === 'error') {
       handlers.onError?.(String(payload.detail ?? payload.text ?? 'Streaming failed.'))
+    } else if (typeof payload.text === 'string' && payload.text.startsWith('[SUGGESTIONS]')) {
+      const suggestions = payload.text
+        .replace('[SUGGESTIONS]', '')
+        .split('|')
+        .map((item: string) => item.trim())
+        .filter(Boolean)
+      handlers.onSuggestions?.(suggestions)
     }
   }
 
