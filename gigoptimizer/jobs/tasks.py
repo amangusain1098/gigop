@@ -4,7 +4,7 @@ from dataclasses import asdict
 from typing import Any
 
 from ..config import GigOptimizerConfig
-from ..services import AIOverviewService, CacheService, DashboardService, SettingsService, SlackService, WeeklyReportService
+from ..services import AIOverviewService, CacheService, DashboardService, NotificationService, PriceAlertService, SettingsService, SlackService, WeeklyReportService
 from .bus import JobEventBus
 
 
@@ -142,6 +142,9 @@ def _build_runtime() -> dict[str, Any]:
         slack_service=slack_service,
     )
     report_service = WeeklyReportService(dashboard_service)
+    notification_service = NotificationService(settings_service)
+    notification_service.slack_service = slack_service
+    price_alert_service = PriceAlertService(config)
     database_manager = dashboard_service.database_manager
     repository = dashboard_service.repository
     event_bus = JobEventBus(config)
@@ -150,6 +153,8 @@ def _build_runtime() -> dict[str, Any]:
         "settings_service": settings_service,
         "cache_service": cache_service,
         "slack_service": slack_service,
+        "notification_service": notification_service,
+        "price_alert_service": price_alert_service,
         "database_manager": database_manager,
         "dashboard_service": dashboard_service,
         "report_service": report_service,
@@ -270,7 +275,38 @@ def _finish_success(
             },
         )
     _send_job_success_alert(runtime=runtime, run_id=run_id, state=state, completed=completed)
+    if run_type in {"marketplace_compare", "manual_compare", "marketplace_scrape", "pipeline"}:
+        _check_price_alerts(runtime=runtime, state=state)
     return completed
+
+
+def _check_price_alerts(*, runtime: dict[str, Any], state: dict[str, Any]) -> None:
+    """Run price alert check against current competitor data and notify via Slack if any alerts fire."""
+    price_alert_service: PriceAlertService | None = runtime.get("price_alert_service")
+    notification_service: NotificationService | None = runtime.get("notification_service")
+    if price_alert_service is None or notification_service is None:
+        return
+    comparison = state.get("gig_comparison") or {}
+    gig_id = str(comparison.get("gig_url") or comparison.get("gig_id") or "default")
+    raw_competitors = (
+        comparison.get("top_competitors")
+        or comparison.get("first_page_top_10")
+        or []
+    )
+    if not raw_competitors:
+        return
+    try:
+        from ..models import MarketplaceGig as _MG
+        competitors = [_MG.from_dict(r) for r in raw_competitors if isinstance(r, dict)]
+        alerts = price_alert_service.check_and_alert(gig_id, competitors)
+        if alerts:
+            notification_service.notify(
+                event="price_alert",
+                title=f"⚠️ GigOptimizer — {len(alerts)} price alert(s) detected",
+                lines=[a.message for a in alerts],
+            )
+    except Exception:
+        pass
 
 
 def _send_job_success_alert(*, runtime: dict[str, Any], run_id: str, state: dict[str, Any], completed: dict[str, Any]) -> None:

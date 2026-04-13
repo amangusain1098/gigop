@@ -196,6 +196,28 @@ class MarketplaceGig:
     search_url: str = ""
     why_on_page_one: list[str] = field(default_factory=list)
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "MarketplaceGig":
+        return cls(
+            title=str(data.get("title") or ""),
+            url=str(data.get("url") or ""),
+            seller_name=str(data.get("seller_name") or ""),
+            starting_price=float(data["starting_price"]) if data.get("starting_price") is not None else None,
+            rating=float(data["rating"]) if data.get("rating") is not None else None,
+            reviews_count=int(data["reviews_count"]) if data.get("reviews_count") is not None else None,
+            delivery_days=int(data["delivery_days"]) if data.get("delivery_days") is not None else None,
+            badges=list(data.get("badges") or []),
+            snippet=str(data.get("snippet") or ""),
+            matched_term=str(data.get("matched_term") or ""),
+            conversion_proxy_score=float(data.get("conversion_proxy_score") or 0.0),
+            win_reasons=list(data.get("win_reasons") or []),
+            rank_position=int(data["rank_position"]) if data.get("rank_position") is not None else None,
+            page_number=int(data["page_number"]) if data.get("page_number") is not None else None,
+            is_first_page=bool(data.get("is_first_page") or False),
+            search_url=str(data.get("search_url") or ""),
+            why_on_page_one=list(data.get("why_on_page_one") or []),
+        )
+
 
 @dataclass(slots=True)
 class GigPageOverview:
@@ -366,6 +388,7 @@ class NotificationEvents:
     approval_decision: bool = True
     report_generated: bool = True
     error: bool = True
+    price_alert: bool = True
 
 
 @dataclass(slots=True)

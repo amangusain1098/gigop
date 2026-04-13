@@ -495,6 +495,12 @@ def create_app() -> FastAPI:
         active_gig_url = str(marketplace_settings.my_gig_url or comparison.get("gig_url") or "").strip()
         gig_id = dashboard_service._gig_identifier(active_gig_url or None)  # noqa: SLF001
         primary_search_term = str(comparison.get("primary_search_term", "")).strip()
+        # Tag gap analysis — runs against stored snapshot (has .tags + .competitors with tags)
+        try:
+            _snapshot = dashboard_service._load_snapshot()  # noqa: SLF001
+            tag_gap = TagGapAnalyzer().analyze(_snapshot).to_dict()
+        except Exception:
+            tag_gap = {}
         return {
             "state": state,
             "job_runs": job_service.list_runs(limit=25),
@@ -514,6 +520,7 @@ def create_app() -> FastAPI:
             "timeline": dashboard_service.comparison_timeline(gig_id=gig_id, keyword=primary_search_term, limit=16),
             "comparison_diff": dashboard_service.comparison_diff(gig_id=gig_id),
             "extension_install": build_extension_install_payload(),
+            "tag_gap": tag_gap,
         }
 
     def build_assistant_context() -> dict:
@@ -2477,6 +2484,15 @@ def create_app() -> FastAPI:
         for alert in alerts:
             try:
                 await websocket_manager.broadcast_json(alert.to_ws_event())
+            except Exception:
+                pass
+        if alerts:
+            try:
+                notification_service.notify(
+                    event="price_alert",
+                    title=f"⚠️ GigOptimizer — {len(alerts)} price alert(s) on gig {gig_id}",
+                    lines=[a.message for a in alerts],
+                )
             except Exception:
                 pass
         return JSONResponse(content={"alerts": [a.to_dict() for a in alerts], "count": len(alerts)})
