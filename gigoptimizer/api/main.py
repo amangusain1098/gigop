@@ -2473,7 +2473,8 @@ def create_app() -> FastAPI:
             snapshot = _GS.from_dict(body.get("snapshot", body))
         except Exception as exc:
             raise HTTPException(status_code=422, detail=f"Invalid snapshot: {exc}")
-        health = GigHealthScoreEngine().score(snapshot)
+        import asyncio
+        health = await asyncio.to_thread(GigHealthScoreEngine().score, snapshot)
         return JSONResponse(content=health.to_dict())
 
     # ------------------------------------------------------------------

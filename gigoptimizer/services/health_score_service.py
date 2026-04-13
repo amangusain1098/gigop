@@ -11,13 +11,13 @@ Produces a structured 0-100 score with five weighted dimensions:
 Colour bands:  80-100 Healthy (green) | 60-79 Fair (yellow)
                40-59 At Risk (orange)  |  0-39 Critical (red)
 """
-from __future__ import annotations
-
+import json
 from dataclasses import asdict, dataclass, field
 from statistics import mean
 from typing import Any
 
 from ..models import GigSnapshot, OptimizationReport
+from ..assistant.client import build_default_client, LLMMessage
 
 
 @dataclass(slots=True)
@@ -60,6 +60,97 @@ class GigHealthScoreEngine:
     }
 
     def score(self, snapshot: GigSnapshot, report: OptimizationReport | None = None) -> GigHealthScore:
+        # First attempt to score using the new AI Copilot (DeepSeek-R1)
+        ai_score = self._score_with_ai(snapshot, report)
+        if ai_score:
+            return ai_score
+        
+        # Fallback to the offline heuristic deterministic engine
+        return self._score_heuristic(snapshot, report)
+
+    def _score_with_ai(self, snapshot: GigSnapshot, report: OptimizationReport | None) -> GigHealthScore | None:
+        try:
+            client = build_default_client()
+            if client.name == "deterministic":
+                return None  # No real AI available
+
+            system_prompt = (
+                "You are an expert Fiverr Gig Conversion Analyst.\n"
+                "You will review the following GigSnapshot data and return a JSON object evaluating its health on a 0-100 scale.\n"
+                "Evaluate 5 dimensions: SEO, CRO, Competitive, Social Proof, and Delivery.\n"
+                "For findings and tips, be brutally honest but constructive about buyer psychology and persuasion, rather than just counting words.\n"
+                "Your output MUST be ONLY raw JSON without any markdown formatting, matching this exact schema:\n"
+                "{\n"
+                '  "overall": 85,\n'
+                '  "band": "Healthy",\n'
+                '  "band_color": "green",\n'
+                '  "top_action": "Your most urgent tip here.",\n'
+                '  "dimensions": [\n'
+                '    {"name": "SEO", "score": 80, "weight": 0.25, "findings": ["..."], "tips": ["..."]},\n'
+                '    {"name": "CRO", "score": 75, "weight": 0.25, "findings": ["..."], "tips": ["..."]},\n'
+                '    {"name": "Competitive", "score": 90, "weight": 0.20, "findings": ["..."], "tips": ["..."]},\n'
+                '    {"name": "Social Proof", "score": 60, "weight": 0.20, "findings": ["..."], "tips": ["..."]},\n'
+                '    {"name": "Delivery", "score": 95, "weight": 0.10, "findings": ["..."], "tips": ["..."]}\n'
+                "  ]\n"
+                "}\n"
+            )
+
+            gig_data = {
+                "title": snapshot.title,
+                "description": snapshot.description,
+                "tags": snapshot.tags,
+                "analytics": asdict(snapshot.analytics) if snapshot.analytics else None,
+                "review_count": len(snapshot.reviews or []),
+            }
+
+            messages = [
+                LLMMessage(role="system", content=system_prompt),
+                LLMMessage(role="user", content=json.dumps(gig_data)),
+            ]
+
+            response = client.complete(messages, temperature=0.3, max_tokens=1500)
+            
+            # Extract JSON from potential <think> wrappers or markdown blocks
+            text = response.text
+            if "```json" in text:
+                text = text.split("```json")[1].split("```")[0]
+            elif "```" in text:
+                text = text.split("```")[1].split("```")[0]
+            if text.rfind("}") > -1:
+                text = text[text.find("{"):text.rfind("}")+1]
+
+            data = json.loads(text.strip())
+            
+            dimensions = [
+                DimensionScore(
+                    name=d["name"], 
+                    score=int(d["score"]), 
+                    weight=float(d["weight"]), 
+                    findings=d.get("findings", []), 
+                    tips=d.get("tips", [])
+                )
+                for d in data.get("dimensions", [])
+            ]
+            
+            # Use safe offline fallback for bands if AI hallucinates it
+            overall = int(data.get("overall", 50))
+            band, color = self._band(overall)
+
+            return GigHealthScore(
+                overall=overall,
+                band=band,
+                band_color=color,
+                dimensions=dimensions,
+                top_action=data.get("top_action", dimensions[0].tips[0] if dimensions and dimensions[0].tips else "Improve your gig copy.")
+            )
+
+        except Exception as e:
+            # Silently fallback to heuristic if the AI fails or hallucinates JSON.
+            import logging
+            logging.getLogger(__name__).warning("AI Gig Health Score failed: %s. Falling back to heuristic.", e)
+            return None
+
+    def _score_heuristic(self, snapshot: GigSnapshot, report: OptimizationReport | None = None) -> GigHealthScore:
         dimensions = [
             self._seo_dimension(snapshot, report),
             self._cro_dimension(snapshot),
