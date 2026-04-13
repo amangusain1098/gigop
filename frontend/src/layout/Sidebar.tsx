@@ -17,13 +17,13 @@ export interface SidebarItem {
 }
 
 export const SIDEBAR_ITEMS: SidebarItem[] = [
-  { key: 'dashboard', icon: '🏠', label: 'Dashboard' },
-  { key: 'optimizer', icon: '🎯', label: 'Gig Optimizer' },
-  { key: 'competitors', icon: '📊', label: 'Competitors' },
-  { key: 'copilot', icon: '🤖', label: 'Copilot' },
-  { key: 'brain', icon: '🧠', label: 'AI Brain' },
-  { key: 'metrics', icon: '📈', label: 'Metrics' },
-  { key: 'settings', icon: '⚙️', label: 'Settings' },
+  { key: 'dashboard', icon: 'DB', label: 'Dashboard' },
+  { key: 'optimizer', icon: 'GO', label: 'Gig Optimizer' },
+  { key: 'competitors', icon: 'CP', label: 'Competitors' },
+  { key: 'copilot', icon: 'AI', label: 'Copilot' },
+  { key: 'brain', icon: 'BR', label: 'AI Brain' },
+  { key: 'metrics', icon: 'MX', label: 'Metrics' },
+  { key: 'settings', icon: 'ST', label: 'Settings' },
 ]
 
 interface SidebarProps {

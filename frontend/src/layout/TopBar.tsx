@@ -24,13 +24,9 @@ export default function TopBar({ pageTitle, wsLive, onToggleMobileNav }: TopBarP
     async function loadSessionCounts() {
       try {
         const payload = await fetchAssistantSessionsCount()
-        if (active) {
-          setSessions(payload)
-        }
+        if (active) setSessions(payload)
       } catch {
-        if (active) {
-          setSessions(null)
-        }
+        if (active) setSessions(null)
       }
     }
 
@@ -50,7 +46,7 @@ export default function TopBar({ pageTitle, wsLive, onToggleMobileNav }: TopBarP
       <div className="topbar__left">
         {onToggleMobileNav ? (
           <Button className="topbar__menu" variant="ghost" size="sm" onClick={onToggleMobileNav}>
-            ☰
+            Menu
           </Button>
         ) : null}
         <div>
@@ -62,10 +58,10 @@ export default function TopBar({ pageTitle, wsLive, onToggleMobileNav }: TopBarP
       <div className="topbar__right">
         <span className={`topbar-chip ${wsLive ? 'topbar-chip--ok' : 'topbar-chip--offline'}`}>
           <span className="topbar-chip__dot" aria-hidden="true" />
-          {wsLive ? '● Live' : '○ Offline'}
+          {wsLive ? 'Live' : 'Offline'}
         </span>
         <span className={`topbar-chip ${sessions ? 'topbar-chip--ok' : 'topbar-chip--idle'}`}>
-          💬 {sessions ? `${sessions.active_sessions} active` : '-- active'}
+          Sessions: {sessions ? `${sessions.active_sessions} active` : '-- active'}
         </span>
       </div>
     </header>
