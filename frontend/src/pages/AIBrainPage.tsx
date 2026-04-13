@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { fetchJson } from './api'
-import { useBootstrap } from './hooks/useBootstrap'
-import { useCsrf } from './hooks/useCsrf'
+import { fetchJson } from '../api'
+import { useBootstrap } from '../hooks/useBootstrap'
+import { useCsrf } from '../hooks/useCsrf'
 
 interface TopWord { word: string; freq: number; idf: number }
 interface ModelStats { vocab_size: number; doc_count: number; bigram_count: number; top_words: TopWord[] }
@@ -55,7 +55,7 @@ const labelStyle: React.CSSProperties = { display: 'flex', flexDirection: 'colum
 
 type Panel = 'overview' | 'predict' | 'tests' | 'corpus' | 'schedule' | 'ingest'
 
-export default function CopilotTrainingDashboard() {
+export default function AIBrainPage() {
   const { data: bootstrap } = useBootstrap()
   const { csrfToken, refreshCsrf } = useCsrf(bootstrap)
   const [stats, setStats] = useState<DashboardStats | null>(null)

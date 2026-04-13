@@ -302,7 +302,7 @@ def _check_price_alerts(*, runtime: dict[str, Any], state: dict[str, Any]) -> No
         if alerts:
             notification_service.notify(
                 event="price_alert",
-                title=f"⚠️ GigOptimizer — {len(alerts)} price alert(s) detected",
+                title=f"\u26a0\ufe0f GigOptimizer \u2014 {len(alerts)} price alert(s) detected",
                 lines=[a.message for a in alerts],
             )
     except Exception:
