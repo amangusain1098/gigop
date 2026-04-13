@@ -98,7 +98,7 @@ class OllamaLLMClient:
     def __init__(
         self,
         *,
-        model: str = "llama3.1:8b",
+        model: str = "deepseek-r1",
         base_url: str = "http://localhost:11434",
         timeout: float = 90.0,
     ):
@@ -522,13 +522,13 @@ def build_default_client(
 
     if provider == "ollama":
         return OllamaLLMClient(
-            model=model or "llama3.1:8b",
+            model=model or "deepseek-r1",
             base_url=base_url or "http://localhost:11434",
         )
 
     if provider in {"", "auto"}:
         client = OllamaLLMClient(
-            model=model or "llama3.1:8b",
+            model=model or "deepseek-r1",
             base_url=base_url or "http://localhost:11434",
         )
         if _ping(client.base_url):

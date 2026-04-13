@@ -336,64 +336,35 @@ class AIAssistant:
             warnings=list(warnings),
         )
 
-    def ask(self, question, *, context=None, temperature=0.4, use_rag=True):
+    def ask(self, question, *, context=None, temperature=0.6, use_rag=True):
         if not question or not question.strip():
             raise ValueError("question must not be empty")
 
         raw_question = question.strip()
-        intent = _classify_intent(raw_question)
-
-        # Conversational intents get a short, natural reply. No RAG, no
-        # chain-of-thought scaffolding, no structured section parsing.
-        if intent in _CONVERSATIONAL_INTENTS:
-            user_prompt = render_prompt(
-                CONVERSATIONAL_PROMPT,
-                user_message=raw_question,
-            )
-            response, fallback_used, warnings = self._call(
-                user_prompt,
-                feature="ask",
-                temperature=max(temperature, 0.6),
-                max_tokens=220,
-                extra_system=CONVERSATIONAL_SYSTEM_PROMPT,
-            )
-            # Build an empty StructuredAnalysis so the frontend doesnt try
-            # to render the four-part template for a simple "hi".
-            empty_structured = StructuredAnalysis().to_dict()
-            return self._envelope(
-                "ask",
-                response,
-                empty_structured,
-                score=None,
-                fallback_used=fallback_used,
-                warnings=warnings,
-            )
-
-        # Task intent: RAG + chain-of-thought + structured parsing.
-        user_prompt = raw_question
         effective_context = context
+
         if not effective_context and use_rag and self.rag_index is not None:
             try:
                 effective_context = self.rag_index.render_context(raw_question, k=3)
-            except Exception as exc:  # noqa: BLE001 - never let RAG crash ask()
+            except Exception as exc:
                 logger.warning("rag retrieval failed: %s", exc)
                 effective_context = None
+
+        user_prompt = raw_question
         if effective_context:
-            user_prompt = render_prompt(
-                CHAIN_OF_THOUGHT_PROMPT,
-                user_request=raw_question,
-                context=effective_context.strip(),
-            )
+            user_prompt = f"Using this knowledge context:\n\n{effective_context.strip()}\n\nAnswer the user:\n{raw_question}"
+
         response, fallback_used, warnings = self._call(
             user_prompt,
             feature="ask",
             temperature=temperature,
+            max_tokens=1500,
         )
-        structured = _parse_structured(response.text)
+        
         return self._envelope(
             "ask",
             response,
-            structured.to_dict(),
+            StructuredAnalysis().to_dict(),
             score=self.rubric.score_text(response.text),
             fallback_used=fallback_used,
             warnings=warnings,

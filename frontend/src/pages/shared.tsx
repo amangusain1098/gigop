@@ -211,11 +211,23 @@ export interface CopilotPageProps {
 }
 
 export function Metric({ label, value }: { label: string; value: string }) {
-  return <div className="metric"><span>{label}</span><strong>{value}</strong></div>
+  return (
+    <div className="metric">
+      <span className="metric-label">{label}</span>
+      {' '}
+      <strong className="metric-value">{value}</strong>
+    </div>
+  )
 }
 
 export function MetaItem({ label, value }: { label: string; value: string }) {
-  return <div className="meta-item"><span>{label}</span><strong>{value}</strong></div>
+  return (
+    <div className="meta-item">
+      <span className="meta-label">{label}</span>
+      {' '}
+      <strong className="meta-value">{value}</strong>
+    </div>
+  )
 }
 
 export function Block({

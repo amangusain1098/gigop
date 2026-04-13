@@ -6,6 +6,7 @@ import { useAssistant } from './hooks/useAssistant'
 import { useToast } from './components/ui/useToast'
 import Layout from './layout/Layout'
 import type { AppPageKey } from './layout/Sidebar'
+import './App.css'
 
 import DashboardPage from './pages/DashboardPage'
 import GigOptimizerPage from './pages/GigOptimizerPage'
