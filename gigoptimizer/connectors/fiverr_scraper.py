@@ -15,51 +15,12 @@ class FiverrSellerConnector:
         self.config = config
 
     def fetch_seller_metrics(self) -> tuple[GigAnalytics | None, ConnectorStatus]:
-        try:
-            from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
-        except ImportError:
-            return None, ConnectorStatus(
-                connector=self.name,
-                status="skipped",
-                detail="Install the optional 'live' dependencies to enable the Fiverr Playwright connector.",
-            )
-
-        if not self.config.fiverr_analytics_url:
-            return None, ConnectorStatus(
-                connector=self.name,
-                status="skipped",
-                detail="Set FIVERR_ANALYTICS_URL in .env to enable seller metric collection.",
-            )
-
-        try:
-            with self._open_analytics_page() as page:
-                metrics = GigAnalytics(
-                    impressions=self._read_int_metric(page, self.config.fiverr_impressions_selector),
-                    clicks=self._read_int_metric(page, self.config.fiverr_clicks_selector),
-                    orders=self._read_int_metric(page, self.config.fiverr_orders_selector),
-                    saves=self._read_int_metric(page, self.config.fiverr_saves_selector),
-                    average_response_time_hours=self._read_float_metric(
-                        page,
-                        self.config.fiverr_response_time_selector,
-                    ),
-                )
-        except PlaywrightTimeoutError as exc:
-            return None, ConnectorStatus(
-                connector=self.name,
-                status="error",
-                detail=f"Fiverr automation timed out: {exc}",
-            )
-        except Exception as exc:
-            return None, ConnectorStatus(
-                connector=self.name,
-                status="error",
-                detail=f"Fiverr automation failed: {exc}",
-            )
-
-        return metrics, ConnectorStatus(
+        # DEPRECATED: We are moving to a manual-entry / screenshot-parsing model.
+        # Playwright auto-login to private Fiverr dashboards is too fragile for production.
+        return None, ConnectorStatus(
             connector=self.name,
-            status="ok",
-            detail="Collected seller metrics from the configured Fiverr analytics page.",
+            status="skipped",
+            detail="Private seller metric scraping is deprecated. Use manual entry or AI screenshot parsing instead.",
         )
 
     def debug_selectors(self, output_path: str | Path | None = None) -> ConnectorStatus:
