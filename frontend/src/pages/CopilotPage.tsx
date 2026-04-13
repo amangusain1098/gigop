@@ -1,4 +1,5 @@
 import { useEffect, useRef, type KeyboardEvent } from 'react'
+import { useState } from 'react'
 
 interface AssistantMessage {
   id: string
@@ -15,6 +16,8 @@ interface CopilotPageProps {
   input: string
   onInputChange: (value: string) => void
   onSendMessage: (prefill?: string) => Promise<void>
+  onPositiveFeedback: (message: AssistantMessage) => Promise<void>
+  onNegativeFeedback: (message: AssistantMessage, reason: string) => Promise<void>
   onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void
   assistantStarterPrompts: string[]
   assistantQuickPrompts: string[]
@@ -48,6 +51,8 @@ export default function CopilotPage({
   input,
   onInputChange,
   onSendMessage,
+  onPositiveFeedback,
+  onNegativeFeedback,
   onKeyDown,
   assistantStarterPrompts,
   assistantQuickPrompts,
@@ -55,6 +60,9 @@ export default function CopilotPage({
   const assistantLogRef = useRef<HTMLDivElement | null>(null)
   const assistantInputRef = useRef<HTMLTextAreaElement | null>(null)
   const hasAssistantConversation = messages.length > 0
+  const [feedbackTarget, setFeedbackTarget] = useState<string | null>(null)
+  const [feedbackReason, setFeedbackReason] = useState('')
+  const [feedbackBusyId, setFeedbackBusyId] = useState('')
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -129,6 +137,54 @@ export default function CopilotPage({
               <div className="bubble-body">
                 {entry.pending && !entry.text.trim() ? <TypingDots /> : renderMarkdownContent(entry.text)}
               </div>
+              {entry.role === 'assistant' && !entry.pending ? (
+                <div className="assistant-feedback">
+                  <button
+                    className="quick-prompt-chip"
+                    onClick={() => {
+                      setFeedbackBusyId(entry.id)
+                      void onPositiveFeedback(entry).finally(() => setFeedbackBusyId(''))
+                    }}
+                    disabled={busy || feedbackBusyId === entry.id}
+                  >
+                    👍
+                  </button>
+                  <button
+                    className="quick-prompt-chip"
+                    onClick={() => {
+                      setFeedbackTarget((current) => current === entry.id ? null : entry.id)
+                      setFeedbackReason('')
+                    }}
+                    disabled={busy}
+                  >
+                    👎
+                  </button>
+                </div>
+              ) : null}
+              {feedbackTarget === entry.id ? (
+                <div className="assistant-feedback-form">
+                  <input
+                    value={feedbackReason}
+                    onChange={(event) => setFeedbackReason(event.target.value)}
+                    placeholder="What was wrong?"
+                  />
+                  <button
+                    className="secondary"
+                    disabled={!feedbackReason.trim() || feedbackBusyId === entry.id}
+                    onClick={() => {
+                      setFeedbackBusyId(entry.id)
+                      void onNegativeFeedback(entry, feedbackReason.trim())
+                        .then(() => {
+                          setFeedbackTarget(null)
+                          setFeedbackReason('')
+                        })
+                        .finally(() => setFeedbackBusyId(''))
+                    }}
+                  >
+                    Submit
+                  </button>
+                </div>
+              ) : null}
               {entry.suggestions?.length ? (
                 <div className="pill-row assistant-suggestion-row">
                   {entry.suggestions.map((suggestion) => (

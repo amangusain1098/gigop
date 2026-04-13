@@ -83,8 +83,16 @@ export function runTrainingDashboardTests(csrfToken: string) {
   return fetchJson<Record<string, unknown>>('/api/copilot/training-dashboard/run-tests', { method: 'POST', body: JSON.stringify({}) }, csrfToken)
 }
 
-export function ingestTrainingText(content: string, csrfToken: string) {
-  return fetchJson<Record<string, unknown>>('/api/copilot/training-dashboard/ingest', { method: 'POST', body: JSON.stringify({ content }) }, csrfToken)
+export interface TrainingIngestPayload {
+  content: string
+  source_type?: string
+  source?: string
+  message_id?: string
+  context?: string
+}
+
+export function ingestTrainingText(payload: TrainingIngestPayload, csrfToken: string) {
+  return fetchJson<Record<string, unknown>>('/api/copilot/training-dashboard/ingest', { method: 'POST', body: JSON.stringify(payload) }, csrfToken)
 }
 
 export function updateTrainingSchedule(payload: Record<string, unknown>, csrfToken: string) {

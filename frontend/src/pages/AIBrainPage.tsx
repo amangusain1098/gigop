@@ -225,7 +225,7 @@ export default function AIBrainPage({ csrfToken, refreshCsrf }: AIBrainPageProps
           {ingestOpen ? (
             <div className="stack">
               <textarea rows={6} value={ingestText} onChange={(event) => setIngestText(event.target.value)} placeholder="Paste text to teach the copilot..." />
-              <button disabled={busy === 'ingest' || !ingestText.trim()} onClick={() => void runAction('ingest', () => withCsrfRetry((token) => ingestTrainingText(ingestText, token)), 'Text sent to the training pipeline.')}>{busy === 'ingest' ? 'Ingesting...' : 'Submit text'}</button>
+              <button disabled={busy === 'ingest' || !ingestText.trim()} onClick={() => void runAction('ingest', () => withCsrfRetry((token) => ingestTrainingText({ content: ingestText, source_type: 'manual_ingest', source: 'ai_brain' }, token)), 'Text sent to the training pipeline.')}>{busy === 'ingest' ? 'Ingesting...' : 'Submit text'}</button>
             </div>
           ) : null}
         </article>

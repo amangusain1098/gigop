@@ -1,6 +1,6 @@
 import { startTransition, useMemo, useEffect, useState, type KeyboardEvent } from 'react'
 
-import { createDashboardSocket, fetchJson, loadBootstrap, streamAssistantReply } from './api'
+import { createDashboardSocket, fetchJson, ingestTrainingText, loadBootstrap, streamAssistantReply } from './api'
 import { useToast } from './components/ui'
 import { useCsrf } from './hooks/useCsrf'
 import Layout from './layout/Layout'
@@ -211,9 +211,18 @@ export default function App() {
   async function reviewQueue(recordId: string, action: 'approve' | 'reject') {
     if (!data) return
     setBusy(`${action}-${recordId}`)
+    const targetRecord = (data.state.queue?.length ? data.state.queue : data.queue).find((item) => item.id === recordId)
     try {
       const nextState = await withCsrfRetry((csrfToken) => fetchJson<LegacyState>(`/api/queue/${recordId}/${action}`, { method: 'POST', body: JSON.stringify({ reviewer_notes: '' }) }, csrfToken))
       setData({ ...data, state: { ...data.state, ...nextState }, queue: nextState.queue ?? data.queue })
+      if (action === 'approve' && targetRecord) {
+        void withCsrfRetry((token) => ingestTrainingText({
+          content: `Approved queue item for ${targetRecord.action_type}: ${targetRecord.proposed_value}`,
+          source_type: 'queue_approval',
+          source: 'settings_queue',
+          message_id: targetRecord.id,
+        }, token)).catch(() => undefined)
+      }
       toast.success(`Queue item ${action}d.`)
     } catch (reason) {
       toast.error(reason instanceof Error ? reason.message : 'Queue action failed.')
@@ -340,6 +349,27 @@ export default function App() {
     await sendAssistantMessage(`What can I use from ${filename} for my Fiverr gig right now?`)
   }
 
+  async function sendCopilotPositiveFeedback(message: AssistantMessage) {
+    await withCsrfRetry((token) => ingestTrainingText({
+      content: message.text,
+      source_type: 'user_feedback_positive',
+      source: 'copilot_chat',
+      message_id: message.id,
+    }, token))
+    toast.success('Positive feedback sent to the AI Brain.')
+  }
+
+  async function sendCopilotNegativeFeedback(message: AssistantMessage, reason: string) {
+    await withCsrfRetry((token) => ingestTrainingText({
+      content: message.text,
+      source_type: 'feedback_negative',
+      source: 'copilot_chat',
+      message_id: message.id,
+      context: reason,
+    }, token))
+    toast.info('Negative feedback saved for review.')
+  }
+
   async function handleLogout() {
     if (!data) return
     try {
@@ -434,7 +464,7 @@ export default function App() {
       case 'competitors':
         return <CompetitorPage pageOneTopTen={topTen} oneByOne={oneByOne} comparisonMessage={textValue(comparison.message) || textValue(comparison.status_message) || textValue(scraperRun.last_status_message)} competitors={competitors} sortKey={sortKey} onSortKeyChange={setSortKey} timeline={timeline} timelineChart={timeline} comparisonDiff={comparisonDiff} radar={radar} competitorCount={numberValue(comparison.competitor_count) ?? competitors.length} />
       case 'copilot':
-        return <CopilotPage messages={assistantMessages} busy={assistantBusy} input={assistantInput} onInputChange={setAssistantInput} onSendMessage={sendAssistantMessage} onKeyDown={handleAssistantKeyDown} assistantStarterPrompts={assistantStarterPrompts} assistantQuickPrompts={assistantQuickPrompts} />
+        return <CopilotPage messages={assistantMessages} busy={assistantBusy} input={assistantInput} onInputChange={setAssistantInput} onSendMessage={sendAssistantMessage} onPositiveFeedback={sendCopilotPositiveFeedback} onNegativeFeedback={sendCopilotNegativeFeedback} onKeyDown={handleAssistantKeyDown} assistantStarterPrompts={assistantStarterPrompts} assistantQuickPrompts={assistantQuickPrompts} />
       case 'brain':
         return <AIBrainPage csrfToken={csrfToken} refreshCsrf={refreshCsrf} />
       case 'metrics':
@@ -444,7 +474,7 @@ export default function App() {
       default:
         return null
     }
-  }, [activePage, assistantBusy, assistantInput, assistantMessages, assistantQuickPrompts, assistantStarterPrompts, autoCompareEnabled, autoCompareMinutes, blueprint, busy, comparison, comparisonHistory, competitors, csrfToken, data, datasets, extensionDownloadUrl, extensionGuideUrl, extensionPromptVisible, extensionToken, gigUrl, hostinger, knowledgeFile, liveMode, manualInput, maxResults, oneByOne, personaFocus, queue, refreshCsrf, report, scraperRun, slackSettings, sortKey, terms, titleOptions, topRankedGig, topRankedReasons, topTen])
+  }, [activePage, assistantBusy, assistantInput, assistantMessages, assistantQuickPrompts, assistantStarterPrompts, autoCompareEnabled, autoCompareMinutes, blueprint, busy, comparison, comparisonHistory, competitors, csrfToken, data, datasets, extensionDownloadUrl, extensionGuideUrl, extensionPromptVisible, extensionToken, gigUrl, hostinger, knowledgeFile, liveMode, manualInput, maxResults, oneByOne, personaFocus, queue, refreshCsrf, report, scraperRun, sendCopilotNegativeFeedback, sendCopilotPositiveFeedback, slackSettings, sortKey, terms, titleOptions, topRankedGig, topRankedReasons, topTen])
 
   return (
     <Layout
