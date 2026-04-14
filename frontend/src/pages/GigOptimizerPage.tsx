@@ -12,6 +12,7 @@ export default function GigOptimizerPage({
   onManualInputChange,
   busy,
   onRunJob,
+  onRunMagicRewrite,
   recommendedTitle,
   recommendedTags,
   titleOptions,
