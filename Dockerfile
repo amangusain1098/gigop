@@ -24,8 +24,7 @@ COPY examples ./examples
 COPY scripts ./scripts
 COPY tests ./tests
 
-RUN pip install --upgrade pip \
-    && pip install .[live]
+RUN pip install .[live]
 
 COPY --from=frontend-builder /frontend/dist ./frontend/dist
 
