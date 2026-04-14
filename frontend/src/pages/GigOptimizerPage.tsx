@@ -66,7 +66,14 @@ export default function GigOptimizerPage({
         </article>
 
         <article className="card">
-          <div className="card-head"><h2>Description modes</h2><span>{descriptionOptions.length}</span></div>
+          <div className="card-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <h2>Description modes</h2><span>{descriptionOptions.length}</span>
+            </div>
+            <button className="primary" onClick={() => void onRunMagicRewrite()} disabled={busy === 'magic_rewrite'}>
+              {busy === 'magic_rewrite' ? "Generating..." : "✨ Generate with DeepSeek AI"}
+            </button>
+          </div>
           <Block title="Description blueprint" body={descriptionBlueprint.join(' | ') || 'No description guidance yet.'} action={() => void onQueueRecommendation('description_update', descriptionFull)} busy={busy === 'description_update'} />
           <div className="option-list">
             {descriptionOptions.map((option) => (

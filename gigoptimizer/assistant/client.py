@@ -98,7 +98,7 @@ class OllamaLLMClient:
     def __init__(
         self,
         *,
-        model: str = "deepseek-r1",
+        model: str = "deepseek-r1:1.5b",
         base_url: str = "http://localhost:11434",
         timeout: float = 90.0,
     ):
@@ -522,17 +522,27 @@ def build_default_client(
 
     if provider == "ollama":
         return OllamaLLMClient(
-            model=model or "deepseek-r1",
+            model=model or "deepseek-r1:1.5b",
             base_url=base_url or "http://localhost:11434",
         )
 
     if provider in {"", "auto"}:
         client = OllamaLLMClient(
-            model=model or "deepseek-r1",
+            model=model or "deepseek-r1:1.5b",
             base_url=base_url or "http://localhost:11434",
         )
         if _ping(client.base_url):
             return client
+            
+        if api_key:
+            logger.info("ollama is unreachable, falling back to openai since key is present")
+            return OpenAILLMClient(
+                api_key=api_key,
+                model="gpt-4o-mini",
+                base_url=base_url or "https://api.openai.com/v1",
+            )
+            
+        logger.warning("auto provider selected but no AI_API_KEY set and ollama off, falling back to deterministic")
         return DeterministicLLMClient()
 
     if provider in {"deterministic", "offline", "stub", "n8n", "webhook"}:

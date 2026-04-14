@@ -109,6 +109,20 @@ export default function App() {
     }
   }
 
+  async function triggerMagicRewrite() {
+    if (!data) return
+    setBusy('magic_rewrite')
+    try {
+      await withCsrfRetry((token) => fetchJson('/api/gig/magic-rewrite', { method: 'POST', body: JSON.stringify({ gig_url: gigUrl }) }, token))
+      setMessage('Magic rewrite completed successfully.')
+      void refresh()
+    } catch (reason) {
+      toast.error(reason instanceof Error ? reason.message : 'Magic rewrite failed.')
+    } finally {
+      setBusy('')
+    }
+  }
+
   async function queueRecommendation(actionType: string, proposedValue: unknown) {
     if (!data) return
     setBusy(actionType)
@@ -391,6 +405,7 @@ export default function App() {
           onManualInputChange={setManualInput}
           busy={busy}
           onRunJob={postJob}
+          onRunMagicRewrite={triggerMagicRewrite}
           maxResults={maxResults}
           onMaxResultsChange={setMaxResults}
           autoCompareEnabled={autoCompareEnabled}

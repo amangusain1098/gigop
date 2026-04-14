@@ -109,6 +109,7 @@ export interface GigOptimizerPageProps {
   onManualInputChange: (value: string) => void
   busy: string
   onRunJob: (jobType: string, payload?: Record<string, unknown>) => Promise<void>
+  onRunMagicRewrite: () => Promise<void>
   maxResults: number
   onMaxResultsChange: (value: number) => void
   autoCompareEnabled: boolean

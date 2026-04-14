@@ -2478,6 +2478,25 @@ def create_app() -> FastAPI:
         return JSONResponse(content=health.to_dict())
 
     # ------------------------------------------------------------------
+    # Magic Rewrite  POST /api/gig/magic-rewrite
+    # ------------------------------------------------------------------
+
+    @app.post("/api/gig/magic-rewrite")
+    async def gig_magic_rewrite_endpoint(
+        request: Request,
+        payload: dict = Body(default={}),
+        _: None = Depends(require_auth),
+        __: None = Depends(require_csrf),
+    ) -> dict:
+        target_url = str(payload.get("gig_url", "")).strip()
+        response_state = await asyncio.to_thread(
+            dashboard_service.run_magic_rewrite,
+            target_url=target_url,
+        )
+        await websocket_manager.broadcast_json({"type": "state", "payload": response_state})
+        return response_state
+
+    # ------------------------------------------------------------------
     # SEO Tag Gap  POST /api/gig/tag-gap
     # ------------------------------------------------------------------
 
