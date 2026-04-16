@@ -701,6 +701,33 @@ def create_app() -> FastAPI:
             },
         }
 
+    def build_liveness_payload() -> dict:
+        db_ok, db_detail = database_manager.healthcheck()
+        bus_ok, bus_detail = event_bus.healthcheck()
+        frontend_ready = frontend_dist_dir.exists() and (frontend_dist_dir / "index.html").exists()
+        healthy = db_ok and bus_ok
+        return {
+            "status": "ok" if healthy else "degraded",
+            "app": app.title,
+            "version": app.version,
+            "auth_enabled": auth_service.auth_enabled,
+            "scheduler_status": app.state.scheduler_status if hasattr(app.state, "scheduler_status") else "starting",
+            "components": {
+                "database": {
+                    "ok": db_ok,
+                    "detail": db_detail,
+                },
+                "events": {
+                    "ok": bus_ok,
+                    "detail": bus_detail,
+                },
+                "frontend": {
+                    "ok": frontend_ready or bool(config.frontend_dev_url),
+                    "detail": "dist ready" if frontend_ready else "frontend asset check pending",
+                },
+            },
+        }
+
     _n8n_api_key: str = str(getattr(config, "n8n_internal_api_key", "") or "").strip()
 
     def require_auth(request: Request) -> None:
@@ -1038,11 +1065,11 @@ def create_app() -> FastAPI:
 
     @app.get("/api/health")
     async def health() -> dict:
-        return build_health_payload()
+        return build_liveness_payload()
 
     @app.get("/health")
     async def public_health() -> dict:
-        return build_health_payload()
+        return build_liveness_payload()
 
     @app.get("/api/manhwa/overview")
     async def manhwa_overview_api() -> dict:
