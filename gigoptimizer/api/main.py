@@ -241,6 +241,8 @@ def create_app() -> FastAPI:
     frontend_assets_dir = frontend_dist_dir / "assets"
     login_capture_dir = (config.data_dir / "security" / "login_attempts").resolve()
     login_capture_dir.mkdir(parents=True, exist_ok=True)
+    distributed_job_runtime = bool(config.redis_url and not config.job_queue_eager)
+    run_inline_background_services = not distributed_job_runtime
 
     def build_extension_install_payload() -> dict:
         return {
@@ -336,76 +338,89 @@ def create_app() -> FastAPI:
         app.state.websocket_manager = websocket_manager
         event_bus.subscribe(relay_bus_event)
         event_bus.start()
-        app.state.scheduler_status = scheduler.start()
-
+        background_tasks: list[asyncio.Task] = []
+        if run_inline_background_services:
+            app.state.scheduler_status = scheduler.start()
+        else:
+            app.state.scheduler_status = (
+                "background scheduler disabled in web container; "
+                "dedicated worker and scheduler services are active"
+            )
         # --- Copilot Learning Engine cron loop ---
         import asyncio as _asyncio
 
-        async def _learning_cron_loop():
-            import logging as _logging
-            _log = _logging.getLogger("copilot.learning.cron")
-            conversations_dir = config.data_dir / "conversations"
-            while True:
-                try:
-                    schedule = _learning_engine.get_schedule()
-                    if schedule.get("enabled", True):
-                        interval_s = schedule.get("interval_seconds", 21600)
-                        next_run_str = schedule.get("next_run")
-                        if next_run_str:
-                            from datetime import datetime, timezone as _tz
-                            next_run = datetime.fromisoformat(next_run_str)
-                            now = datetime.now(_tz.utc)
-                            if now < next_run:
-                                wait_s = (next_run - now).total_seconds()
-                                await _asyncio.sleep(min(wait_s, 3600))
-                                continue
-                        _log.info("Copilot learning cron: running training cycle")
-                        await _asyncio.to_thread(
-                            _learning_engine.run_training_cycle, conversations_dir
-                        )
-                        _log.info("Copilot learning cron: cycle complete")
-                    await _asyncio.sleep(300)  # check schedule every 5 min
-                except _asyncio.CancelledError:
-                    break
-                except Exception as _exc:
-                    _log.warning("Copilot learning cron error: %s", _exc)
-                    await _asyncio.sleep(60)
+        if run_inline_background_services:
+            async def _learning_cron_loop():
+                import logging as _logging
 
-        _cron_task = _asyncio.create_task(_learning_cron_loop())
+                _log = _logging.getLogger("copilot.learning.cron")
+                conversations_dir = config.data_dir / "conversations"
+                while True:
+                    try:
+                        schedule = _learning_engine.get_schedule()
+                        if schedule.get("enabled", True):
+                            next_run_str = schedule.get("next_run")
+                            if next_run_str:
+                                from datetime import datetime, timezone as _tz
 
-        # --- 4-hour Slack digest cron ---
-        async def _slack_digest_loop():
-            import logging as _log2
-            _slog = _log2.getLogger("copilot.slack.cron")
-            _SLACK_INTERVAL = 4 * 3600  # 4 hours
-            await _asyncio.sleep(60)  # brief startup delay
-            while True:
-                try:
-                    slack_url = getattr(config, "slack_webhook_url", None) or ""
-                    if slack_url:
-                        import httpx as _hx
-                        payload = _learning_engine.build_slack_digest()
-                        async with _hx.AsyncClient(timeout=10) as _c:
-                            r = await _c.post(slack_url, json=payload)
-                        _slog.info("Slack digest sent: %s", r.status_code)
-                    else:
-                        _slog.debug("SLACK_WEBHOOK_URL not set — skipping digest")
-                except _asyncio.CancelledError:
-                    break
-                except Exception as _exc:
-                    _slog.warning("Slack digest error: %s", _exc)
-                await _asyncio.sleep(_SLACK_INTERVAL)
+                                next_run = datetime.fromisoformat(next_run_str)
+                                now = datetime.now(_tz.utc)
+                                if now < next_run:
+                                    wait_s = (next_run - now).total_seconds()
+                                    await _asyncio.sleep(min(wait_s, 3600))
+                                    continue
+                            _log.info("Copilot learning cron: running training cycle")
+                            await _asyncio.to_thread(
+                                _learning_engine.run_training_cycle,
+                                conversations_dir,
+                            )
+                            _log.info("Copilot learning cron: cycle complete")
+                        await _asyncio.sleep(300)
+                    except _asyncio.CancelledError:
+                        break
+                    except Exception as _exc:
+                        _log.warning("Copilot learning cron error: %s", _exc)
+                        await _asyncio.sleep(60)
 
-        _slack_task = _asyncio.create_task(_slack_digest_loop())
+            background_tasks.append(_asyncio.create_task(_learning_cron_loop()))
+
+            # --- 4-hour Slack digest cron ---
+            async def _slack_digest_loop():
+                import logging as _log2
+
+                _slog = _log2.getLogger("copilot.slack.cron")
+                _SLACK_INTERVAL = 4 * 3600
+                await _asyncio.sleep(60)
+                while True:
+                    try:
+                        slack_url = getattr(config, "slack_webhook_url", None) or ""
+                        if slack_url:
+                            import httpx as _hx
+
+                            payload = _learning_engine.build_slack_digest()
+                            async with _hx.AsyncClient(timeout=10) as _c:
+                                r = await _c.post(slack_url, json=payload)
+                            _slog.info("Slack digest sent: %s", r.status_code)
+                        else:
+                            _slog.debug("SLACK_WEBHOOK_URL not set; skipping digest")
+                    except _asyncio.CancelledError:
+                        break
+                    except Exception as _exc:
+                        _slog.warning("Slack digest error: %s", _exc)
+                    await _asyncio.sleep(_SLACK_INTERVAL)
+
+            background_tasks.append(_asyncio.create_task(_slack_digest_loop()))
 
         yield
-        _cron_task.cancel()
-        _slack_task.cancel()
-        try:
-            await _asyncio.gather(_cron_task, _slack_task, return_exceptions=True)
-        except Exception:
-            pass
-        scheduler.stop()
+        for task in background_tasks:
+            task.cancel()
+        if background_tasks:
+            try:
+                await _asyncio.gather(*background_tasks, return_exceptions=True)
+            except Exception:
+                pass
+        if run_inline_background_services:
+            scheduler.stop()
         event_bus.unsubscribe(relay_bus_event)
         event_bus.stop()
         database_manager.engine.dispose()
